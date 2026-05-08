@@ -6,24 +6,25 @@ import pandas as pd
 import datetime
 import time
 
-# ユーザーから楽曲名を入力
-song_name = input("楽曲名を入力してください: ")
+# ファイル名
+song_name = "mosi mosi?"
+
+# 解析するURL
+base_url = "https://www.tiktok.com/music/mosi-mosi-7613972093299067656"  # タグページなどからURLを抽出する場合の例
 
 # WebDriverを設定して起動
 options = webdriver.ChromeOptions()
 options.add_argument("--start-maximized")
+options.add_argument("--mute-audio")  # ミュート設定を追加
 driver = webdriver.Chrome(options=options)
 
 # 取得したURLリストを保持するための変数
 video_urls = set()  # 重複防止のためにセットを使用
 
-# 例として最初に指定するTikTokのURL
-base_url = "https://www.tiktok.com/music/%E3%82%A4%E3%82%A4%E3%81%98%E3%82%83%E3%82%93-7467899669781137409"  # タグページなどからURLを抽出する場合の例
-
 # ページをスクロールしてコンテンツを読み込む
 scroll_pause_time = 3  # スクロール後の待機時間（秒）
-scroll_num = 30
-set_num = 2
+scroll_num = 40
+set_num = 4
 
 for set_i in range(set_num):
     page_load_time = 5
@@ -60,6 +61,7 @@ def create_driver():
     options.add_argument('--disable-gpu')  # headlessモードで必要な場合がある
     options.add_argument('--no-sandbox')  # 環境によっては必要
     options.add_argument('--disable-dev-shm-usage')  # メモリの問題を防ぐ
+    options.add_argument("--mute-audio")  # ミュート設定を追加
     return webdriver.Chrome(options=options)
 
 

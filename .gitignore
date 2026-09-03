@@ -1,0 +1,23 @@
+# IDE (PyCharm / IntelliJ)
+.idea/
+*.iml
+misc.xml
+modules.xml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+
+# Data and Outputs
+*.csv
+*.xlsx
+*.ods
+output/
+
+# Temporary / Test files
+test_500.py
+page.html

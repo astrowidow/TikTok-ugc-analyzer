@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UGCAnalyzer</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="background-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+    
+    <div class="container">
+        <header>
+            <h1>UGCAnalyzer</h1>
+            <p>TikTok User Generated Content Scraper</p>
+        </header>
+        
+        <main>
+            <div class="glass-card" id="formCard">
+                <form id="analyzeForm">
+                    <div class="form-group">
+                        <label for="song_name">楽曲名 / プロジェクト名</label>
+                        <input type="text" id="song_name" name="song_name" placeholder="例: 愛をくださいませ" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="base_url">解析対象URL (タグページ等)</label>
+                        <input type="url" id="base_url" name="base_url" placeholder="https://www.tiktok.com/..." required>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label for="scroll_num">スクロール回数 (1セットあたり)</label>
+                            <input type="number" id="scroll_num" name="scroll_num" value="40" min="1" max="200">
+                        </div>
+                        <div class="form-group half">
+                            <label for="set_num">セット数</label>
+                            <input type="number" id="set_num" name="set_num" value="4" min="1" max="20">
+                        </div>
+                    </div>
+
+                    <div class="form-group checkbox-group">
+                        <label class="custom-checkbox">
+                            <input type="checkbox" id="is_headless_main" name="is_headless_main">
+                            <span class="checkmark"></span>
+                            最初のURL収集もバックグラウンド(非表示)で行う
+                        </label>
+                    </div>
+                    
+                    <button type="submit" class="primary-btn">解析を開始する</button>
+                </form>
+            </div>
+
+            <div class="glass-card hidden" id="statusCard">
+                <h2>解析ステータス</h2>
+                
+                <div class="status-indicator">
+                    <div class="spinner"></div>
+                    <p id="statusMessage">初期化中...</p>
+                </div>
+                
+                <div class="progress-container">
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="progressBar" style="width: 0%"></div>
+                    </div>
+                    <div class="progress-text">
+                        <span id="progressPercent">0%</span>
+                        <span id="progressCount">- / -</span>
+                    </div>
+                </div>
+
+                <div id="errorBox" class="error-box hidden">
+                    <p id="errorMessage"></p>
+                    <button id="retryBtn" class="secondary-btn">やり直す</button>
+                </div>
+
+                <div id="successBox" class="success-box hidden">
+                    <p>解析が完了しました！</p>
+                    <a id="downloadBtn" href="#" class="primary-btn download-btn" download>CSVをダウンロード</a>
+                    <button id="newScanBtn" class="secondary-btn">新しく解析する</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const analyzeForm = document.getElementById('analyzeForm');
+        const formCard = document.getElementById('formCard');
+        const statusCard = document.getElementById('statusCard');
+        const statusMessage = document.getElementById('statusMessage');
+        const progressBar = document.getElementById('progressBar');
+        const progressPercent = document.getElementById('progressPercent');
+        const progressCount = document.getElementById('progressCount');
+        const errorBox = document.getElementById('errorBox');
+        const errorMessage = document.getElementById('errorMessage');
+        const successBox = document.getElementById('successBox');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const retryBtn = document.getElementById('retryBtn');
+        const newScanBtn = document.getElementById('newScanBtn');
+        const spinner = document.querySelector('.spinner');
+
+        let currentJobId = null;
+        let pollInterval = null;
+
+        analyzeForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(analyzeForm);
+            
+            // UI state change
+            formCard.classList.add('hidden');
+            statusCard.classList.remove('hidden');
+            resetStatusUI();
+
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) throw new Error('APIリクエストに失敗しました');
+                
+                const data = await response.json();
+                currentJobId = data.job_id;
+                
+                startPolling();
+            } catch (error) {
+                showError('通信エラー: ' + error.message);
+            }
+        });
+
+        function startPolling() {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(checkStatus, 2000); // 2秒ごとに確認
+        }
+
+        async function checkStatus() {
+            if (!currentJobId) return;
+            
+            try {
+                const response = await fetch(`/api/status/${currentJobId}`);
+                if (!response.ok) throw new Error('ステータス取得に失敗しました');
+                
+                const data = await response.json();
+                
+                // Update UI based on status
+                if (data.message) {
+                    statusMessage.textContent = data.message;
+                }
+                
+                if (data.progress !== undefined) {
+                    progressBar.style.width = `${data.progress}%`;
+                    progressPercent.textContent = `${data.progress}%`;
+                }
+                
+                if (data.total_urls > 0) {
+                    progressCount.textContent = `${data.current_url_index} / ${data.total_urls}`;
+                }
+
+                if (data.status === 'completed') {
+                    clearInterval(pollInterval);
+                    showSuccess(`/api/download/${currentJobId}`);
+                } else if (data.status === 'error') {
+                    clearInterval(pollInterval);
+                    showError(data.error || '不明なエラーが発生しました');
+                }
+
+            } catch (error) {
+                console.error(error);
+                // 一時的なネットワークエラーかもしれないのでポーリングは止めないが、連続エラーなら止めるなどの処理が必要
+            }
+        }
+
+        function resetStatusUI() {
+            statusMessage.textContent = '初期化中...';
+            progressBar.style.width = '0%';
+            progressPercent.textContent = '0%';
+            progressCount.textContent = '- / -';
+            errorBox.classList.add('hidden');
+            successBox.classList.add('hidden');
+            spinner.style.display = 'block';
+        }
+
+        function showError(msg) {
+            spinner.style.display = 'none';
+            errorBox.classList.remove('hidden');
+            errorMessage.textContent = msg;
+        }
+
+        function showSuccess(downloadUrl) {
+            spinner.style.display = 'none';
+            successBox.classList.remove('hidden');
+            downloadBtn.href = downloadUrl;
+        }
+
+        retryBtn.addEventListener('click', () => {
+            statusCard.classList.add('hidden');
+            formCard.classList.remove('hidden');
+        });
+
+        newScanBtn.addEventListener('click', () => {
+            statusCard.classList.add('hidden');
+            formCard.classList.remove('hidden');
+            analyzeForm.reset();
+        });
+    </script>
+</body>
+</html>

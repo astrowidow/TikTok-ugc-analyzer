@@ -7,10 +7,10 @@ import datetime
 import time
 
 # ファイル名
-song_name = "mosi mosi?"
+song_name = "愛をくださいませ"
 
 # 解析するURL
-base_url = "https://www.tiktok.com/music/mosi-mosi-7613972093299067656"  # タグページなどからURLを抽出する場合の例
+base_url = "https://www.tiktok.com/music/オリジナル楽曲-ノイミーTikTok-7640468291809151765"  # タグページなどからURLを抽出する場合の例
 
 # WebDriverを設定して起動
 options = webdriver.ChromeOptions()

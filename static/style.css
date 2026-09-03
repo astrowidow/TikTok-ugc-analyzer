@@ -292,6 +292,105 @@ button, .primary-btn {
     line-height: 1.5;
 }
 
+/* フェーズのステッパー。4つ全部を常に見せることで、
+   「URL収集が終わってもまだ抽出とCSV作成が残っている」ことが一目で分かる */
+.phase-steps {
+    display: flex;
+    list-style: none;
+    gap: 0.25rem;
+    margin-bottom: 1.25rem;
+}
+
+.phase-steps li {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    position: relative;
+    text-align: center;
+    font-size: 0.72rem;
+    line-height: 1.3;
+    transition: color 0.3s ease;
+}
+
+/* ステップ同士をつなぐ線。番号の中心の高さに合わせる */
+.phase-steps li::before {
+    content: '';
+    position: absolute;
+    top: 11px;
+    left: -50%;
+    width: 100%;
+    height: 2px;
+    background: var(--input-bg);
+    z-index: 0;
+}
+
+.phase-steps li:first-child::before,
+.phase-steps li.hidden + li::before {
+    display: none;
+}
+
+.step-no {
+    position: relative;
+    z-index: 1;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: var(--input-bg);
+    border: 1px solid var(--glass-border);
+    transition: all 0.3s ease;
+}
+
+.phase-steps li.todo {
+    color: #64748b;
+}
+
+.phase-steps li.current {
+    color: var(--text-color);
+    font-weight: 500;
+}
+
+.phase-steps li.current .step-no {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
+}
+
+.phase-steps li.done {
+    color: #94a3b8;
+}
+
+.phase-steps li.done .step-no {
+    background: var(--success);
+    border-color: var(--success);
+    color: #0f172a;
+    font-size: 0;
+}
+
+/* 完了したステップは番号をチェックに差し替える */
+.phase-steps li.done .step-no::after {
+    content: '✓';
+    font-size: 0.8rem;
+    font-weight: 700;
+}
+
+.phase-steps li.done::before {
+    background: var(--success);
+}
+
+@media (max-width: 480px) {
+    .phase-steps li {
+        font-size: 0.62rem;
+    }
+}
+
 .progress-container {
     margin-bottom: 2rem;
 }
@@ -318,6 +417,15 @@ button, .primary-btn {
     justify-content: space-between;
     font-size: 0.85rem;
     color: #94a3b8;
+}
+
+.eta-text {
+    margin-top: 0.6rem;
+    text-align: center;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--text-color);
+    min-height: 1.2em;
 }
 
 .error-box, .success-box {
@@ -351,4 +459,128 @@ button, .primary-btn {
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
+}
+
+/* ------------------------------------------------------------------ */
+/* Tabs                                                                */
+/* ------------------------------------------------------------------ */
+.tabs {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.35rem;
+    margin-bottom: 2rem;
+    background: var(--input-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 14px;
+}
+
+.tab-btn {
+    flex: 1;
+    width: auto;
+    padding: 0.75rem 1rem;
+    background: transparent;
+    color: #94a3b8;
+    border-radius: 10px;
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.tab-btn:hover {
+    color: var(--text-color);
+}
+
+.tab-btn.active {
+    background: linear-gradient(135deg, var(--primary), #8b5cf6);
+    color: white;
+    font-weight: 600;
+    box-shadow: 0 4px 14px 0 rgba(59, 130, 246, 0.35);
+}
+
+.tab-panel {
+    display: none;
+    animation: fadeIn 0.25s ease;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+.hint {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    line-height: 1.6;
+    margin-top: -0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Accordion (詳細設定)                                                 */
+/* ------------------------------------------------------------------ */
+.advanced {
+    margin-bottom: 1.5rem;
+    background: rgba(15, 23, 42, 0.35);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.advanced summary {
+    padding: 0.9rem 1rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #cbd5e1;
+    list-style: none;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    transition: color 0.2s;
+}
+
+.advanced summary::-webkit-details-marker {
+    display: none;
+}
+
+.advanced summary::before {
+    content: "";
+    width: 0;
+    height: 0;
+    margin-right: 0.6rem;
+    border-left: 5px solid #94a3b8;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    transition: transform 0.2s;
+}
+
+.advanced[open] summary::before {
+    transform: rotate(90deg);
+}
+
+.advanced summary:hover {
+    color: var(--text-color);
+}
+
+.advanced-body {
+    padding: 0.25rem 1rem 0.25rem;
+    border-top: 1px solid var(--glass-border);
+    padding-top: 1.25rem;
+}
+
+.advanced-body .checkbox-group {
+    margin-bottom: 1rem;
+}
+
+/* 検出されたURLの表示 */
+.resolved-url {
+    display: block;
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: #93c5fd;
+    text-align: center;
+    word-break: break-all;
+    text-decoration: none;
+}
+
+.resolved-url:hover {
+    text-decoration: underline;
 }

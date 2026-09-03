@@ -1,0 +1,13 @@
+# Windows等で環境を作るとき: start.bat が自動で .venv に入れます
+# 手動で入れる場合: pip install -r requirements.txt
+# 別途Chrome本体のインストールが必要（ChromeDriverはSelenium Managerが自動取得）
+#
+# 上限は「次のメジャー版で壊れないように」付けています。
+# pandas は 2.3.3 と 3.0.5 の両方でCSV書き出しを確認済み。
+fastapi>=0.141,<1.0
+uvicorn>=0.52,<1.0
+jinja2>=3.1,<4
+python-multipart>=0.0.32,<1.0
+selenium>=4.39,<5
+pandas>=2.3,<4
+requests>=2.32,<3

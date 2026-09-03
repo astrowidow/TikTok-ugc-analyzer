@@ -21,3 +21,6 @@ output/
 # Temporary / Test files
 test_500.py
 page.html
+
+# ログ
+logs/

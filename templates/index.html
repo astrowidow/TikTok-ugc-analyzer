@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UGCAnalyzer</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ css_version }}">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -12,65 +12,129 @@
         <div class="blob blob-1"></div>
         <div class="blob blob-2"></div>
     </div>
-    
+
     <div class="container">
         <header>
             <h1>UGCAnalyzer</h1>
             <p>TikTok User Generated Content Scraper</p>
         </header>
-        
+
         <main>
             <div class="glass-card" id="formCard">
-                <form id="analyzeForm">
-                    <div class="form-group">
-                        <label for="song_name">楽曲名 / プロジェクト名</label>
-                        <input type="text" id="song_name" name="song_name" placeholder="例: 愛をくださいませ" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="base_url">解析対象URL (タグページ等)</label>
-                        <input type="url" id="base_url" name="base_url" placeholder="https://www.tiktok.com/..." required>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group half">
-                            <label for="scroll_num">スクロール回数 (1セットあたり)</label>
-                            <input type="number" id="scroll_num" name="scroll_num" value="40" min="1" max="200">
-                        </div>
-                        <div class="form-group half">
-                            <label for="set_num">セット数</label>
-                            <input type="number" id="set_num" name="set_num" value="4" min="1" max="20">
-                        </div>
-                    </div>
+                <div class="tabs" role="tablist">
+                    <button type="button" class="tab-btn active" data-tab="auto" role="tab">自動検索モード</button>
+                    <button type="button" class="tab-btn" data-tab="url" role="tab">直接URLモード</button>
+                </div>
 
-                    <div class="form-group checkbox-group">
-                        <label class="custom-checkbox">
-                            <input type="checkbox" id="is_headless_main" name="is_headless_main">
-                            <span class="checkmark"></span>
-                            最初のURL収集もバックグラウンド(非表示)で行う
-                        </label>
-                    </div>
-                    
-                    <button type="submit" class="primary-btn">解析を開始する</button>
-                </form>
+                <!-- タブ1: 自動検索モード -->
+                <div class="tab-panel active" id="panel-auto">
+                    <form class="analyze-form" data-mode="auto">
+                        <div class="form-group">
+                            <label for="auto_artist_name">アーティスト名</label>
+                            <input type="text" id="auto_artist_name" name="artist_name" placeholder="例: YOASOBI" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="auto_song_name">楽曲名</label>
+                            <input type="text" id="auto_song_name" name="song_name" placeholder="例: アイドル" required>
+                        </div>
+
+                        <p class="hint">「アーティスト名 楽曲名」で検索し、TikTokの楽曲ページを自動で探して解析します。</p>
+
+                        <details class="advanced">
+                            <summary>詳細設定</summary>
+                            <div class="advanced-body">
+                                <div class="form-row">
+                                    <div class="form-group half">
+                                        <label for="auto_scroll_num">スクロール回数 (1セットあたり)</label>
+                                        <input type="number" id="auto_scroll_num" name="scroll_num" value="30" min="1" max="200">
+                                    </div>
+                                    <div class="form-group half">
+                                        <label for="auto_set_num">セット数</label>
+                                        <input type="number" id="auto_set_num" name="set_num" value="3" min="1" max="20">
+                                    </div>
+                                </div>
+                                <div class="form-group checkbox-group">
+                                    <label class="custom-checkbox">
+                                        <input type="checkbox" id="auto_is_headless_main" name="is_headless_main" checked>
+                                        <span class="checkmark"></span>
+                                        URL収集もバックグラウンド(非表示)で行う ※サーバー運用では必須
+                                    </label>
+                                </div>
+                            </div>
+                        </details>
+
+                        <button type="submit" class="primary-btn">解析を開始する</button>
+                    </form>
+                </div>
+
+                <!-- タブ2: 直接URLモード -->
+                <div class="tab-panel" id="panel-url">
+                    <form class="analyze-form" data-mode="url">
+                        <div class="form-group">
+                            <label for="url_base_url">解析対象URL (楽曲ページ / タグページ等)</label>
+                            <input type="url" id="url_base_url" name="base_url" placeholder="https://www.tiktok.com/..." required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="url_project_name">プロジェクト名 (CSVに記録される名前)</label>
+                            <input type="text" id="url_project_name" name="project_name" placeholder="例: 愛をくださいませ" required>
+                        </div>
+
+                        <details class="advanced">
+                            <summary>詳細設定</summary>
+                            <div class="advanced-body">
+                                <div class="form-row">
+                                    <div class="form-group half">
+                                        <label for="url_scroll_num">スクロール回数 (1セットあたり)</label>
+                                        <input type="number" id="url_scroll_num" name="scroll_num" value="30" min="1" max="200">
+                                    </div>
+                                    <div class="form-group half">
+                                        <label for="url_set_num">セット数</label>
+                                        <input type="number" id="url_set_num" name="set_num" value="3" min="1" max="20">
+                                    </div>
+                                </div>
+                                <div class="form-group checkbox-group">
+                                    <label class="custom-checkbox">
+                                        <input type="checkbox" id="url_is_headless_main" name="is_headless_main" checked>
+                                        <span class="checkmark"></span>
+                                        URL収集もバックグラウンド(非表示)で行う ※サーバー運用では必須
+                                    </label>
+                                </div>
+                            </div>
+                        </details>
+
+                        <button type="submit" class="primary-btn">解析を開始する</button>
+                    </form>
+                </div>
             </div>
 
             <div class="glass-card hidden" id="statusCard">
                 <h2>解析ステータス</h2>
-                
+
                 <div class="status-indicator">
                     <div class="spinner"></div>
                     <p id="statusMessage">初期化中...</p>
+                    <a id="resolvedUrl" class="resolved-url hidden" href="#" target="_blank" rel="noopener"></a>
                 </div>
-                
+
+                <!-- 4フェーズを常に見せることで「収集が終わってもまだ先がある」と分かる -->
+                <ol class="phase-steps" id="phaseSteps">
+                    <li data-phase="search"><span class="step-no">1</span><span class="step-label">楽曲ページを検索</span></li>
+                    <li data-phase="collect"><span class="step-no">2</span><span class="step-label">URLを収集</span></li>
+                    <li data-phase="extract"><span class="step-no">3</span><span class="step-label">詳細データを抽出</span></li>
+                    <li data-phase="finalize"><span class="step-no">4</span><span class="step-label">CSVを作成</span></li>
+                </ol>
+
                 <div class="progress-container">
                     <div class="progress-bar-bg">
                         <div class="progress-bar-fill" id="progressBar" style="width: 0%"></div>
                     </div>
                     <div class="progress-text">
                         <span id="progressPercent">0%</span>
-                        <span id="progressCount">- / -</span>
+                        <span id="progressCount">-</span>
                     </div>
+                    <p class="eta-text" id="etaText"></p>
                 </div>
 
                 <div id="errorBox" class="error-box hidden">
@@ -88,10 +152,10 @@
     </div>
 
     <script>
-        const analyzeForm = document.getElementById('analyzeForm');
         const formCard = document.getElementById('formCard');
         const statusCard = document.getElementById('statusCard');
         const statusMessage = document.getElementById('statusMessage');
+        const resolvedUrl = document.getElementById('resolvedUrl');
         const progressBar = document.getElementById('progressBar');
         const progressPercent = document.getElementById('progressPercent');
         const progressCount = document.getElementById('progressCount');
@@ -102,84 +166,234 @@
         const retryBtn = document.getElementById('retryBtn');
         const newScanBtn = document.getElementById('newScanBtn');
         const spinner = document.querySelector('.spinner');
+        const phaseSteps = document.getElementById('phaseSteps');
+        const etaText = document.getElementById('etaText');
+
+        // サーバー(scraper.py の PHASES)と同じ並び
+        const PHASE_KEYS = ['search', 'collect', 'extract', 'finalize'];
+        // 1時間待ちもある処理なので、タブを閉じても解析画面に戻れるようにする
+        const JOB_STORAGE_KEY = 'ugc_job_id';
 
         let currentJobId = null;
-        let pollInterval = null;
+        let pollTimer = null;
+        let lastProgress = 0;
 
-        analyzeForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const formData = new FormData(analyzeForm);
-            
-            // UI state change
-            formCard.classList.add('hidden');
-            statusCard.classList.remove('hidden');
-            resetStatusUI();
-
-            try {
-                const response = await fetch('/api/analyze', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                if (!response.ok) throw new Error('APIリクエストに失敗しました');
-                
-                const data = await response.json();
-                currentJobId = data.job_id;
-                
-                startPolling();
-            } catch (error) {
-                showError('通信エラー: ' + error.message);
-            }
+        // --- タブ切り替え ---
+        document.querySelectorAll('.tab-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+                document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+            });
         });
 
+        // --- 送信（2つのフォーム共通） ---
+        document.querySelectorAll('.analyze-form').forEach((form) => {
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+
+                const formData = new FormData(form);
+                formData.append('mode', form.dataset.mode);
+                // チェックボックスは未チェックだと送信されないので、明示的に true/false を送る
+                const headlessBox = form.querySelector('[name="is_headless_main"]');
+                formData.set('is_headless_main', headlessBox.checked ? 'true' : 'false');
+
+                formCard.classList.add('hidden');
+                statusCard.classList.remove('hidden');
+                resetStatusUI();
+
+                try {
+                    const response = await fetch('/api/analyze', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        let detail = 'APIリクエストに失敗しました';
+                        try {
+                            const err = await response.json();
+                            if (err.error) detail = err.error;
+                        } catch (_) {}
+                        throw new Error(detail);
+                    }
+
+                    const data = await response.json();
+                    currentJobId = data.job_id;
+                    rememberJob(currentJobId);
+
+                    startPolling();
+                } catch (error) {
+                    showError(error.message);
+                }
+            });
+        });
+
+        // --- ジョブIDの保存（リロードやタブを閉じても解析画面に戻れる） ---
+        function rememberJob(jobId) {
+            try { localStorage.setItem(JOB_STORAGE_KEY, jobId); } catch (_) {}
+        }
+
+        function forgetJob() {
+            try { localStorage.removeItem(JOB_STORAGE_KEY); } catch (_) {}
+        }
+
+        // --- ポーリング（順番待ち中は間隔を空けてリクエスト数を減らす） ---
+        function scheduleNextPoll(delayMs) {
+            if (pollTimer) clearTimeout(pollTimer);
+            pollTimer = setTimeout(checkStatus, delayMs);
+        }
+
         function startPolling() {
-            if (pollInterval) clearInterval(pollInterval);
-            pollInterval = setInterval(checkStatus, 2000); // 2秒ごとに確認
+            scheduleNextPoll(0);
+        }
+
+        function stopPolling() {
+            if (pollTimer) clearTimeout(pollTimer);
+            pollTimer = null;
         }
 
         async function checkStatus() {
             if (!currentJobId) return;
-            
+
+            // 実行中は2秒。自分の番がまだ先の順番待ちなら10秒に落とす
+            let nextDelay = 2000;
+
             try {
                 const response = await fetch(`/api/status/${currentJobId}`);
+
+                if (response.status === 404) {
+                    // サーバーが再起動されるとジョブは消える。待ち続けても復活しない
+                    stopPolling();
+                    forgetJob();
+                    showError('解析ジョブが見つかりませんでした。サーバーが再起動された可能性があります。お手数ですが、もう一度お試しください。');
+                    return;
+                }
                 if (!response.ok) throw new Error('ステータス取得に失敗しました');
-                
+
                 const data = await response.json();
-                
-                // Update UI based on status
-                if (data.message) {
-                    statusMessage.textContent = data.message;
-                }
-                
-                if (data.progress !== undefined) {
-                    progressBar.style.width = `${data.progress}%`;
-                    progressPercent.textContent = `${data.progress}%`;
-                }
-                
-                if (data.total_urls > 0) {
-                    progressCount.textContent = `${data.current_url_index} / ${data.total_urls}`;
-                }
+                renderStatus(data);
 
                 if (data.status === 'completed') {
-                    clearInterval(pollInterval);
+                    stopPolling();
                     showSuccess(`/api/download/${currentJobId}`);
-                } else if (data.status === 'error') {
-                    clearInterval(pollInterval);
+                    return;
+                }
+                if (data.status === 'error') {
+                    stopPolling();
                     showError(data.error || '不明なエラーが発生しました');
+                    return;
                 }
 
+                if (data.status === 'queued' && data.queue_ahead > 0) {
+                    nextDelay = 10000;
+                }
             } catch (error) {
                 console.error(error);
-                // 一時的なネットワークエラーかもしれないのでポーリングは止めないが、連続エラーなら止めるなどの処理が必要
+                // 一時的なネットワークエラーかもしれないのでポーリングは止めない
             }
+
+            scheduleNextPoll(nextDelay);
+        }
+
+        function renderStatus(data) {
+            if (data.message) {
+                statusMessage.textContent = data.message;
+            }
+
+            if (data.resolved_url) {
+                resolvedUrl.href = data.resolved_url;
+                resolvedUrl.textContent = data.resolved_url;
+                resolvedUrl.classList.remove('hidden');
+            }
+
+            if (typeof data.progress === 'number') {
+                // サーバー側でも単調増加を保証しているが、応答が前後して届く場合に備える
+                lastProgress = Math.max(lastProgress, data.progress);
+                progressBar.style.width = `${lastProgress}%`;
+                progressPercent.textContent = `${lastProgress}%`;
+            }
+
+            renderPhases(data);
+            progressCount.textContent = stepLabel(data);
+            etaText.textContent = etaLabel(data);
+        }
+
+        // --- フェーズ表示 ---
+        function renderPhases(data) {
+            // 直接URLモードには検索フェーズが無いので隠す
+            const mode = (data.params && data.params.mode) || 'auto';
+            const searchStep = phaseSteps.querySelector('[data-phase="search"]');
+            searchStep.classList.toggle('hidden', mode !== 'auto');
+
+            const current = PHASE_KEYS.indexOf(data.phase);
+            // 検索ステップを隠したら、残りは 1,2,3 と振り直す（STEP表示と食い違わせない）
+            let visibleNo = 0;
+            phaseSteps.querySelectorAll('li').forEach((li) => {
+                const index = PHASE_KEYS.indexOf(li.dataset.phase);
+                if (!li.classList.contains('hidden')) {
+                    li.querySelector('.step-no').textContent = ++visibleNo;
+                }
+                li.classList.remove('done', 'current', 'todo');
+                if (data.status === 'completed') {
+                    li.classList.add('done');
+                } else if (data.status === 'queued' || current < 0) {
+                    li.classList.add('todo');
+                } else if (index < current) {
+                    li.classList.add('done');
+                } else if (index === current) {
+                    li.classList.add('current');
+                } else {
+                    li.classList.add('todo');
+                }
+            });
+        }
+
+        function stepLabel(data) {
+            if (data.status === 'queued') return '開始前';
+            if (data.status === 'completed') return '完了';
+
+            const visible = PHASE_KEYS.filter(
+                (k) => k !== 'search' || ((data.params && data.params.mode) || 'auto') === 'auto'
+            );
+            const position = visible.indexOf(data.phase) + 1;
+            let text = position > 0 ? `STEP ${position}/${visible.length}` : '';
+            if (data.total_urls > 0) {
+                text += ` · ${data.current_url_index}/${data.total_urls}件`;
+            }
+            return text;
+        }
+
+        // --- 残り時間 ---
+        function formatDuration(seconds) {
+            if (seconds === null || seconds === undefined) return null;
+            if (seconds < 60) return 'まもなく';
+            const minutes = Math.round(seconds / 60);
+            if (minutes < 60) return `約${minutes}分`;
+            const hours = Math.floor(minutes / 60);
+            const rest = minutes % 60;
+            return rest ? `約${hours}時間${rest}分` : `約${hours}時間`;
+        }
+
+        function etaLabel(data) {
+            if (data.status === 'completed' || data.status === 'error') return '';
+            const duration = formatDuration(data.eta_seconds);
+            if (!duration) return '';
+            return data.status === 'queued' ? `開始まで ${duration}` : `残り ${duration}`;
         }
 
         function resetStatusUI() {
             statusMessage.textContent = '初期化中...';
+            resolvedUrl.classList.add('hidden');
+            lastProgress = 0;
             progressBar.style.width = '0%';
             progressPercent.textContent = '0%';
-            progressCount.textContent = '- / -';
+            progressCount.textContent = '-';
+            etaText.textContent = '';
+            phaseSteps.querySelectorAll('li').forEach((li) => {
+                li.classList.remove('done', 'current');
+                li.classList.add('todo');
+            });
             errorBox.classList.add('hidden');
             successBox.classList.add('hidden');
             spinner.style.display = 'block';
@@ -197,16 +411,34 @@
             downloadBtn.href = downloadUrl;
         }
 
-        retryBtn.addEventListener('click', () => {
+        function backToForm() {
+            stopPolling();
+            forgetJob();
+            currentJobId = null;
             statusCard.classList.add('hidden');
             formCard.classList.remove('hidden');
-        });
+        }
+
+        retryBtn.addEventListener('click', backToForm);
 
         newScanBtn.addEventListener('click', () => {
-            statusCard.classList.add('hidden');
-            formCard.classList.remove('hidden');
-            analyzeForm.reset();
+            backToForm();
+            document.querySelectorAll('.analyze-form').forEach((form) => form.reset());
         });
+
+        // 実行中にリロードやタブを閉じても、解析画面に戻って続きを見られるようにする
+        (function restoreJob() {
+            let saved = null;
+            try { saved = localStorage.getItem(JOB_STORAGE_KEY); } catch (_) {}
+            if (!saved) return;
+
+            currentJobId = saved;
+            formCard.classList.add('hidden');
+            statusCard.classList.remove('hidden');
+            resetStatusUI();
+            statusMessage.textContent = '解析状況を確認しています...';
+            startPolling();
+        })();
     </script>
 </body>
 </html>

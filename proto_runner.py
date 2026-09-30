@@ -226,8 +226,27 @@ def list_analyses(user_id: str) -> list:
     return out
 
 
+def _is_active(a: Analysis) -> bool:
+    """まだ終わっていない分析か（取得中・AI の仕事が残っている）"""
+    acq = a.meta.get("acquisition")
+    if acq and acq.get("status") != "done":
+        return True
+    st = _state(a)
+    if st is None:
+        return bool(acq)          # 取得は済んだが AI の仕事はまだ始まっていない
+    return not _all_done(st)
+
+
+def _pick(cands: list) -> Analysis:
+    """候補が複数なら、進行中のものを優先し、それでも複数なら新しいもの"""
+    if len(cands) == 1:
+        return cands[0]
+    act = [a for a in cands if _is_active(a)]
+    return max(act or cands, key=lambda a: a.meta.get("created_at", ""))
+
+
 def resolve(user_id: str, ref: str | None) -> Analysis:
-    """分析 ID・曲名（部分一致）・省略（その利用者の分析が1つだけのとき）のどれでも引く"""
+    """分析 ID・曲名（部分一致）・省略のどれでも引く。複数当たれば進行中で新しいもの"""
     mine = list_analyses(user_id)
     if not mine:
         raise RunnerError("あなたの分析はまだありません")
@@ -237,17 +256,10 @@ def resolve(user_id: str, ref: str | None) -> Analysis:
             if a.id.lower() == ref_n:
                 return a
         hits = [a for a in mine if ref_n in a.title.lower() or ref_n in a.song_line.lower()]
-        if len(hits) == 1:
-            return hits[0]
         if not hits:
             raise RunnerError(f"「{ref}」に当たる分析がありません。status で一覧を見てください")
-        raise RunnerError(f"「{ref}」に当たる分析が複数あります: " + ", ".join(a.id for a in hits))
-    active = [a for a in mine if _state(a) and not _all_done(_state(a))]
-    if len(mine) == 1:
-        return mine[0]
-    if len(active) == 1:
-        return active[0]
-    raise RunnerError("分析が複数あります。分析 ID か曲名を指定してください: " + ", ".join(a.id for a in mine))
+        return _pick(hits)
+    return _pick(mine)
 
 
 # ---------------------------------------------------------------------------
@@ -607,11 +619,48 @@ def check_video_analysis(obj, seq: int, video_id: str, comments_text: str, tax: 
 # ---------------------------------------------------------------------------
 # 道具の中身
 # ---------------------------------------------------------------------------
+def _hm(sec: float) -> str:
+    sec = max(0, int(sec))
+    h, m = sec // 3600, (sec % 3600) // 60
+    return f"{h}時間{m}分" if h else f"{max(m, 1)}分"
+
+
+def _acq_view(a: Analysis):
+    """取得の段の様子。取得が無い（試作）か済んでいれば None"""
+    acq = a.meta.get("acquisition")
+    if not acq or acq.get("status") == "done":
+        return None
+    if acq.get("status") == "failed":
+        return {"state": "failed", "message": f"取得が止まりました（{acq.get('error')}）。運営が確認します。", "eta_seconds": None}
+    try:
+        from acquire import launch
+        p = launch.progress(a.id)
+    except Exception as e:  # 見込みが出せなくても状態は返す
+        p = {"status": acq.get("status"), "eta_seconds": None, "error": str(e)}
+    eta = p.get("eta_seconds")
+    if p.get("status") == "queued" and p.get("ahead"):
+        msg = f"取得の順番待ち（前に{p['ahead']}件）。終わるまで約{_hm(eta)}。"
+    elif p.get("status") == "running":
+        msg = f"取得中（{p.get('step_label') or '準備'}）。終わるまで約{_hm(eta)}。"
+    else:
+        msg = f"取得の開始待ち。終わるまで約{_hm(eta)}。" if eta else "取得の開始待ち。"
+    return {"state": "acquiring", "message": msg + "終わったらメールで知らせます。", "eta_seconds": eta}
+
+
 def status(user_id: str, ref: str | None = None) -> dict:
     with _lock:
         targets = [resolve(user_id, ref)] if ref else list_analyses(user_id)
         items = []
         for a in targets:
+            av = _acq_view(a)
+            if av:
+                items.append({"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": av["state"],
+                              "progress": "取得の段", "message": av["message"], "eta_seconds": av["eta_seconds"]})
+                continue
+            if a.meta.get("acquisition") and not a.meta.get("proto"):
+                items.append({"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": "acquired",
+                              "progress": "取得済み", "message": "取得は終わりました。AI の段は準備中です（運営が用意します）。"})
+                continue
             st = _load_state(a)
             cur = _current(st)
             if cur is None or cur["kind"] == "done":
@@ -637,9 +686,56 @@ def status(user_id: str, ref: str | None = None) -> dict:
         return {"text": text, "analyses": items}
 
 
+MUSIC_URL_RE = re.compile(r"^https://(www\.)?tiktok\.com/music/[^\s/]+-\d+")
+MAX_ACTIVE_PER_USER = 2
+
+
+def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "") -> dict:
+    """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係が走らせる）"""
+    song, artist, music_url = (song or "").strip(), (artist or "").strip(), (music_url or "").strip()
+    if not song and not music_url:
+        raise RunnerError("曲名（とアーティスト名）か、TikTok の楽曲ページの URL を教えてください")
+    if music_url and not MUSIC_URL_RE.match(music_url):
+        raise RunnerError("楽曲ページの URL は https://www.tiktok.com/music/曲名-数字 の形です")
+    from acquire import launch
+    with _lock:
+        aid = launch.find_active(user_id, song, music_url)
+        created = aid is None
+        if created:
+            active = [a for a in list_analyses(user_id)
+                      if (a.meta.get("acquisition") or {}).get("status") in ("queued", "running")]
+            if len(active) >= MAX_ACTIVE_PER_USER:
+                raise RunnerError(f"取得中・順番待ちの分析が{len(active)}件あります。終わってから次を頼んでください: "
+                                  + ", ".join(a.title for a in active))
+            aid = launch.new_analysis(user_id, song, artist, music_url)
+    kick = launch.ensure_worker()
+    p = launch.progress(aid)
+    title = song or music_url
+    eta = p.get("eta_seconds")
+    lines = [f"「{title}」の{'取得を受け付けました' if created else '取得はもう受け付けています'}（分析 ID: {aid}）。",
+             "楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。",
+             (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + (f"終わるまで約{_hm(eta)}の見込みです。" if eta else ""),
+             "終わったらメールでお知らせします。そのあと「" + title + "の分析を続けて」と言ってください。",
+             "", "（AI へ: この内容を利用者に短く伝えて、ここで止まる。取得を待たない・見に来ない）"]
+    return {"text": "\n".join(l for l in lines if l is not None), "analysis_id": aid, "created": created,
+            "worker": kick, "eta_seconds": eta}
+
+
+def _wait_task(a: Analysis, message: str) -> dict:
+    text = (f"# 待ち: {a.title}\n\n- kind: `wait`\n\n{message}\n\n"
+            "ここで止まって、利用者にこの内容を短く伝える。next_task を繰り返し呼ばない（待つ間に見に来ない）。\n\n---\n" + REPEAT_RULE)
+    a.log(event="issue", task_id=f"{a.id}/wait", kind="wait", chars=len(text))
+    return {"text": text, "task_id": None, "kind": "wait", "analysis_id": a.id, "progress": "取得の段"}
+
+
 def next_task(user_id: str, ref: str | None = None) -> dict:
     with _lock:
         a = resolve(user_id, ref)
+        av = _acq_view(a)
+        if av:
+            return _wait_task(a, av["message"] + "\n取得が終わったら、利用者が「" + a.title + "の分析を続けて」と言えば再開する。")
+        if a.meta.get("acquisition") and not a.meta.get("proto"):
+            return _wait_task(a, "取得は終わりました。AI の段（分類からレポートまで）は準備中です。運営から連絡します。")
         st = _load_state(a)
         t = _current(st)
         if t is None:

@@ -121,7 +121,7 @@ async def main():
         print("[1] 初期化・道具・instructions")
         tools = await c.list_tools()
         names = sorted(t.name for t in tools.tools)
-        ok(names == ["next_task", "read", "status", "submit"], f"道具 {names}")
+        ok(names == ["next_task", "read", "start_analysis", "status", "submit"], f"道具 {names}")
         ins = c.instructions or ""
         ok("next_task" in ins and "ask_user" in ins, f"instructions が返る（{len(ins)}文字）")
         print("      版:", c.protocol_version, c.server_info.name if c.server_info else None)

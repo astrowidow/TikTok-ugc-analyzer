@@ -85,6 +85,12 @@ try:
 except Exception as e:
     logger.warning("AI の接続口（MCP）を載せられませんでした。Web サービスはそのまま動きます: %s", e)
 
+try:
+    import tiktok_lock
+except Exception as e:
+    tiktok_lock = None
+    logger.warning("TikTok のロック（tiktok_lock.py）を読めませんでした。CSV ジョブはロックなしで動きます: %s", e)
+
 
 # ---------------------------------------------------------------------------
 # 順番待ちキュー（Chromeを同時に何個も起動させないため、常に1件ずつ処理する）
@@ -107,7 +113,7 @@ def _worker():
             waiting = len(_pending_ids)
         job_log(job_id, f"キューから取り出して実行を開始します（残りの待ち: {waiting}件）")
         try:
-            run_job(**payload)
+            _run_with_tiktok_lock(job_id, payload)
         except Exception as e:
             update_job(job_id, status="error", error=str(e), message="エラーが発生しました。")
             job_log(job_id, f"ワーカーで例外が発生しました: {e}", logging.ERROR, exc_info=True)
@@ -115,6 +121,28 @@ def _worker():
             with _queue_lock:
                 _running_id = None
             job_queue.task_done()
+
+
+def _run_with_tiktok_lock(job_id: str, payload: dict):
+    """分析の取得（別プロセス、acquire/worker.py）と TikTok に同時に触らないよう、1つのロックで直列にする。
+    取得の係は CSV ジョブが待っていると区切りで譲るので、待ちは長くて数分。ロックが使えなくても CSV 機能は止めない"""
+    owner = f"csv:{job_id[:8]}"
+    locked = False
+    if tiktok_lock is not None:
+        try:
+            tiktok_lock.acquire(owner, on_wait=lambda holder: update_job(
+                job_id, message="分析用の取得が区切りに来るのを待っています（数分）..."))
+            locked = True
+        except Exception as e:
+            job_log(job_id, f"TikTok のロックを取れませんでした（ロックなしで続けます）: {e}", logging.WARNING)
+    try:
+        run_job(**payload)
+    finally:
+        if locked:
+            try:
+                tiktok_lock.release(owner)
+            except Exception:
+                pass
 
 
 threading.Thread(target=_worker, name="ugc-worker", daemon=True).start()

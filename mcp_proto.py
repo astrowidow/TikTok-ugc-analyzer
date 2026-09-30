@@ -120,6 +120,18 @@ def _build_server():
     rule = "\n\n繰り返し方: " + runner.REPEAT_RULE
 
     @mcp.tool(
+        title="分析を始める",
+        description="TikTok の楽曲の UGC 分析を始める（取得を待ち行列に入れる）。利用者が「〇〇を分析して」と頼んだときに使う。"
+                    "song は曲名、artist はアーティスト名。分かれば music_url（https://www.tiktok.com/music/… の楽曲ページ）。"
+                    "取得は半日ほどかかり、終わったらメールで知らせる。返ってきた内容を利用者に短く伝えて止まる"
+                    "（取得を待たない・見に来ない）。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
+                                    open_world_hint=True),
+    )
+    async def start_analysis(ctx: Context, song: str, artist: str = "", music_url: str | None = None) -> str:
+        return _call(runner.start_analysis, _user(ctx), song, artist, music_url or "")["text"]
+
+    @mcp.tool(
         title="分析の状態",
         description="利用者の分析の一覧と状態（取得中・AI の番・確認待ち・完了）を返す。"
                     "利用者に進み具合を聞かれたとき、または分析 ID が分からないときに使う。" + rule,

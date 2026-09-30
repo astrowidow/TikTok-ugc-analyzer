@@ -13,3 +13,5 @@ pandas>=2.3,<4
 requests>=2.32,<3
 # AI の接続口（mcp_proto.py）。2.x は 1.x と書き方が違う。無くても Web サービスは起動する（接続口だけ無効）
 mcp>=2.2,<3
+# 分析の取得の段（acquire/）でサムネの一覧画像を作る（analysis/build_llm_input.py）
+pillow>=11,<13

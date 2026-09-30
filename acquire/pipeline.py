@@ -36,7 +36,10 @@ STEP_LABELS = {"resolve": "楽曲ページを探す", "list": "動画の一覧�
 
 # 取得の設定（analysis.json の "acquisition_settings" で上書きできる。試走は pool_budget を小さくする）
 DEFAULTS = {
-    "comment_hours": 12.0,       # コメント取得の時間の上限
+    "comment_hours": 12.0,       # コメント取得にかける時間の見積もり（プールの本数をこの時間で配る）
+    # 取得を打ち切る時間の上限（0 は打ち切らない）。2026-10-01 ユーザー判断: 12時間の打ち切りはやめ、
+    # 「シルエットはモデルケースなので、上限に引っ掛かる状況は望ましくない」「上限は20時間くらい。あったほうがいい」
+    "comment_deadline_hours": 20,
     # プールの予算の見積もり（1本あたりの分）。試走の実測（2026-09-30）: 40件の動画4.2分・120件7.2分（返信を各2件開いた場合）。
     # 返信を各1件にして 3.1分・6.1分の見込み（docs/IMPLEMENTATION_LOG.md D20）
     "min_per_video": 3.1, "min_per_key_video": 6.1,
@@ -338,10 +341,11 @@ class Run:
         ensure_chrome(s["chrome_port"], self.log)
         from acquire import spatest
         spent = float(((self.meta.get("acquisition") or {}).get("steps", {}).get("comments") or {}).get("active_hours") or 0)
+        deadline = float(s.get("comment_deadline_hours") or 0)
         retries = 0
         while True:
-            left = float(s["comment_hours"]) - spent
-            if left <= 0.02:
+            left = (deadline - spent) if deadline else 0.0      # 0 は spatest で「打ち切らない」
+            if deadline and left <= 0.02:
                 self.log("    時間の上限に達しています")
                 break
             args = ["--port", str(s["chrome_port"]), "--music-url", self.meta["music_url"],
@@ -379,7 +383,7 @@ class Run:
             self._mark("comments", {"active_hours": round(spent, 3)})
             blocked = blocked or any(r.get("status") == "blocked" for r in c.rows)
             errors = [r for r in c.rows if r.get("status") == "error"]
-            if blocked and retries < int(s["blocked_retries"]) and spent < float(s["comment_hours"]):
+            if blocked and retries < int(s["blocked_retries"]) and (not deadline or spent < deadline):
                 retries += 1
                 self.unlock()
                 self.log(f"    ブロックを検知したので {s['blocked_wait_min']}分空けてから続きを取ります（{retries}回目）")
@@ -408,7 +412,10 @@ class Run:
         ok = [r for r in rows if r.get("status") == "ok"]
         ok = list({r["video_id"]: r for r in ok}.values())
         mixed = sum(1 for r in ok for c in (r.get("comments") or []) if str(c.get("aweme_id")) != str(r["video_id"]))
-        capped20 = sum(1 for r in ok if len(r.get("comments") or []) == 20 and r.get("has_more"))
+        # 20件で頭打ち（2-9）の疑い: 上位リストが20件以上あったのに20件で止まったもの。
+        # 上位リストが20件未満なら、最低件数（--min-comments 20）で正しく止まっただけ（2026-10-01 の写しで1本、上位17件で誤報になった）
+        capped20 = sum(1 for r in ok if len(r.get("comments") or []) == 20 and r.get("has_more")
+                       and (r.get("top_list") or 0) >= 20)
         summ = read_json(self.p("fetch_log", "comments_summary.json"), {}) or {}
         n_pool = sum(1 for _ in open(self.p("derived", "pool.tsv"), encoding="utf-8")) - 1
         res = {"videos_ok": len(ok), "pool": n_pool,

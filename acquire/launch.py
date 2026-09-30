@@ -105,7 +105,7 @@ def _remaining_seconds(m: dict) -> int:
     budget = int(s.get("pool_budget") or 0) or int(float(s["comment_hours"]) * 60 / float(s["min_per_video"]))
     n_pool = ((steps.get("pool") or {}).get("detail") or {}).get("n_pool") or budget
     est = {"resolve": 60, "list": LIST_SECONDS, "enrich": n_links * ENRICH_SECONDS_PER_VIDEO, "derive": DERIVE_SECONDS,
-           "pool": 10, "comments": min(float(s["comment_hours"]) * 3600, n_pool * float(s["min_per_video"]) * 60) + 600,
+           "pool": 10, "comments": n_pool * float(s["min_per_video"]) * 60 + 600,
            "comments_md": 30, "notify": 5}
     total = 0.0
     for step in pipeline.STEPS:

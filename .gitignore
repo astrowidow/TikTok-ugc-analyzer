@@ -24,3 +24,6 @@ page.html
 
 # ログ
 logs/
+
+# Claude Code の個人設定（権限 allowlist）。公開リポジトリに載せない
+.claude/settings.local.json

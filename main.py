@@ -59,8 +59,9 @@ def _client_ip(request: Request) -> str:
 
 @app.middleware("http")
 async def basic_auth_middleware(request: Request, call_next):
-    # AI の接続口（/mcp/<秘密>）は Basic 認証の外。守りは利用者ごとの秘密の URL（mcp_proto.py）
-    if request.url.path.startswith("/mcp/"):
+    # AI の接続口（/mcp/<秘密>）と成果物のダウンロード（/dl/<分析ごとの鍵>）は Basic 認証の外。
+    # 守りは利用者ごとの秘密の URL と分析ごとの鍵（mcp_proto.py・downloads.py）
+    if request.url.path.startswith(("/mcp/", "/dl/")):
         return await call_next(request)
     if not _is_authorized(request.headers.get("Authorization", "")):
         header = request.headers.get("Authorization", "")
@@ -84,6 +85,12 @@ try:
     mcp_proto.attach(app)
 except Exception as e:
     logger.warning("AI の接続口（MCP）を載せられませんでした。Web サービスはそのまま動きます: %s", e)
+
+try:
+    import downloads
+    downloads.attach(app)
+except Exception as e:
+    logger.warning("成果物のダウンロードの口を載せられませんでした。Web サービスはそのまま動きます: %s", e)
 
 try:
     import tiktok_lock

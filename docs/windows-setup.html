@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Windows移行 作業手順書 — TikTok UGC Analyzer</title>
+<style>
+:root{--bg:#fbfbfa;--fg:#1c1b1a;--muted:#6b6a68;--line:#e2e0dd;--card:#fff;
+--accent:#b8563f;--warn:#8a5a00;--warnbg:#fff8e6;--dangerbg:#fdecea;--danger:#a3251b;
+--okbg:#eaf5ec;--ok:#256a34;--code:#f4f3f1;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Yu Gothic UI",sans-serif;}
+.wrap{max-width:920px;margin:0 auto;padding:40px 24px 120px}
+h1{font-size:28px;line-height:1.35;margin:0 0 8px;letter-spacing:-.01em}
+h2{font-size:20px;margin:56px 0 4px;padding-top:20px;border-top:2px solid var(--fg);letter-spacing:-.01em}
+h3{font-size:16px;margin:32px 0 8px}
+h4{font-size:14px;margin:22px 0 6px;color:var(--muted);text-transform:none}
+p,li{margin:10px 0}
+ul,ol{padding-left:22px}
+code{background:var(--code);padding:1px 5px;border-radius:3px;font-size:.9em;
+font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:6px;
+padding:14px 52px 14px 14px;overflow-x:auto;margin:12px 0;
+font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;line-height:1.6}
+pre code{background:none;padding:0;font-size:inherit}
+.copy{position:absolute;top:8px;right:8px;border:1px solid var(--line);background:var(--card);
+color:var(--muted);border-radius:5px;padding:4px 9px;font-size:11px;cursor:pointer;font-family:inherit}
+.copy:hover{color:var(--fg);border-color:var(--muted)}
+.copy.done{color:var(--ok);border-color:var(--ok)}
+.copy.warnbtn{color:var(--warn);border-color:var(--warn)}
+table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--code);font-weight:600;white-space:nowrap}
+.box{border-radius:6px;padding:14px 16px;margin:16px 0;border:1px solid}
+.warn{background:var(--warnbg);border-color:#e8d5a3;color:var(--warn)}
+.danger{background:var(--dangerbg);border-color:#f0c2bd;color:var(--danger)}
+.ok{background:var(--okbg);border-color:#bcdcc4;color:var(--ok)}
+.box strong{color:inherit}
+.box p:first-child{margin-top:0}.box p:last-child{margin-bottom:0}
+.meta{color:var(--muted);font-size:13px;margin:0 0 28px}
+.toc{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:16px 22px;margin:28px 0}
+.toc ol{margin:0;padding-left:20px}
+.toc a{color:var(--fg);text-decoration:none;border-bottom:1px solid var(--line)}
+.toc a:hover{border-color:var(--fg)}
+.phase-goal{background:var(--card);border-left:3px solid var(--accent);padding:10px 14px;margin:12px 0;font-size:14px}
+.tik{background:var(--dangerbg);border-left:3px solid var(--danger);padding:10px 14px;margin:12px 0;font-size:14px}
+hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+.small{font-size:13px;color:var(--muted)}
+kbd{background:var(--card);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:1px 6px;font-size:12px}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>Windows移行 作業手順書</h1>
+<p class="meta">TikTok UGC Analyzer / コメント取得 — 2026-09-11 作成<br>
+前提知識は <code>docs/COMMENT_ACQUISITION_HANDOVER.md</code>（引き継ぎ書）。特に <strong>2-9</strong> と <strong>第4章</strong>。</p>
+
+<div class="box ok" id="now" style="border-width:3px">
+<p style="font-size:18px"><strong>▶ いまやること（この枠だけ見ればよい）</strong></p>
+<p><strong>更新: 2026-09-11 18:10（Mac 時刻）</strong> — Mac 側で次の一手が変わるたびにこの枠を書き換えます。</p>
+<p><strong>Phase 0〜7 完了。Windows 側での手作業はありません。</strong>
+ログイン済み（捨て垢）、<code>--probe</code> / <code>--limit 1</code>（305件）/ <code>--limit 10</code>（10/10、1,151件）が
+全検算クリア（混入0・cid重複0・20件頭打ち0）。この Windows 機でのコメント取得は成立。結果は引き継ぎ書 7-C。
+次は Web サービスへの統合（設計から）。</p>
+<p><strong>触らないでほしいもの:</strong> 画面に出ている収集用 Chrome（TikTok を表示中）を閉じない・ロック（Win+L）しない・
+サインアウトしない・RDP で繋がない。ディスプレイの入力を Mac に戻すのは問題ありません。</p>
+</div>
+
+<div class="box danger">
+<p><strong>この作業で一番怖いのは「動いているように見えて間違っている」です。</strong>
+ブロックもエラーも出ないまま全動画が20件で終わる失敗が、この案件では繰り返し起きています（引き継ぎ書 第0章）。
+各フェーズの<strong>期待値の表を必ず突き合わせてください</strong>。「たぶん動いた」で次に進まないこと。</p>
+</div>
+
+<div class="box warn">
+<p><strong>コピーボタンについて:</strong> このページは <code>http://</code> で開いているため、
+ブラウザのクリップボードAPIが使えません。ボタンは古い方式で動きます。
+それも効かない環境では<strong>コード部分を自動で選択状態にする</strong>ので、
+そのまま <kbd>Ctrl</kbd>+<kbd>C</kbd> を押してください（ボタンの文字が「選択しました → Ctrl+C」に変わります）。</p>
+</div>
+
+<h3>今日やることの全体像</h3>
+<p>コメント取得をこの Windows 機に載せられるかを確かめます。<strong>今日は検証まで。</strong>
+Webサービスへの統合（画面転送によるログイン導線）はその後です。</p>
+<table>
+<tr><th>Phase</th><th>やること</th><th>TikTokに触るか</th></tr>
+<tr><td>0</td><td>Mac→Windows のテキスト共有路を作る</td><td>触らない</td></tr>
+<tr><td>1</td><td>現状確認（セッション・Chrome・Python）</td><td>触らない</td></tr>
+<tr><td>2</td><td>SSH を有効にする</td><td>触らない</td></tr>
+<tr><td>3</td><td>既存の穴を塞ぐ（UGC_PASS）</td><td>触らない</td></tr>
+<tr><td>4</td><td>Python環境とスクリプトを置く</td><td>触らない</td></tr>
+<tr><td>5</td><td>Chrome を<strong>対話セッションで</strong>起動する</td><td>触らない</td></tr>
+<tr><td>6</td><td>捨てアカウントで TikTok に手動ログイン（1回だけ）</td><td><strong>触る</strong></td></tr>
+<tr><td>7</td><td>検証（動画0本 → 1本）</td><td><strong>触る</strong></td></tr>
+<tr><td>8</td><td>Mac から私が繋げるようにする</td><td>触らない</td></tr>
+</table>
+
+<div class="toc">
+<strong>目次</strong>
+<ol>
+<li><a href="#p0">Phase 0 — テキスト共有路を作る</a></li>
+<li><a href="#p1">Phase 1 — 現状確認</a></li>
+<li><a href="#p2">Phase 2 — SSH を有効にする</a></li>
+<li><a href="#p3">Phase 3 — 既存の穴を塞ぐ</a></li>
+<li><a href="#p4">Phase 4 — 環境を作る</a></li>
+<li><a href="#p5">Phase 5 — Chrome を対話セッションで起動する</a></li>
+<li><a href="#p6">Phase 6 — TikTok に手動ログイン</a></li>
+<li><a href="#p7">Phase 7 — 検証</a></li>
+<li><a href="#p8">Phase 8 — Mac から繋げるようにする</a></li>
+<li><a href="#ng">やってはいけないこと</a></li>
+<li><a href="#tshoot">困ったときの分岐表</a></li>
+</ol>
+</div>
+
+<hr>
+
+<h2 id="p0">Phase 0 — テキスト共有路を作る</h2>
+<div class="phase-goal"><strong>目的:</strong> Windows 側で長いコマンドを手打ちしなくて済むようにする。Windows には何もインストールしないし、何にもログインしない。</div>
+
+<h3>Mac 側（先にこちらを起動）</h3>
+<p>受け渡し用のサーバーを立てます。<strong>渡すだけでなく、Windows からの受け取りもできます。</strong></p>
+<pre><code>python3 ~/workspace/TikTok-ugc-analyzer/docs/mac-share-server.py</code></pre>
+<p class="small">以前の <code>python3 -m http.server 8765</code> や旧版のサーバーが動いている場合は、
+<kbd>Ctrl</kbd>+<kbd>C</kbd> で止めてからこちらを起動してください（同じ 8765 番を使うため）。
+URL は変わりません。</p>
+<div class="box ok">
+<p>このサーバーは<strong>リポジトリの <code>docs/</code> を直接配信します。</strong>
+手順書やスクリプトを直したら、コピー作業なしでそのまま反映されます
+（<code>spatest.py</code> など <code>docs/</code> に無いものは <code>~/win-transfer/</code> からも探します）。</p>
+</div>
+<div class="box warn">
+<p><strong>初回だけ macOS がファイアウォールの確認ダイアログを出します</strong>（「python への着信接続を許可しますか」）。
+<strong>「許可」を押してください。</strong> 拒否すると Windows から繋がりません。
+Mac のファイアウォールは現在 <strong>有効</strong> です。</p>
+</div>
+<p class="small">終わったら <kbd>Ctrl</kbd>+<kbd>C</kbd> で止めてください。立てっぱなしにすると同一LANの誰でもそのフォルダを読めます。</p>
+
+<h3>Windows 側 — 最初に管理者 PowerShell を開く</h3>
+<div class="box danger">
+<p><strong>今日の作業は最初から最後まで、この1つの管理者ウィンドウで行います。</strong>
+途中で普通の PowerShell に戻る場面はありません。</p>
+</div>
+<ol>
+<li><kbd>Win</kbd>+<kbd>X</kbd> を押す（スタートボタンを右クリックでも同じ）</li>
+<li><strong>「ターミナル (管理者)」</strong> または <strong>「Windows PowerShell (管理者)」</strong> を選ぶ</li>
+<li>UAC の確認に<strong>「はい」</strong></li>
+</ol>
+<div class="box warn">
+<p>管理者で開くと作業フォルダが <code>C:\Windows\System32</code> になります。
+以降のコマンドは <code>cd</code> から始まるものが多いので、そのままコピーして使ってください。</p>
+</div>
+
+<h3>Windows 側 — この手順書を開く</h3>
+<p>Chrome のアドレスバーにこれを打つだけです。</p>
+<pre><code>http://192.168.0.52:8765/</code></pre>
+<p>この手順書自体もそこにあります。</p>
+<pre><code>http://192.168.0.52:8765/windows-setup.html</code></pre>
+<p><strong>以降、このページのコード欄は右上の「コピー」ボタンで取れます。</strong> 手打ちは不要です。</p>
+
+<div class="box warn">
+<p><strong>curl は使いません。</strong> PowerShell の <code>curl</code> は <code>Invoke-WebRequest</code> のエイリアスで別物ですし、
+<code>curl.exe</code> のほうも <code>--data-binary "@ファイル"</code> がパスに空白を含むと
+<code>error encountered when reading a file</code> で失敗し、原因が分かりません。
+このページでは<strong>すべて PowerShell 標準のコマンドだけ</strong>で通します。</p>
+</div>
+
+<div class="box warn">
+<p><strong>ここから Phase 0 の終わりまでは「参考」です。今は実行しなくて構いません。</strong>
+Phase 1 のスクリプトはダウンロードも Mac への送信も自分でやるので、手で送る場面は当面ありません。
+試す場合は、どのコード欄も<strong>そのまま実行して失敗しない</strong>ように書いてあります。</p>
+</div>
+
+<h4>参考: ファイルをダウンロードする場合</h4>
+<pre><code>cd $env:USERPROFILE\Downloads
+Invoke-WebRequest -Uri "http://192.168.0.52:8765/win-phase1-ssh.ps1" -OutFile "win-phase1-ssh.ps1" -UseBasicParsing
+Invoke-WebRequest -Uri "http://192.168.0.52:8765/win-launch-chrome.bat" -OutFile "win-launch-chrome.bat" -UseBasicParsing</code></pre>
+
+<h4 id="send">参考: 逆方向（Windows → Mac）に出力を送る</h4>
+<div class="box ok">
+<p><strong>画面の文字を書き写す必要はありません。</strong> PowerShell 標準の機能だけで Mac に送れます。
+Windows 側には何もインストールしません。</p>
+</div>
+<p>ファイルを送る（1行目で送る用のファイルを作ってから送ります。ファイルを作らずに2行目だけ実行すると
+「存在しないため検出できません」と言われます）:</p>
+<pre><code>"send test" | Set-Content "$env:TEMP\out.txt"
+Invoke-RestMethod -Uri "http://192.168.0.52:8765/upload/out.txt" -Method Post -InFile "$env:TEMP\out.txt"</code></pre>
+<p>コマンドの出力を<strong>画面に出しながら同時に送る</strong>場合は、<code>Tee-Object</code> を挟みます
+（例では <code>Get-Date</code> を送っています。実際に使うときはそこを送りたいコマンドに置き換えます）:</p>
+<pre><code>$out = "$env:TEMP\out.txt"
+Get-Date *&gt;&amp;1 | Tee-Object -FilePath $out
+Invoke-RestMethod -Uri "http://192.168.0.52:8765/upload/out.txt" -Method Post -InFile $out</code></pre>
+<p>ファイルを作らず、文字列をそのまま送る:</p>
+<pre><code>Invoke-RestMethod -Uri "http://192.168.0.52:8765/upload/memo.txt" -Method Post -Body "send test"</code></pre>
+<p class="small">成功すると <code>saved: inbox/out.txt (NN bytes)</code> と返ります。送られたものは Mac の
+<code>~/win-transfer/inbox/</code> に入り、サーバーの画面にも <code>[受信] inbox/...</code> と出ます。
+<strong>以降このページで「Mac に送ってください」と書いてある箇所は、これのことです。</strong></p>
+<p class="small">Phase 2 で SSH が通れば <code>scp</code> が使えるようになるので、この方法はそれまでの繋ぎです。</p>
+
+<hr>
+
+<h2 id="p1">Phase 1 — 現状確認</h2>
+<div class="phase-goal"><strong>目的:</strong> 必要な条件が揃っているかを一括で調べる。<strong>TikTok には1リクエストも投げません。</strong></div>
+
+<p>スクリプトが全項目を調べて <strong><code>[OK]</code> / <code>[NG]</code> で判定し、それぞれの意味も画面に出します。</strong>
+結果は<strong>自動で Mac に送られます</strong>ので、書き写す必要はありません。</p>
+
+<pre><code>cd $env:USERPROFILE\Downloads
+Invoke-WebRequest -Uri "http://192.168.0.52:8765/win-check.ps1" -OutFile "win-check.ps1" -UseBasicParsing
+powershell -ExecutionPolicy Bypass -File .\win-check.ps1</code></pre>
+
+<div class="box ok">
+<p><strong>やることはこれだけです。</strong> 出力に <code>[NG]</code> があれば、その行に「意味」と「どうするか」が書いてあります。
+最後に総合判定が出るので、<strong>それを見て報告してください。自分で先に進めなくて大丈夫です。</strong></p>
+</div>
+
+<h3>スクリプトが調べる8項目</h3>
+<table>
+<tr><th>#</th><th>調べるもの</th><th>OK の条件</th><th>NG だと何が起きるか</th></tr>
+<tr><td>1</td><td><strong>Mac との疎通</strong></td><td>テスト送信が Mac に届く</td><td>以降の結果送信が全部無駄になるので最初に確認する。Mac 側のサーバー画面に <code>[受信]</code> と出れば成功</td></tr>
+<tr><td>2</td><td>Windows のビルド</td><td><strong>build 17763 以上</strong>（Windows 10 1809 以降）</td><td>これ未満だと OpenSSH を標準機能として導入できない。別の方法の判断が要る</td></tr>
+<tr><td>3</td><td><strong>デスクトップセッション</strong></td><td><code>query session</code> の <code>console</code> 行が <strong>Active</strong></td><td><strong>最重要。</strong> Active でないと Chrome の描画が止まり、ブロックもエラーも出ないまま<strong>全動画20件で終わる</strong>（引き継ぎ書 2-9）</td></tr>
+<tr><td>4</td><td>ネットワーク</td><td>IPが <code>192.168.</code> / <code>10.</code> / <code>172.16〜31.</code></td><td>グローバルIPが直接付いていると、SSH を開けた瞬間に外から届く。要相談</td></tr>
+<tr><td>5</td><td>Chrome</td><td>3箇所のいずれかに <code>chrome.exe</code></td><td>コメント取得は Chrome 本体が必須</td></tr>
+<tr><td>6</td><td>Python</td><td><strong>3.9 以上</strong></td><td>スクレイパーと収集スクリプトが動かない</td></tr>
+<tr><td>7</td><td>自動ログイン</td><td>（参考）<code>AutoAdminLogon = 1</code></td><td>無効でも今日は困らないが、再起動のたびに手でログインしないとデスクトップが無くなる</td></tr>
+<tr><td>8</td><td>OpenSSH の現状</td><td>（現状把握）</td><td>「機能は導入済みなのにサービスが無い」状態を検出する。Phase 2 で詰まった原因はこれ</td></tr>
+</table>
+
+<p class="small">項目3は <code>query session</code> の生出力もそのまま画面に出します。
+判定は文字列一致なので、環境によっては誤判定しうるためです。<strong>生出力も目で見てください。</strong></p>
+
+<h3>結果が Mac に届いたかどうかの見分け方</h3>
+<table>
+<tr><th>どこ</th><th>成功しているときの見え方</th></tr>
+<tr><td>Windows の画面（項目1）</td><td><code>[OK  ] Mac に届いた</code> / <code>実際の値 : saved: inbox/_conn_test.txt (NN bytes)</code></td></tr>
+<tr><td>Windows の画面（最後）</td><td><code>[送信OK] この結果を Mac に送りました</code></td></tr>
+<tr><td><strong>Mac のサーバー画面</strong></td><td><code>[受信] inbox/win-check.log  NNNN バイト</code> と出る</td></tr>
+<tr><td>Mac のフォルダ</td><td><code>~/win-transfer/inbox/win-check.log</code> ができている</td></tr>
+</table>
+<div class="box warn">
+<p><strong>項目1が <code>[NG]</code> だった場合</strong>、画面に確認する順番が出ます:
+(a) Mac で <code>python3 ~/win-transfer/mac-share-server.py</code> が動いているか
+(b) Mac の IP が <code>192.168.0.52</code> で合っているか
+(c) 初回の macOS ファイアウォール確認で<strong>「許可」</strong>を押したか</p>
+</div>
+
+<h2 id="p2">Phase 2 — SSH を有効にする</h2>
+<div class="phase-goal"><strong>目的:</strong> Mac から私がこの機械を操作できるようにする。同時にローカルネット外からは届かないように絞る。</div>
+
+<div class="box ok">
+<p><strong>セキュリティの整理:</strong> <code>sshd</code> を起動しても、それは<strong>この機械でポート22の待ち受けを始めるだけ</strong>です。
+インターネットから届くかどうかを決めているのは<strong>ルーター</strong>で、ポート転送を設定していなければ外からは到達できません。
+下の手順では<strong>さらにファイアウォールをローカルネットに限定</strong>して二重に塞ぎます。</p>
+</div>
+
+<div class="box danger">
+<p><strong>ここから先は管理者 PowerShell が必要です。</strong>
+<code>Add-WindowsCapability</code>（OpenSSH サーバーの導入）は管理者権限なしでは失敗します。</p>
+</div>
+
+<h3>管理者 PowerShell の開き方</h3>
+<ol>
+<li><kbd>Win</kbd>+<kbd>X</kbd> を押す（スタートボタンを右クリックでも同じ）</li>
+<li><strong>「ターミナル (管理者)」</strong> または <strong>「Windows PowerShell (管理者)」</strong> を選ぶ</li>
+<li>UAC の確認に<strong>「はい」</strong></li>
+</ol>
+<div class="box warn">
+<p><strong>管理者で開くと作業フォルダが <code>C:\Windows\System32</code> に変わります。</strong>
+必ず <code>cd</code> し直してください。</p>
+</div>
+
+<h3>スクリプトで一括実行する（推奨）</h3>
+<pre><code>cd $env:USERPROFILE\Downloads
+Invoke-WebRequest -Uri "http://192.168.0.52:8765/win-phase1-ssh.ps1" -OutFile "win-phase1-ssh.ps1" -UseBasicParsing
+powershell -ExecutionPolicy Bypass -File .\win-phase1-ssh.ps1</code></pre>
+<p class="small">1行目のダウンロードは、既に落としてあっても<strong>もう一度やってください</strong>（スクリプトを更新しているため）。</p>
+<p class="small">管理者でないまま実行した場合、スクリプトが検出して止まり、
+「自動で管理者ウィンドウを開き直すか」を聞いてきます。<code>y</code> と答えれば新しいウィンドウで開き直します
+（<code>-NoExit</code> 付きなので出力は消えません）。</p>
+<p class="small">実行内容は <code>%USERPROFILE%\win-phase1-ssh.log</code> に残り、終了時に
+<strong>Mac へ自動送信されます</strong>（Phase 1 と同じ）。画面の文字を書き写す必要はありません。</p>
+
+<div class="box warn">
+<p><strong>もし <code>0x800f0954</code> で失敗したら:</strong> WSUS やグループポリシーで Windows Update が
+制限されている環境で起きます。その場合は GitHub の Win32-OpenSSH リリースから手動導入する道があるので、
+<strong>エラーメッセージごと報告してください</strong>。推測で回避策を試さないこと。</p>
+</div>
+
+<h3>手でやる場合（スクリプトが失敗したとき）</h3>
+<p class="small">こちらも<strong>管理者 PowerShell</strong> で実行してください。</p>
+<pre><code>Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service -Name sshd -StartupType Automatic
+Start-Service sshd
+Set-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -RemoteAddress LocalSubnet
+Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" | Get-NetFirewallAddressFilter
+Get-NetTCPConnection -LocalPort 22 -State Listen</code></pre>
+
+<h3 id="p2b">Windows 側は全部 OK なのに Mac から 22 番がタイムアウトするとき</h3>
+<div class="box warn">
+<p><strong>2026-09-11 に実際に起きた状態。</strong> sshd は Running、ルールは LocalSubnet、<code>0.0.0.0:22</code> で Listen、
+それでも Mac からは「タイムアウト」（3389 番は即応答）。Windows のファイアウォールが SSH だけ落としている。
+ありがちなのは「ルールが Private/Domain 限定なのにネットワークが Public 扱い」だが、推測で直さず
+下のスクリプトで<strong>診断と修正を1回で</strong>やる。ついでに Mac の公開鍵も登録する
+（毎回パスワードを打つ経路だと Mac 側から無人で操作できないため）。</p>
+</div>
+<pre><code>cd $env:USERPROFILE\Downloads
+Invoke-WebRequest -Uri "http://192.168.0.52:8765/win-phase2-fw.ps1" -OutFile "win-phase2-fw.ps1" -UseBasicParsing
+powershell -ExecutionPolicy Bypass -File .\win-phase2-fw.ps1</code></pre>
+<p class="small">やること: ルールのプロファイル・ネットワークの種類・22番の他ルール・サードパーティFWを表示 →
+OpenSSH のルールを「有効 / 全プロファイル / LocalSubnet 限定」に揃える →
+Mac の公開鍵を <code>C:\ProgramData\ssh\administrators_authorized_keys</code> に登録して ACL を締める →
+sshd 再起動 → ログを Mac へ自動送信。<strong>Mac 側の疎通確認は私がやります。</strong></p>
+
+<h3>うまくいかないとき — まず状態を確定させる</h3>
+<div class="box warn">
+<p><strong>「導入コマンドが成功したのに <code>sshd</code> サービスが存在しない」ことが実際に起きます。</strong>
+この場合、原因が「導入できていない」のか「導入できたがサービスが登録されていない」のかで対処が全く違います。
+<strong>推測で進めず、まずこれを実行してください。</strong></p>
+</div>
+<pre><code>$out = "$env:TEMP\diag.txt"
+&amp; {
+  Get-WindowsCapability -Online -Name OpenSSH* | Select-Object Name,State
+  Get-Service sshd,ssh-agent -ErrorAction SilentlyContinue | Select-Object Name,Status,StartType
+  "sshd.exe         : " + (Test-Path "$env:SystemRoot\System32\OpenSSH\sshd.exe")
+  "install-sshd.ps1 : " + (Test-Path "$env:SystemRoot\System32\OpenSSH\install-sshd.ps1")
+  (Get-CimInstance Win32_OperatingSystem).Caption
+  [System.Environment]::OSVersion.Version
+} *&gt;&amp;1 | Tee-Object -FilePath $out
+Invoke-RestMethod -Uri "http://192.168.0.52:8765/upload/diag.txt" -Method Post -InFile $out</code></pre>
+<p>画面にも出ますし、<strong>同時に Mac にも送られます</strong>（<a href="#send">逆方向の送り方</a>）。</p>
+
+<h4>結果ごとの意味</h4>
+<table>
+<tr><th>出力</th><th>意味</th><th>対処</th></tr>
+<tr><td><code>State : NotPresent</code></td><td><strong>導入できていない。</strong> 導入コマンドが成功したように見えて失敗している</td><td>本当のエラーを取りに行く。報告してください</td></tr>
+<tr><td><code>State : Installed</code> かつ <code>sshd.exe : True</code> かつ<strong>サービスの行が出ない</strong></td><td>導入済みだが<strong>サービスが登録されていない</strong>。既知の状態</td><td>同梱の公式登録スクリプトを実行（下記）</td></tr>
+<tr><td><code>State : Installed</code> だが <code>sshd.exe : False</code></td><td>導入が中途半端。<strong>再起動待ち</strong>の可能性</td><td>再起動してから診断をやり直す</td></tr>
+<tr><td><code>Caption</code> が Home エディション、またはビルドが古い</td><td><code>Add-WindowsCapability</code> 経由の OpenSSH が使えない可能性</td><td>別の道を選ぶ。<strong>報告して判断を仰いでください</strong></td></tr>
+</table>
+
+<h4>サービスだけが無い場合の対処</h4>
+<p>OpenSSH に<strong>同梱されている公式の登録スクリプト</strong>を実行します（別途ダウンロードするものではありません）。</p>
+<pre><code>&amp; "$env:SystemRoot\System32\OpenSSH\install-sshd.ps1"
+Get-Service sshd,ssh-agent | Select-Object Name,Status,StartType</code></pre>
+<p>これで <code>sshd</code> が出てくれば、Phase 2 のスクリプトを最初から流し直してください。</p>
+<div class="box danger">
+<p><strong>それでも駄目な場合、推測で回避策を試さないでください。</strong>
+<code>0x800f0954</code> は WSUS やグループポリシーで Windows Update が制限されている環境で出ます。
+そういう管理下にある機械に別経路でサービスを入れるのは勝手に判断してよいことではないので、
+<strong>診断の出力ごと報告してください。</strong></p>
+</div>
+
+<h3>期待値</h3>
+<table>
+<tr><th>見るもの</th><th>期待値</th></tr>
+<tr><td><code>Get-Service sshd</code></td><td><code>Status: Running</code> / <code>StartType: Automatic</code></td></tr>
+<tr><td>AddressFilter の <code>RemoteAddress</code></td><td><strong><code>LocalSubnet</code></strong>（<code>Any</code> のままなら絞れていない）</td></tr>
+<tr><td><code>Get-NetTCPConnection -LocalPort 22</code></td><td><code>Listen</code> の行が出る</td></tr>
+</table>
+
+<h3>Mac から疎通確認</h3>
+<p>Mac のターミナルで（<code>&lt;user&gt;</code> と <code>&lt;win-ip&gt;</code> は Phase 1 で確認した値）:</p>
+<pre><code>ssh &lt;user&gt;@&lt;win-ip&gt;</code></pre>
+<p>Windows のパスワードを聞かれて入れれば繋がります。<strong>ここまで来たら、以降のコマンドは私が Mac から流せます。</strong></p>
+<p class="small">鍵認証は後回しで構いません。管理者アカウントだと <code>C:\ProgramData\ssh\administrators_authorized_keys</code> に置く必要があり ACL も厳しいので、
+まずパスワード認証で通してから移行するほうが楽です。</p>
+
+<hr>
+
+<h2 id="p3">Phase 3 — 既存の穴を塞ぐ</h2>
+<div class="phase-goal"><strong>目的:</strong> この機械に TikTok のセッションCookie を置く前に、既に開いている口を閉じる。</div>
+
+<div class="box danger">
+<p><strong>確認済みの事実:</strong> GitHub の <code>astrowidow/TikTok-ugc-analyzer</code> は<strong>公開リポジトリ</strong>で、
+push 済みの <code>develop</code>（ca35d9d）に <code>start.bat</code> と <code>main.py</code> が含まれています。
+そこには <strong>ngrok の固定ドメインと、パスワード <code>ymafia</code> / <code>ymafia</code> の両方</strong>が書かれています。</p>
+<p><strong>ngrok は NAT を迂回します</strong>（内側から外へトンネルを張るため、ルーターは何も守ってくれない）。
+つまり ngrok を起動している間は、リポジトリを見た人が誰でも URL とパスワードを知っている状態です。</p>
+<p>そしてこれから、この機械に<strong>利用者ごとの TikTok セッションCookie</strong>（＝アカウントへのフルアクセス権）を置きます。</p>
+</div>
+
+<p>コード側は環境変数で上書きできる作りになっています（<code>main.py:28-29</code>）。</p>
+<pre><code>setx UGC_USER "任意のユーザー名"
+setx UGC_PASS "十分に長いパスワード"</code></pre>
+<p class="small"><code>setx</code> は<strong>新しく開いたウィンドウにしか反映されません</strong>。設定後は PowerShell と start.bat のウィンドウを開き直してください。</p>
+<p>あわせて、<code>start.bat:166</code> がパスワードを画面に印字している点と、固定ドメインを公開リポジトリに置いたままでよいかは、別途判断が要ります（今日の作業には影響しません）。</p>
+
+<hr>
+
+<h2 id="p4">Phase 4 — 環境を作る</h2>
+<div class="phase-goal"><strong>目的:</strong> Python環境と、コメント取得スクリプトをこの機械に置く。</div>
+
+<h3>4-1. リポジトリを取得する</h3>
+<p>公開リポジトリなので認証は要りません。</p>
+<pre><code>cd $env:USERPROFILE
+git clone https://github.com/astrowidow/TikTok-ugc-analyzer.git</code></pre>
+<p><code>git</code> が無ければ、Chrome で <code>https://github.com/astrowidow/TikTok-ugc-analyzer/archive/refs/heads/develop.zip</code> を開いて展開してください。</p>
+
+<h3>4-2. Python環境を作る</h3>
+<p>リポジトリの <code>start.bat</code> が <code>.venv</code> の作成と <code>requirements.txt</code> の導入までやってくれます。
+サーバーを起動せずに環境だけ作りたいので、まず <code>local</code> 付きで一度動かし、
+<code>[2/4] 準備できました。</code> まで進んだら <kbd>Ctrl</kbd>+<kbd>C</kbd> で止めます。</p>
+<pre><code>cd $env:USERPROFILE\TikTok-ugc-analyzer
+.\start.bat local</code></pre>
+<p>Python が入っていない場合はここでエラーになるので、<code>https://www.python.org/downloads/windows/</code> から 3.11 か 3.12 を入れてください。
+<strong>インストール時に「Add python.exe to PATH」に必ずチェック</strong>を入れること。</p>
+
+<h3>4-3. コメント取得スクリプトを置く</h3>
+<div class="box warn">
+<p><code>spatest.py</code> は<strong>リポジトリに入っていません</strong>（Mac の <code>~/tiktok-overnight/</code> にあります）。
+Phase 0 の共有路か、Phase 2 の SSH 経由で私が送ります。</p>
+</div>
+<p>Windows 側に置き場を作っておいてください。</p>
+<pre><code>mkdir $env:USERPROFILE\tiktok-overnight</code></pre>
+<p>Phase 0 の共有路で取る場合（Mac 側で <code>~/win-transfer</code> に配置済み）:</p>
+<pre><code>cd $env:USERPROFILE\tiktok-overnight
+Invoke-WebRequest -Uri "http://192.168.0.52:8765/spatest.py" -OutFile "spatest.py" -UseBasicParsing</code></pre>
+
+<hr>
+
+<h2 id="p5">Phase 5 — Chrome を対話セッションで起動する</h2>
+<div class="phase-goal"><strong>目的:</strong> 実ウィンドウを持った Chrome を、リモートデバッグポート付きで立ち上げる。<strong>ここが今回の山場です。</strong></div>
+
+<div class="box danger">
+<p><strong>SSH から直接 Chrome を起動してはいけません。</strong></p>
+<p>Windows はセッションを分離するので、SSH セッションから起動した GUI アプリは<strong>コンソールのデスクトップを持ちません</strong>。
+Chrome は起動はしますが描画を止め、コメントの仮想リストがスケルトンのままになり、
+<strong>ブロックもエラーも出ないまま全動画が20件で終わります</strong>（引き継ぎ書 2-9）。</p>
+<p>必ず <code>schtasks</code> の <code>/IT</code>（ログオン中のユーザーのセッションで対話的に実行）で起動してください。</p>
+</div>
+
+<h3>5-1. 起動用バッチを置く</h3>
+<pre><code>mkdir C:\tiktok-profiles
+cd C:\tiktok-profiles
+Invoke-WebRequest -Uri "http://192.168.0.52:8765/win-launch-chrome.bat" -OutFile "win-launch-chrome.bat" -UseBasicParsing</code></pre>
+
+<h3>5-2. タスクとして登録して実行する</h3>
+<pre><code>schtasks /Create /TN "tiktok-chrome" /TR "C:\tiktok-profiles\win-launch-chrome.bat" /SC ONCE /ST 00:00 /IT /F
+schtasks /Run /TN "tiktok-chrome"</code></pre>
+<p class="small"><code>/IT</code> が肝です。これが無いとセッション0で動いてしまい、上の事故が起きます。
+<code>/SC ONCE /ST 00:00</code> は「スケジュールでは動かさない（手動で <code>/Run</code> する）」ための指定です。</p>
+
+<h3>5-3. 起動できたか確認する</h3>
+<pre><code>Get-NetTCPConnection -LocalPort 9222 -State Listen
+Invoke-RestMethod -Uri "http://127.0.0.1:9222/json/version"</code></pre>
+<table>
+<tr><th>見るもの</th><th>期待値</th></tr>
+<tr><td><code>Get-NetTCPConnection</code></td><td><code>Listen</code> の行が出る</td></tr>
+<tr><td><code>/json/version</code></td><td><code>{"Browser":"Chrome/...","webSocketDebuggerUrl":...}</code> が返る</td></tr>
+</table>
+<p class="small">スクリプト側は <code>127.0.0.1:9222</code> への <strong>TCP接続</strong>なので、SSH セッションから実行してもセッション分離の影響を受けません。
+「Chrome の起動だけは対話セッション、スクリプトの実行は SSH でよい」という役割分担です。</p>
+
+<hr>
+
+<h2 id="p6">Phase 6 — TikTok に手動ログイン</h2>
+<div class="phase-goal"><strong>目的:</strong> 捨てアカウントでログインしたセッションを <code>C:\tiktok-profiles\main</code> に作る。<strong>1回だけ。</strong></div>
+
+<div class="tik">ここから TikTok にアクセスします。</div>
+
+<h3>まず「画面をどう見るか」を決める必要があります</h3>
+<p>モニタが無い機械なので、ログイン操作をするには画面が要ります。</p>
+<table>
+<tr><th>案</th><th>利点</th><th>欠点</th></tr>
+<tr><td><strong>モニタとキーボードを一時的に繋ぐ</strong></td><td>一番確実で速い。今日の1回で済む</td><td>物理的に用意する必要がある</td></tr>
+<tr><td><strong>VNC を入れる</strong>（UltraVNC / TightVNC）</td><td>切断してもセッションがロックしない。今後の保守にも効く</td><td>導入の手間。LANに口が増える</td></tr>
+<tr><td>私が CDP でスクリーンショットを撮り、クリック位置を指示してもらう</td><td>画面が用意できなくても進む。<strong>これから作る画面転送の手動版</strong>でもある</td><td>遅い。CAPTCHA が出ると厳しい</td></tr>
+</table>
+
+<div class="box danger">
+<p><strong>RDP は使わないでください。</strong> 接続して切断するとセッションがロックされ、描画が止まります。
+これは 2-9 の再現そのもので、無言で20件頭打ちになります。</p>
+</div>
+
+<div class="box danger">
+<p><strong>Mac のプロファイルをコピーして持ってきても駄目です。</strong>
+Chrome の Cookie は macOS では Keychain、Windows では DPAPI で暗号化されており、
+<strong>OS をまたぐと復号できません</strong>（引き継ぎ書 2-2 と同じ理屈）。必ず Windows 上で改めてログインしてください。</p>
+</div>
+
+<h3>ログインするときの注意</h3>
+<ul>
+<li><strong>この用途専用の捨てアカウントを使うこと。</strong> 本人アカウントは使わない（引き継ぎ書 第10章）。
+ログイン方式ではリスクが IP ban ではなく<strong>アカウント凍結</strong>に移ります</li>
+<li>ログインは Phase 5 で起動した Chrome（<code>C:\tiktok-profiles\main</code> のプロファイル）で行うこと。
+別のウィンドウで入っても、そのプロファイルには残りません</li>
+<li>ログイン後、そのウィンドウは<strong>閉じずに残しておいてください</strong>。Phase 7 でそのまま使います</li>
+</ul>
+
+<hr>
+
+<h2 id="p7">Phase 7 — 検証</h2>
+<div class="phase-goal"><strong>目的:</strong> ディスプレイレスの Windows 機で、コメント取得が成立するかを確かめる。</div>
+
+<div class="tik">ここから TikTok にリクエストを送ります。<strong>絶対に一気に本数を増やさないでください。</strong></div>
+
+<h3>7-1. まず動画0本（<code>--probe</code>）</h3>
+<p>楽曲ページだけを開きます。<strong>動画は1本も開きません。</strong></p>
+<pre><code>cd $env:USERPROFILE\tiktok-overnight
+$PY = "$env:USERPROFILE\TikTok-ugc-analyzer\.venv\Scripts\python.exe"
+&amp; $PY spatest.py --port 9222 `
+  --music-url "https://www.tiktok.com/music/%E3%83%97%E3%83%AD%E3%83%9D%E3%83%BC%E3%82%BA-7506899764786726928" `
+  --probe --log probe.log --summary probe_summary.json</code></pre>
+
+<h4>ここで必ず見るもの</h4>
+<table>
+<tr><th>ログの行</th><th>正常な値</th><th>違ったときの意味</th></tr>
+<tr><td><code>描画状態:</code></td><td><code>visibility=visible</code> かつ <code>フレーム=1以上</code></td><td><strong>★止まっている</strong> と出たら、そこで中断。Phase 5 の <code>/IT</code> かセッションのロックを疑う。この状態で先に進むと全部20件で終わる</td></tr>
+<tr><td><code>楽曲ページ読み込み完了</code></td><td>リンクが数十件</td><td>0件ならログインか表示制限を疑う</td></tr>
+<tr><td>チャレンジ画面</td><td>出ない</td><td><code>Please wait...</code> が25秒以上続いたらブロック。中断して1.5時間空ける</td></tr>
+</table>
+
+<div class="box warn">
+<p><code>描画状態:</code> が NG だった場合、<strong>ここで止めて報告してください。</strong>
+本数を増やしても直りませんし、増やした分だけ無駄に TikTok を叩くことになります。</p>
+</div>
+
+<h3>7-2. 動画1本だけ（<code>--limit 1</code>）</h3>
+<p>ペースは実証済みの設定より<strong>さらに保守的</strong>にしてあります。</p>
+<pre><code>&amp; $PY spatest.py --port 9222 `
+  --music-url "https://www.tiktok.com/music/%E3%83%97%E3%83%AD%E3%83%9D%E3%83%BC%E3%82%BA-7506899764786726928" `
+  --limit 1 --calls-per-min 1.8 --max-calls-per-min 2.0 `
+  --interval 15 --jitter 0.5 --collect-scrolls 10 `
+  --out win1.jsonl --log win1.log --summary win1_summary.json</code></pre>
+
+<h4>ここで必ず見るもの</h4>
+<table>
+<tr><th>見るもの</th><th>正常な値</th><th>違ったときの意味</th></tr>
+<tr><td><code>描画状態:</code></td><td><code>visibility=visible</code> / フレーム&gt;0</td><td>上と同じ</td></tr>
+<tr><td><code>SPA=</code></td><td><strong>はい</strong></td><td>「いいえ」ならフルロードしている。ブロックが3〜4本で来る（引き継ぎ書 2-5b）</td></tr>
+<tr><td>取得件数</td><td><strong>20件ちょうどで止まっていないこと</strong></td><td>ぴったり20件は 2-9 の典型的な症状。<code>総数</code> と <code>続き</code> も併せて見る</td></tr>
+<tr><td><code>総数</code> / <code>続き</code></td><td>記録されている</td><td>「20件で止まった」が完走か取りこぼしかは、これが無いと区別できない</td></tr>
+</table>
+
+<h4>混入の検算（必ずやること）</h4>
+<p>引き継ぎ書 2-10 のとおり、ページは<strong>次の動画のコメントを先読みします</strong>。
+<code>aweme_id</code> を照合しない限り、全部別動画のデータでも気づけません。</p>
+<pre><code>&amp; $PY -c "import json;rows=[json.loads(l) for l in open('win1.jsonl',encoding='utf-8')];bad=sum(1 for r in rows for c in (r.get('comments') or []) if str(c.get('aweme_id'))!=r['video_id']);print(f'{len(rows)}本 / 混入{bad}件')"</code></pre>
+<p><strong><code>混入0件</code> でなければ失敗です。</strong></p>
+
+<h3>7-3. ここから先</h3>
+<p>7-1 と 7-2 が両方通ったら、そこで<strong>一度止めて報告してください。</strong>
+本数を増やすかどうかは、結果を見てから決めます。</p>
+
+<hr>
+
+<h2 id="p8">Phase 8 — Mac から繋げるようにする</h2>
+<div class="phase-goal"><strong>目的:</strong> 以降の作業を私が Mac から流せるようにする。</div>
+<p>Phase 2 が終わっていれば、私に次の2つを伝えてください。</p>
+<ul>
+<li>Windows 機の <strong>IPアドレス</strong>（Phase 1 で確認した IPv4）</li>
+<li>Windows の <strong>ユーザー名</strong>（<code>whoami</code> の出力）</li>
+</ul>
+<p>これで <code>ssh</code> と <code>scp</code> が使えるようになり、<code>spatest.py</code> の更新もログの回収も私の側でできます。</p>
+<p class="small">なお、デバッグポート（9222）を LAN に公開する必要はありません。必要なら SSH のポート転送
+（<code>ssh -L 9222:127.0.0.1:9222 &lt;user&gt;@&lt;win-ip&gt;</code>）で安全にトンネルできます。
+<strong>デバッグポートをそのままネットワークに晒すのは、そのブラウザの無制限操作権を配ることと同じなので絶対にしないでください。</strong></p>
+
+<hr>
+
+<h2 id="ng">やってはいけないこと</h2>
+<table>
+<tr><th>やらないこと</th><th>理由</th></tr>
+<tr><td><strong>ヘッドレス検知の回避（<code>navigator.webdriver</code> の偽装、UAの書き換え）</strong></td><td>引き継ぎ書 第4章で「やらないと決めた」こと。今回の方針は「検知されないようにする」ではなく<strong>「検知されるような状態を作らない」</strong>＝本当に実ウィンドウを持たせる、です</td></tr>
+<tr><td>レート制限の閾値を探るテスト</td><td>同じく第4章。403 は TikTok 側の明示的な停止シグナル</td></tr>
+<tr><td>1つの Chrome（同じポート）に2つのスクリプトを同時接続する</td><td>互いに干渉して両方の結果が壊れます。実際に事故が起きています（引き継ぎ書 第9章）</td></tr>
+<tr><td><strong>Mac 側と同時に収集を走らせる</strong></td><td>同一ネットワーク＝<strong>グローバルIPが同じ</strong>なので、TikTok から見た1IPあたりの要求レートが単純に足し算になります</td></tr>
+<tr><td>プロファイルをリポジトリに入れる</td><td>セッションCookie は<strong>アカウントへのフルアクセス権</strong>そのもの。しかもこのリポジトリは<strong>公開</strong>です</td></tr>
+<tr><td>結果を見ずに本数を増やす</td><td>この案件の失敗はすべて無言です。判定表を通してから進めること</td></tr>
+</table>
+
+<hr>
+
+<h2 id="tshoot">困ったときの分岐表</h2>
+<table>
+<tr><th>症状</th><th>まず疑うもの</th><th>確かめ方</th></tr>
+<tr><td><strong>1動画ぴったり20件で終わる</strong></td><td>描画が止まっている（2-9）。<code>/IT</code> なしで起動した / セッションがロックされた / RDPで切断した</td><td><code>描画状態:</code> のログ。コメント欄の <code>scrollHeight</code> が20件で <code>≈2054</code> ならスケルトン、<code>≈2957</code> なら実体</td></tr>
+<tr><td>コメントAPIが <strong>HTTP 200 / 0バイト</strong></td><td>ログイン切れ、または<strong>コメントAPI独自の制限</strong>（2-8）。<strong>署名方式を疑うのは最後</strong></td><td>楽曲ページが正常に開けるか、Cookie（<code>sessionid</code>）が残っているかを先に見る</td></tr>
+<tr><td>動画ページで <code>HTTP 403</code></td><td>ブロック（2-6）</td><td>約1.5時間空ける。トップページは開けるので紛らわしい</td></tr>
+<tr><td><code>Please wait...</code> が出る</td><td>SPA初期化中なら正常</td><td><strong>25秒以上続いた場合のみ</strong>ブロックと判定する</td></tr>
+<tr><td>楽曲ページのリンクが0件</td><td>未ログイン、または表示制限</td><td>Phase 6 をやり直す</td></tr>
+<tr><td>全動画のデータが1本ずれる</td><td>先読みの混入（2-10）</td><td>7-2 の混入検算。<strong>エラーは出ません</strong></td></tr>
+<tr><td>Chrome は起動するのに 9222 が Listen しない</td><td>既に同じプロファイルで Chrome が起動している</td><td>Chrome を全部終了してから <code>schtasks /Run</code> をやり直す</td></tr>
+<tr><td>Mac から <code>ssh</code> が繋がらない</td><td>ファイアウォールの絞りすぎ / IP違い / sshd 停止</td><td><code>Get-Service sshd</code> と <code>Get-NetFirewallRule ... | Get-NetFirewallAddressFilter</code></td></tr>
+</table>
+
+<hr>
+<p class="small">この手順書は <code>docs/windows-setup.html</code> にあります。
+<code>docs/</code> は <code>.gitignore</code> に入っていないため、<strong>コミットすると公開リポジトリに載ります。</strong>
+置き場所を決めるまではコミットしないでください。</p>
+
+<script>
+(function () {
+  // http:// で開いたページは secure context ではないので navigator.clipboard が使えない。
+  // Chrome では undefined になり、例外で何も起きない（これが動かなかった原因）。
+  // 順に: Clipboard API → execCommand → それも駄目なら選択だけして Ctrl+C を促す。
+  function copyViaExecCommand(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+
+  function selectBlock(pre) {
+    var node = pre.querySelector('code') || pre;
+    var range = document.createRange();
+    range.selectNodeContents(node);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function flash(btn, msg, cls) {
+    btn.textContent = msg;
+    btn.className = 'copy ' + cls;
+    setTimeout(function () {
+      btn.textContent = 'コピー';
+      btn.className = 'copy';
+    }, 2200);
+  }
+
+  function attach(pre) {
+    var btn = document.createElement('button');
+    btn.className = 'copy';
+    btn.type = 'button';
+    btn.textContent = 'コピー';
+    btn.addEventListener('click', function () {
+      var node = pre.querySelector('code') || pre;
+      var text = node.innerText.replace(/\s+$/, '');
+
+      if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(
+          function () { flash(btn, 'コピーしました', 'done'); },
+          function () {
+            if (copyViaExecCommand(text)) { flash(btn, 'コピーしました', 'done'); }
+            else { selectBlock(pre); flash(btn, '選択しました → Ctrl+C', 'warnbtn'); }
+          }
+        );
+        return;
+      }
+
+      if (copyViaExecCommand(text)) { flash(btn, 'コピーしました', 'done'); }
+      else { selectBlock(pre); flash(btn, '選択しました → Ctrl+C', 'warnbtn'); }
+    });
+    pre.appendChild(btn);
+  }
+
+  document.querySelectorAll('pre').forEach(attach);
+})();
+</script>
+</div></body></html>

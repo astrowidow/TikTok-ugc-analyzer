@@ -59,6 +59,9 @@ def _client_ip(request: Request) -> str:
 
 @app.middleware("http")
 async def basic_auth_middleware(request: Request, call_next):
+    # AI の接続口（/mcp/<秘密>）は Basic 認証の外。守りは利用者ごとの秘密の URL（mcp_proto.py）
+    if request.url.path.startswith("/mcp/"):
+        return await call_next(request)
     if not _is_authorized(request.headers.get("Authorization", "")):
         header = request.headers.get("Authorization", "")
         # 認証情報を送ってきたのに弾かれた場合だけ記録する
@@ -71,6 +74,16 @@ async def basic_auth_middleware(request: Request, call_next):
             headers={"WWW-Authenticate": 'Basic realm="UGCAnalyzer"'},
         )
     return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# AI の接続口（MCP、試作）。読み込みに失敗しても Web サービスは今までどおり動かす
+# ---------------------------------------------------------------------------
+try:
+    import mcp_proto
+    mcp_proto.attach(app)
+except Exception as e:
+    logger.warning("AI の接続口（MCP）を載せられませんでした。Web サービスはそのまま動きます: %s", e)
 
 
 # ---------------------------------------------------------------------------

@@ -11,3 +11,5 @@ python-multipart>=0.0.32,<1.0
 selenium>=4.39,<5
 pandas>=2.3,<4
 requests>=2.32,<3
+# AI の接続口（mcp_proto.py）。2.x は 1.x と書き方が違う。無くても Web サービスは起動する（接続口だけ無効）
+mcp>=2.2,<3

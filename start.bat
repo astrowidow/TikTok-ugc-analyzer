@@ -2,6 +2,9 @@
 chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
+REM  日本語 Windows では pip が requirements.txt（日本語コメント入り UTF-8）を cp932 で読んで落ちる。
+REM  chcp ではPythonの既定エンコーディングは変わらないので、UTF-8 モードで統一する。
+set "PYTHONUTF8=1"
 
 REM ============================================================
 REM  設定

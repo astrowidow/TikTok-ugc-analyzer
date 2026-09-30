@@ -299,12 +299,44 @@ def _all_done(state: dict) -> bool:
     return all(t["status"] == "done" or t["kind"] == "done" for t in state["tasks"])
 
 
+def is_w1(a: Analysis) -> bool:
+    """試作（analysis.json に proto）以外は W1 の流れ（flow_w1.py）"""
+    return not a.meta.get("proto")
+
+
 def _load_state(a: Analysis) -> dict:
     st = _state(a)
     if st is None:
-        st = {"analysis_id": a.id, "created_at": _now(), "tasks": build_tasks(a)}
+        if is_w1(a):
+            import flow_w1
+            st = flow_w1.build_tasks(a)
+        else:
+            st = {"analysis_id": a.id, "created_at": _now(), "tasks": build_tasks(a)}
         _write_json(a.state_path, st)
     return st
+
+
+def _run_services(a: Analysis, st: dict):
+    """今の仕事がサービスの工程（代表の選定・組み立て・検算・ZIP）なら、ここで片付けて次へ進む"""
+    import flow_w1
+    t = _current(st)
+    while t is not None and t["kind"] == "service":
+        t0 = time.time()
+        try:
+            detail = flow_w1.run_service(a, t, st)
+        except RunnerError:
+            raise
+        except Exception as e:
+            a.log(event="service_error", task_id=t["task_id"], error=f"{type(e).__name__}: {e}")
+            raise RunnerError(f"サービス側の準備（{t['title']}）で問題が起きました。運営が確認します。"
+                              "少し待ってから「続けて」と言ってください") from e
+        t["status"] = "done"
+        t["done_at"] = _now()
+        t["detail"] = detail
+        a.log(event="service", task_id=t["task_id"], seconds=round(time.time() - t0, 1), detail=detail)
+        _write_json(a.state_path, st)
+        t = _current(st)
+    return t
 
 
 def _current(st: dict):
@@ -369,8 +401,11 @@ def _catalog_line(name: str, desc: str) -> str:
     return f"- `{name}` … {desc}"
 
 
-def _render(a: Analysis, t: dict) -> dict:
+def _render(a: Analysis, t: dict, st: dict | None = None) -> dict:
     """仕事1つを、指示書（Markdown）と読む資料の目録にする"""
+    if is_w1(a):
+        import flow_w1
+        return flow_w1.render(a, t, st or _load_state(a))
     typ = t["type"]
     s = a.meta.get("song", {})
     base = {"song": a.song_line, "song_short": f"{s.get('artist', '')}「{s.get('title', '')}」",
@@ -475,7 +510,7 @@ def _done_summary(a: Analysis) -> str:
 # ---------------------------------------------------------------------------
 # 検査（だめなら理由の一覧を返して差し戻す）
 # ---------------------------------------------------------------------------
-def check_taxonomy(tax) -> list:
+def check_taxonomy(tax, need_region: bool = True) -> list:
     errs = []
     if not isinstance(tax, dict):
         return ["分類軸は JSON のオブジェクト（{...}）で返してください"]
@@ -498,7 +533,7 @@ def check_taxonomy(tax) -> list:
     comm = tax.get("community")
     if isinstance(comm, dict) and len([k for k in comm if not k.startswith("_")]) > 20:
         errs.append("`community` が多すぎます（8〜14 程度）")
-    for axis in ("region", "tier"):
+    for axis in (("region", "tier") if need_region else ("tier",)):
         v = tax.get(axis)
         if not isinstance(v, list) or not all(isinstance(x, str) for x in v) or "unknown" not in v:
             errs.append(f"`{axis}` は文字列の配列で、`unknown` を含めてください")
@@ -512,12 +547,14 @@ def _axis_keys(tax: dict, axis: str) -> set:
     return set(v)
 
 
-def check_labels(tsv: str, seqs: list, tax: dict) -> tuple:
+def check_labels(tsv: str, seqs: list, tax: dict, with_region: bool = True) -> tuple:
     """TSV を検査して (理由の一覧, 行の一覧)"""
     errs = []
     rows_out = []
     lines = [ln for ln in _strip_fence(tsv).splitlines() if ln.strip()]
     want_head = ["seq", "community", "format", "motive", "region", "tier", "conf", "reason"]
+    if not with_region:   # W1: 地域はサービスが投稿地域のデータで付ける（F4）
+        want_head.remove("region")
     if not lines:
         return ["TSV が空です"], []
     head = [h.strip() for h in lines[0].split("\t")]
@@ -528,8 +565,8 @@ def check_labels(tsv: str, seqs: list, tax: dict) -> tuple:
     seen = {}
     for i, ln in enumerate(lines[1:], 2):
         cols = ln.split("\t")
-        if len(cols) != 8:
-            errs.append(f"{i}行目: 列が {len(cols)} 個です（8列。reason の中にタブを入れない）")
+        if len(cols) != len(want_head):
+            errs.append(f"{i}行目: 列が {len(cols)} 個です（{len(want_head)}列。reason の中にタブを入れない）")
             continue
         row = dict(zip(want_head, [c.strip() for c in cols]))
         try:
@@ -543,7 +580,7 @@ def check_labels(tsv: str, seqs: list, tax: dict) -> tuple:
         for ax, keys in allowed.items():
             if row[ax] not in keys:
                 errs.append(f"seq {seq}: {ax}=`{row[ax]}` は確定した分類軸にありません")
-        if not (row["region"] == "unknown" or re.match(r"^[A-Z]{2}$", row["region"])):
+        if with_region and not (row["region"] == "unknown" or re.match(r"^[A-Z]{2}$", row["region"])):
             errs.append(f"seq {seq}: region は2文字の地域コードか unknown にしてください: {row['region']}")
         if row["conf"] not in ("H", "M", "L"):
             errs.append(f"seq {seq}: conf は H / M / L のどれか: {row['conf']}")
@@ -657,10 +694,6 @@ def status(user_id: str, ref: str | None = None) -> dict:
                 items.append({"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": av["state"],
                               "progress": "取得の段", "message": av["message"], "eta_seconds": av["eta_seconds"]})
                 continue
-            if a.meta.get("acquisition") and not a.meta.get("proto"):
-                items.append({"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": "acquired",
-                              "progress": "取得済み", "message": "取得は終わりました。AI の段は準備中です（運営が用意します）。"})
-                continue
             st = _load_state(a)
             cur = _current(st)
             if cur is None or cur["kind"] == "done":
@@ -734,13 +767,11 @@ def next_task(user_id: str, ref: str | None = None) -> dict:
         av = _acq_view(a)
         if av:
             return _wait_task(a, av["message"] + "\n取得が終わったら、利用者が「" + a.title + "の分析を続けて」と言えば再開する。")
-        if a.meta.get("acquisition") and not a.meta.get("proto"):
-            return _wait_task(a, "取得は終わりました。AI の段（分類からレポートまで）は準備中です。運営から連絡します。")
         st = _load_state(a)
-        t = _current(st)
+        t = _run_services(a, st) if is_w1(a) else _current(st)
         if t is None:
             t = st["tasks"][-1]
-        rendered = _render(a, t)
+        rendered = _render(a, t, st)
         now = _now()
         if t["kind"] != "done":
             if t["first_issued_at"] is None:
@@ -755,12 +786,13 @@ def next_task(user_id: str, ref: str | None = None) -> dict:
                 t["status"] = "done"
                 t["done_at"] = now
                 t["first_issued_at"] = now
-                _finish(a)
+                if not is_w1(a):
+                    _finish(a)
         _write_json(a.state_path, st)
 
         body = rendered["text"]
         header = [
-            f"# 仕事 {t['n']}/{len(st['tasks'])}: {t['title']}",
+            f"# 仕事 {st['tasks'].index(t) + 1}/{len(st['tasks'])}: {t['title']}",
             "",
             f"- task_id: `{t['task_id']}`",
             f"- kind: `{t['kind']}`",
@@ -806,7 +838,11 @@ def submit(user_id: str, task_id: str, output) -> dict:
         n_sub = t["rejects"] + 1
         _write_text(a.dir / "state" / "submissions" / f"{t['n']:02d}-{t['type']}_{n_sub}.txt", raw)
 
-        errs = _accept(a, t, raw)
+        if is_w1(a):
+            import flow_w1
+            errs = flow_w1.accept(a, t, raw, st)
+        else:
+            errs = _accept(a, t, raw)
         now = _now()
         if errs:
             t["rejects"] += 1
@@ -953,8 +989,39 @@ def community_agreement(labs: dict, ref_path: Path) -> dict:
 # ---------------------------------------------------------------------------
 # read（仕事に要る資料）
 # ---------------------------------------------------------------------------
+def _paginate(units: list) -> list:
+    """単位（動画・見出し）の区切りでページにする。1つの単位がページより大きければ行で割る"""
+    out = []
+    for u in units:
+        if len(u.encode("utf-8")) <= PAGE_BYTES:
+            out.append(u)
+            continue
+        cur = ""
+        for line in u.splitlines(keepends=True):
+            if cur and len((cur + line).encode("utf-8")) > PAGE_BYTES:
+                out.append(cur)
+                cur = ""
+            cur += line
+        if cur:
+            out.append(cur)
+    pages, cur = [], ""
+    for u in out:
+        if cur and len((cur + u).encode("utf-8")) > PAGE_BYTES:
+            pages.append(cur)
+            cur = ""
+        cur += u
+    if cur:
+        pages.append(cur)
+    return pages
+
+
 def _pages_of(a: Analysis, name: str) -> list:
     """長い Markdown を、動画の区切り（### seq）でページに分ける"""
+    if is_w1(a):
+        import flow_w1
+        units = flow_w1.units_of(a, name, None)
+        if units is not None:
+            return _paginate(units)
     if name in ("taxonomy_sample", "label_set"):
         head, body = a.entries(name)
         units = [head] + [a.thumb_ref(body[s]) for s in sorted(body)]
@@ -973,15 +1040,7 @@ def _pages_of(a: Analysis, name: str) -> list:
         units = [json.dumps(tax, ensure_ascii=False, indent=1)]
     else:
         raise RunnerError(f"知らない資料の名前です: {name}")
-    pages, cur = [], ""
-    for u in units:
-        if cur and len((cur + u).encode("utf-8")) > PAGE_BYTES:
-            pages.append(cur)
-            cur = ""
-        cur += u
-    if cur:
-        pages.append(cur)
-    return pages
+    return _paginate(units)
 
 
 def read(user_id: str, ref: str | None, name: str, page: int = 1) -> dict:
@@ -989,6 +1048,14 @@ def read(user_id: str, ref: str | None, name: str, page: int = 1) -> dict:
     with _lock:
         a = resolve(user_id, ref)
         name = (name or "").strip()
+        m = re.match(r"^xsheet[:_]?(\d+)(\.jpg)?$", name)
+        if m:   # W1: ラベル対象のうち取得の段のシートに無い動画のサムネ一覧
+            p = a.derived("ai", "sheets", f"xsheet_{int(m.group(1)):02d}.jpg")
+            if not p.exists():
+                raise RunnerError(f"{name} はありません")
+            data = p.read_bytes()
+            a.log(event="read", name=name, bytes=len(data))
+            return {"image": data, "format": "jpeg", "text": f"{name}（サムネイルの一覧。各枠の上に seq）"}
         m = re.match(r"^sheet[:_]?(\d+)(\.jpg)?$", name)
         if m:
             fname = f"sheet_{int(m.group(1)):02d}.jpg"
@@ -1006,6 +1073,56 @@ def read(user_id: str, ref: str | None, name: str, page: int = 1) -> dict:
         a.log(event="read", name=name, page=page, chars=len(text))
         more = f"（続きは page={page + 1}）" if page < len(pages) else "（これが最後のページ）"
         return {"text": f"<!-- {name} page {page}/{len(pages)} {more} -->\n{text}", "page": page, "pages": len(pages)}
+
+
+# ---------------------------------------------------------------------------
+# 完成後の直し（H5）と、指示の設定
+# ---------------------------------------------------------------------------
+def revise(user_id: str, ref: str | None, instruction: str) -> dict:
+    """「このレポートだけ」の直し。該当の章を書き直す仕事を足し、AI はそのまま next_task で片付ける"""
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise RunnerError("直したい内容を教えてください")
+    if len(instruction) > 2000:
+        raise RunnerError("直しの指示は2000字までにしてください")
+    with _lock:
+        a = resolve(user_id, ref)
+        if not is_w1(a):
+            raise RunnerError("この分析（試作）は直しに対応していません")
+        st = _load_state(a)
+        if _current(st) is not None:
+            raise RunnerError("レポートがまだできていません。完成してから直しを頼んでください")
+        import flow_w1
+        new = [flow_w1._task(st, "revise", "ai", "レポートを直す（利用者の指示）", {"instruction": instruction}),
+               flow_w1._task(st, "finish", "ai", "note 用に仕上げ直す", {"chapter": None, "i": 1, "n": 1}),
+               flow_w1._task(st, "assemble", "service", "レポートの組み立て（サービス）"),
+               flow_w1._task(st, "verify", "service", "検算（サービス）"),
+               flow_w1._task(st, "done", "done", "完了（直し）")]
+        st["tasks"] += new
+        _write_json(a.state_path, st)
+        a.log(event="revise_requested", chars=len(instruction))
+        return {"text": f"「{a.title}」の直しを受け付けました。続けて next_task を呼んで、直しの仕事を片付けてください。",
+                "analysis_id": a.id}
+
+
+def settings(user_id: str, action: str = "get", item: str | None = None, value: str | None = None,
+             use_style_guide: bool | None = None) -> dict:
+    """「今後ずっと」の指示の設定（利用者ごと）。見る・変える・デフォルトに戻す"""
+    import user_settings as us
+    try:
+        if action == "set":
+            if not item:
+                raise RunnerError("変える項目（style / focus / community_policy / comment_lens）を指定してください")
+            us.set_item(user_id, item, value, use_style_guide)
+            head = f"{us.ITEMS[item]}を変えました。次の分析（とこれから渡す仕事）から使います。"
+        elif action == "reset":
+            us.reset(user_id, item)
+            head = (f"{us.ITEMS[item]}を" if item else "設定を全部") + "デフォルトに戻しました。"
+        else:
+            head = "今の設定です。"
+    except us.SettingsError as e:
+        raise RunnerError(str(e)) from e
+    return {"text": head + "\n" + us.describe(user_id), "current": us.get(user_id)}
 
 
 # ---------------------------------------------------------------------------

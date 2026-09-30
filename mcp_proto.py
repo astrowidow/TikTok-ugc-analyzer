@@ -38,6 +38,8 @@ INSTRUCTIONS = (
     "あなたは「次の仕事を聞く → 指示書どおりにやる → 返す」を繰り返す係です。\n"
     + runner.REPEAT_RULE
     + "\n分析 ID が分からなければ、曲名をそのまま渡すか、status で一覧を見る。"
+    + "\nレポートの完成後に利用者が直しを頼んだら revise（このレポートだけ）。今後ずっと続く指示の変更は settings"
+    "（利用者が頼んだときだけ使う）。"
 )
 
 
@@ -167,10 +169,39 @@ def _build_server():
         return json.dumps(head, ensure_ascii=False) + "\n" + r["text"]
 
     @mcp.tool(
+        title="レポートを直す",
+        description="完成したレポートを、利用者の指示どおりに直す（このレポートだけ）。利用者がレポートを読んで"
+                    "「3章に音楽面の話を足して」のように頼んだときに使う。instruction は利用者の言葉そのまま。"
+                    "受け付けたら next_task で直しの仕事を片付ける。何度でも使える。"
+                    "「今後ずっと」の指示（文体など）は revise ではなく settings。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                    open_world_hint=False),
+    )
+    async def revise(ctx: Context, instruction: str, analysis_id: str | None = None) -> str:
+        return _call(runner.revise, _user(ctx), analysis_id, instruction)["text"]
+
+    @mcp.tool(
+        title="指示の設定",
+        description="**利用者が設定の確認や変更を頼んだときだけ使う**（自分の判断では使わない）。"
+                    "次の分析以降もずっと使う指示を、利用者ごとに見る・変える・デフォルトに戻す。"
+                    "action: get（見る）/ set（変える）/ reset（デフォルトに戻す、item を省くと全部）。"
+                    "item: style（文体。value は追記したい指定、use_style_guide=false で著者の文体ガイドを使わない）／"
+                    "focus（レポートの重点）／community_policy（界隈の分け方の方針）／comment_lens（コメント分析の観点）。"
+                    "各400字まで。出力の形・検算・仕事の刻み方は変えられない。"
+                    "「このレポートだけ」の直しは settings ではなく revise。",
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
+                                    open_world_hint=False),
+    )
+    async def settings(ctx: Context, action: str = "get", item: str | None = None, value: str | None = None,
+                       use_style_guide: bool | None = None) -> str:
+        return _call(runner.settings, _user(ctx), action, item, value, use_style_guide)["text"]
+
+    @mcp.tool(
         title="資料を読む",
         description="仕事に要る資料を読む。name は指示書の「読む資料」にある名前"
-                    "（例: taxonomy_sample、sheet:03、comments:22、glossary、taxonomy）。"
-                    "長い資料は page で分かれている（1から）。sheet:NN はサムネイルの一覧画像を返す。" + rule,
+                    "（例: taxonomy_sample、sheet:03、xsheet:00、comments:22、kb:glossary、kb:style、kb:cards、"
+                    "note:<過去レポート>、past:1、chapter:branch、synthesis、pathway、taxonomy）。"
+                    "長い資料は page で分かれている（1から）。sheet:NN・xsheet:NN はサムネイルの一覧画像を返す。" + rule,
         annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
     )
     async def read(ctx: Context, name: str, analysis_id: str | None = None, page: int = 1):

@@ -1270,7 +1270,60 @@ def service_export(a) -> dict:
         return {"error": "ZIP を作れなかった（export_error.txt）"}
     shutil.move(str(zips[-1]), str(a.outputs("data.zip")))
     shutil.rmtree(tmp, ignore_errors=True)
-    return {"zip": "data.zip", "check_ok": r.returncode == 0}
+    n_lab = add_labels_to_zip(a, a.outputs("data.zip"))
+    return {"zip": "data.zip", "check_ok": r.returncode == 0, "labels_rows": n_lab}
+
+
+LABELS_README = """
+labels.csv    1行 = 1動画（全動画。AI がラベルを付けていない動画はラベルの列が空）。分析で付けた区分:
+                seq / video_id / URL / 投稿日 / 投稿者 / 再生   動画の特定（video_id で videos.csv と結合する）
+                地域 / 言語            投稿地域と本文の言語（TikTok のデータからサービスが付けた。AI は付けていない）
+                界隈 / 界隈の説明      誰の投稿か（確定した分類軸の key と、定義の最初の一文）
+                型 / 採用文脈 / 規模   何をした投稿か / なぜこの曲か / 公式・大手・一般
+                確からしさ / 根拠      H = 複数の手掛かりが一致、M = 1つ、L = 推測 / AI が書いた根拠
+                段階                   拡散の段階（レポートの段階の名前）
+"""
+
+
+def add_labels_to_zip(a, zp: Path) -> int:
+    """Excel 用 ZIP にラベルの表を足す（F4: 地域はサービスが付けた値。成果物の表に地域を入れる）。足した行数を返す"""
+    import io
+    import zipfile
+    recs = records(a)
+    labs = labels(a)
+    if not recs or not labs:
+        return 0
+    vs = videos(a)
+    tax = pr._taxonomy(a) or {}
+    names = {k: pr._first_sentence(v).rstrip("。") for k, v in (tax.get("community") or {}).items()}
+    ph = phases(a)
+    ph_name = {p["id"]: p.get("name", "") for p in ph}
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["seq", "video_id", "URL", "投稿日", "投稿者", "再生", "地域", "言語", "界隈", "界隈の説明",
+                "型", "採用文脈", "規模", "確からしさ", "根拠", "段階"])
+    for s in sorted(recs):
+        r = recs[s]
+        lab = labs.get(s) or {}
+        url = url_of(vs.get(s, {}))
+        m = re.search(r"/(?:video|photo)/(\d+)", url or "")
+        com = lab.get("community") or ""
+        w.writerow([s, m.group(1) if m else "", url, r.get("date"), (r.get("author") or {}).get("id"), r.get("plays"),
+                    lab.get("region") or r.get("location_created") or "", r.get("text_language") or "",
+                    com, names.get(com, "") if com else "", lab.get("format", ""), lab.get("motive", ""),
+                    lab.get("tier", ""), lab.get("conf", ""), lab.get("reason", ""),
+                    ph_name.get(phase_of(r["date"], ph), "") if ph and lab else ""])
+    data = ("﻿" + buf.getvalue()).encode("utf-8")
+    tmp = zp.with_suffix(".tmp.zip")
+    with zipfile.ZipFile(zp) as zi, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zo:
+        for item in zi.infolist():
+            body = zi.read(item.filename)
+            if item.filename.endswith("README.txt"):
+                body = body + LABELS_README.encode("utf-8")
+            zo.writestr(item, body)
+        zo.writestr("labels.csv", data)
+    tmp.replace(zp)
+    return len(recs)
 
 
 # ---------------------------------------------------------------------------

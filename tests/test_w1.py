@@ -67,6 +67,46 @@ class TestFlowW1(unittest.TestCase):
         self.assertEqual(self.f.fmt_plays(763460000), "7.6億")
         self.assertEqual(self.f.fmt_plays(9345), "9,345")
 
+    def test_labels_in_zip(self):
+        """F4: Excel 用 ZIP にラベルの表（地域つき）が入る。地域はサービスが付けた値"""
+        import csv
+        import io
+        import zipfile
+        f = self.f
+        saved = (f.records, f.labels, f.videos, f.phases, self.pr._taxonomy)
+        f.records = lambda a: {0: {"date": "2025-07-20", "plays": 10, "author": {"id": "u0"}, "location_created": "MM",
+                                   "text_language": "ja"},
+                               1: {"date": "2025-10-27", "plays": 20, "author": {"id": "u1"}, "location_created": "JP",
+                                   "text_language": "ja"}}
+        f.labels = lambda a: {1: {"community": "jp_student", "format": "hand_dance", "motive": "trend", "tier": "general",
+                                  "conf": "H", "reason": "#08", "region": "JP"}}
+        f.videos = lambda a: {0: {"url": "https://www.tiktok.com/@u0/video/111"}, 1: {"url": "https://www.tiktok.com/@u1/video/222"}}
+        f.phases = lambda a: [{"id": "P1", "name": "イノベーター", "start": "2025-07-01", "end": "2025-12-31"}]
+        self.pr._taxonomy = lambda a, confirmed=True: {"community": {"jp_student": "日本の中高生。制服など"}}
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                zp = Path(td) / "data.zip"
+                with zipfile.ZipFile(zp, "w") as z:
+                    z.writestr("README.txt", "readme\n")
+                    z.writestr("videos.csv", "x\n")
+                self.assertEqual(f.add_labels_to_zip(None, zp), 2)
+                with zipfile.ZipFile(zp) as z:
+                    names = z.namelist()
+                    raw = z.read("labels.csv")
+                    readme = z.read("README.txt").decode("utf-8")
+                self.assertIn("videos.csv", names)
+                self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))                     # Excel で文字化けしない
+                rows = list(csv.reader(io.StringIO(raw.decode("utf-8-sig"))))
+                self.assertIn("地域", rows[0])
+                by = {r[0]: dict(zip(rows[0], r)) for r in rows[1:]}
+                self.assertEqual(by["1"]["地域"], "JP")
+                self.assertEqual(by["1"]["界隈の説明"], "日本の中高生")
+                self.assertEqual(by["0"]["地域"], "MM")                              # ラベルの無い動画も地域は入る
+                self.assertEqual(by["0"]["界隈"], "")
+                self.assertIn("labels.csv", readme)
+        finally:
+            f.records, f.labels, f.videos, f.phases, self.pr._taxonomy = saved
+
     def test_cited(self):
         seqs, cids = self.f.cited("seq 57（@a）と seq 3、『x』（1 いいね、cid 7551355023343521040）")
         self.assertEqual(seqs, {57, 3})

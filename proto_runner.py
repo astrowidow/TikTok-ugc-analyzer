@@ -746,6 +746,10 @@ def status(user_id: str, ref: str | None = None) -> dict:
             cur = _current(st)
             if cur is None or cur["kind"] == "done":
                 state_label, msg = "done", "完了しています。"
+                if LOCAL is not None and is_w1(a):   # 取得アプリの形: 成果物のフォルダも出す
+                    import flow_w1
+                    if flow_w1.REPORTS_DIR and a.outputs("REPORT.md").exists():
+                        msg += "成果物: " + "".join(x.strip() for x in flow_w1.folder_lines(a)).replace("- フォルダ: ", "", 1)
                 for t in st["tasks"]:
                     if t["kind"] == "done" and t["status"] != "done":
                         msg = "AI の仕事は全部済みました。next_task で完了の知らせを受け取れます。"

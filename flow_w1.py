@@ -460,6 +460,16 @@ def report_folder(a) -> Path:
     return Path(REPORTS_DIR) / (f"{title}（{day}）" if day else title)
 
 
+def folder_lines(a) -> list:
+    """成果物のフォルダ（取得アプリの形だけ）: フォルダへのリンクと、リンクが開かないときの場所の文字"""
+    from urllib.parse import quote
+    d = report_folder(a)
+    d.mkdir(parents=True, exist_ok=True)
+    shown = str(d).replace(str(Path.home()), "~", 1)
+    return [f"- フォルダ: [{d.name}](file://{quote(str(d))}/)",
+            f"  （場所: `{shown}`。取得アプリのメニュー「レポートのフォルダを開く」でも開けます）"]
+
+
 def dl_url(a, name: str) -> str:
     if REPORTS_DIR:
         from urllib.parse import quote
@@ -781,10 +791,10 @@ def finish_materials(a, t, st) -> dict:
 def done_materials(a) -> dict:
     ver = pr._read_json(a.outputs("verify.json"), {}) or {}
     links = []
-    for name, label in (("REPORT.md", "分析レポート（Markdown）"), ("NOTE_BODY.md", "note 用の原稿"),
-                        ("EDITOR_NOTES.md", "書き足すところのメモ"), ("data.zip", "Excel 用のデータ（ZIP）")):
+    for name, label in (("REPORT.md", "分析レポート"), ("NOTE_BODY.md", "note 用の原稿"),
+                        ("EDITOR_NOTES.md", "書き足すところのメモ"), ("data.zip", "Excel 用のデータ")):
         if (a.outputs(name)).exists():
-            links.append(f"  - [{label}]({dl_url(a, name)})")
+            links.append(f"- [{label}（{name}）]({dl_url(a, name)})")
     ph = phases(a)
     summary = "\n".join(f"- {p['name']}（{p['start']}〜{p['end']}）: {p.get('summary', '')}" for p in ph)
     errs = ver.get("errors") or []
@@ -792,10 +802,11 @@ def done_materials(a) -> dict:
     note = ""
     if errs or warns:
         note = f"- 検算: 確かめきれなかった点が {len(errs) + len(warns)} 件ある（運営が確認する）。利用者には「数字の一部を運営が確認中」と一言だけ"
-    if REPORTS_DIR and links:
-        links.append(f"  - 置き場所: この Mac の「{report_folder(a).name}」フォルダ"
-                     "（取得アプリのメニュー「レポートのフォルダを開く」で開ける）。リンクが開かないときはこちらから")
-    return {"links": "\n".join(links) or "  - （成果物のリンクを作れなかった）", "summary": summary, "verify_note": note}
+    if REPORTS_DIR and links:   # 先頭にフォルダ（2026-10-03 ユーザー「最終の返答に、成果物フォルダや成果物へのリンクを含んで欲しい」）
+        links = folder_lines(a) + links
+    head = "**成果物**（この Mac に保存しました）" if REPORTS_DIR else "**成果物**"
+    return {"links": head + "\n\n" + ("\n".join(links) or "- （成果物のリンクを作れなかった）"),
+            "summary": summary, "verify_note": note}
 
 
 # ---------------------------------------------------------------------------

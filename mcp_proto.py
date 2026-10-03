@@ -134,7 +134,9 @@ def _build_server(user_of=None, local: bool = False):
         title="分析を始める",
         description=("TikTok の楽曲の UGC 分析を始める（取得を待ち行列に入れる）。利用者が「〇〇を分析して」と頼んだときに使う。"
                      "song は曲名、artist はアーティスト名。music_url は TikTok の楽曲ページ（https://www.tiktok.com/music/…）。"
-                     + ("music_url（楽曲ページ）は、先にウェブ検索で探して付ける。楽曲ページが見つからなければ、その曲を使った TikTok の動画の URL を"
+                     + ("music_url（楽曲ページ）は、先にウェブ検索で探して付ける。同じ曲の楽曲ページが複数見つかったら（配信版・先行版など）、"
+                        "全部を candidate_urls に入れる（サービスが UGC 数を比べて一番使われているページを選ぶ）。"
+                        "楽曲ページが見つからなければ、その曲を使った TikTok の動画の URL を"
                         "video_url に付けてもよい（サービスが動画から楽曲ページを読み取る）。どちらも無しで呼ぶと、探し方が返ってくるだけで取得は始まらない。"
                         "利用者に URL を頼むのは、何通りも検索して見つからないときの最後の手段。利用者に確認は求めない。"
                         "取得を始めると、どの楽曲ページで進めるか（題・作者・UGC 数・URL）が返ってくるので、それを利用者に伝える。"
@@ -145,8 +147,9 @@ def _build_server(user_of=None, local: bool = False):
                                     open_world_hint=True),
     )
     async def start_analysis(ctx: Context, song: str, artist: str = "", music_url: str | None = None,
-                             video_url: str | None = None) -> str:
-        return _call(runner.start_analysis, _user(ctx), song, artist, music_url or "", video_url or "")["text"]
+                             video_url: str | None = None, candidate_urls: list[str] | None = None) -> str:
+        return _call(runner.start_analysis, _user(ctx), song, artist, music_url or "", video_url or "",
+                     candidate_urls or [])["text"]
 
     @mcp.tool(
         title="分析の状態",

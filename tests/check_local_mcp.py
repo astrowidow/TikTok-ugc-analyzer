@@ -63,6 +63,7 @@ async def main():
 
     home = Path(tempfile.mkdtemp(prefix="ugc-mcp-check-"))
     env = {"UGC_COLLECTOR_HOME": str(home), "UGC_COLLECTOR_NO_APP_LAUNCH": "1", "UGC_COLLECTOR_NO_INSPECT": "1",
+           "UGC_TEST_COUNTS": json.dumps({"7000000000000000011": 1632, "7000000000000000012": 31200, "7000000000000000013": 17700}),
            "PATH": os.environ.get("PATH", ""),
            "HOME": os.environ.get("HOME", "")}
     if args.app:
@@ -112,6 +113,15 @@ async def main():
             ok("動画" in tv and "音源から楽曲ページを見つけた" in tv and mv, "動画の URL から楽曲ページを見つけて始める")
             if mv:
                 shutil.rmtree(home / "analyses" / mv.group(1), ignore_errors=True)
+            cu = [f"https://www.tiktok.com/music/x-70000000000000000{n}" for n in (11, 12, 13)]
+            r = await c.call_tool("start_analysis", {"song": "くらべる", "artist": "だれか", "candidate_urls": cu})
+            tc = text_of(r)
+            mc = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", tc)
+            chosen = json.loads((home / "analyses" / mc.group(1) / "analysis.json").read_text(encoding="utf-8"))["music_url"] if mc else ""
+            ok(chosen == cu[1] and "3 本を比べて" in tc and tc.count("ほかの候補") == 2,
+               f"楽曲ページの候補を比べて、一番使われているもの（UGC 31200）で進める（選んだ: {chosen[-6:]}）")
+            if mc:
+                shutil.rmtree(home / "analyses" / mc.group(1), ignore_errors=True)
             r = await c.call_tool("start_analysis", {"song": "", "music_url": url})
             t = text_of(r)
             ok("次の楽曲ページで進めます" in t and url in t, "URL があればそのまま始め、どの楽曲ページで進めるかを返す")

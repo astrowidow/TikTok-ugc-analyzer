@@ -805,15 +805,38 @@ def _music_search_hint(song: str, artist: str, note: str = "") -> dict:
         "まだ取得を始めていない。TikTok の楽曲ページの URL を、**ウェブ検索で見つけて渡す**（利用者に URL を頼むのは最後の手段）。\n\n"
         "1. 次の検索を順に試す（見つかるまで。少なくとも3つは試す）:\n" +
         "\n".join(f"   - {q.strip()}" for q in queries) +
-        "\n2. `https://www.tiktok.com/music/…` で始まる URL を探す。題に曲名が入り、作者がアーティスト名のもの"
-        "（公式の音源）を選ぶ。「オリジナル楽曲 - 〇〇」のような個人の音源は避ける。見つけたら music_url に入れて start_analysis を呼び直す\n"
+        "\n2. `https://www.tiktok.com/music/…` で始まる URL を探す。題に曲名が入り、作者がアーティスト名のもの（公式の音源）。"
+        "「オリジナル楽曲 - 〇〇」のような個人の音源は避ける。**同じ曲名・アーティストの楽曲ページは、配信版・先行版などで複数あることが多い。"
+        "最初の1つで止めず、検索で出てきた楽曲ページを全部集めて candidate_urls に入れて** start_analysis を呼び直す"
+        "（サービスが開いて UGC 数を比べ、一番使われているページで進める）\n"
         "3. 楽曲ページが見つからなくても、**その曲を使った TikTok の動画**（`https://www.tiktok.com/@…/video/…`。アーティストや公式アカウントの投稿がよい）"
         "が見つかれば、それを video_url に入れて呼び直す。サービスが動画のページから楽曲ページを読み取る\n"
         "4. 1〜3 を全部試しても見つからないときだけ、利用者に「TikTok アプリでその曲の音源のページを開き、共有 → リンクをコピー で URL を送ってください」と頼む")
     return {"text": text, "analysis_id": None, "created": False, "needs": "music_url"}
 
 
-def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "") -> dict:
+MAX_CANDIDATES = 6
+
+
+def _pick_music_page(song: str, artist: str, urls: list) -> tuple:
+    """同じ曲の楽曲ページの候補を開いて比べ、題が曲名に合い・作者がアーティスト名に合うもののうち、UGC 数が一番多いものを選ぶ。
+    （2026-10-04: きゃわぽっぴんどぅーは同じ題・作者のページが3つあり、UGC 1,632 / 17.7K / 31.2K。本命は 31.2K）"""
+    infos = LOCAL.inspect_many(urls) or []
+    rows = list(zip(urls, infos))
+
+    def fits(info):
+        t, c = _norm(info.get("title")), _norm(info.get("creator"))
+        ok_t = not _norm(song) or not t or _norm(song) in t
+        ok_c = not _norm(artist) or not c or _norm(artist) in c or c in _norm(artist)
+        return ok_t and ok_c
+    good = [r for r in rows if fits(r[1])] or rows
+    best = max(good, key=lambda r: r[1].get("video_count") or 0)
+    others = [r for r in rows if r[0] != best[0]]
+    return best[0], best[1], others
+
+
+def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
+                   candidate_urls: list | None = None) -> dict:
     """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係か、利用者の Mac の取得アプリが走らせる）。
     取得アプリの形では、どの楽曲ページで進めるか（題・作者・UGC 数・URL）を返事に出す（2026-10-04 ユーザー
     「止めるのではなく、このページで進めるからね、ってのがプロンプトに出るくらいがいい」）"""
@@ -825,6 +848,18 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
     if not song:
         song = _title_from_music_url(music_url)
     found_via = ""
+    others = []
+    page = None
+    cands = []
+    for u in [music_url] + list(candidate_urls or []):
+        u = (u or "").strip().split("?")[0]
+        if u and MUSIC_URL_RE.match(u) and u.rsplit("-", 1)[-1] not in {c.rsplit("-", 1)[-1] for c in cands}:
+            cands.append(u)
+    if LOCAL is not None and len(cands) >= 2:   # 候補を比べて、一番使われているページで進める
+        music_url, page, others = _pick_music_page(song, artist, cands[:MAX_CANDIDATES])
+        found_via = f"（同じ曲の楽曲ページ {min(len(cands), MAX_CANDIDATES)} 本を比べて、一番使われているものを選んだ）"
+    elif cands and not music_url:
+        music_url = cands[0]
     video_url = (video_url or "").strip().split("?")[0]
     if LOCAL is not None and not music_url and video_url:   # 曲を使った動画から楽曲ページを読む
         if not VIDEO_URL_RE.match(video_url):
@@ -854,13 +889,13 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
                                   + ", ".join(a.title for a in active))
             settings = LOCAL.acquisition_settings() if LOCAL is not None else None
             aid = launch.new_analysis(user_id, song, artist, music_url, settings)
-    page = None
-    if LOCAL is not None and created:   # どの楽曲ページで進めるかを見せるため、題・作者・UGC 数を読む（読めなくても進める）
+    if LOCAL is not None and created and page is None:   # どの楽曲ページで進めるかを見せるため、題・作者・UGC 数を読む（読めなくても進める）
         try:
             page = LOCAL.inspect_music(music_url) or {}
         except Exception as e:
             page = {"error": type(e).__name__}
-        if page.get("video_count"):
+    if LOCAL is not None and created and page:
+        if page.get("video_count"):   # noqa: SIM102
             from acquire import pipeline
             pipeline.write_json(ANALYSES_DIR / aid / "raw" / "music_page.json",
                                 {**page, "at": _now(), "url": music_url, "how": "受け付けのときに楽曲ページを開いて読んだ"})
@@ -877,8 +912,10 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
         warn = ""
         if artist and pg.get("creator") and _norm(artist) not in _norm(pg.get("creator")) and _norm(pg.get("creator")) not in _norm(artist):
             warn = f"（作者が「{pg.get('creator')}」で、アーティスト名と違う。公式でない音源の可能性がある。違っていたら「取得をやめて、このページでやり直して」で直せる）"
+        other_lines = "".join(f"\n  - ほかの候補: {(i.get('title') or '?')}／{(i.get('creator') or '?')}（UGC {i.get('video_count_text') or '読めず'}）{u}"
+                              for u, i in others)
         lines = [head,
-                 f"次の楽曲ページで進めます{found_via}: {('『' + shown + '』') if shown else ''}{ugc}\n{music_url}" + warn,
+                 f"次の楽曲ページで進めます{found_via}: {('『' + shown + '』') if shown else ''}{ugc}\n{music_url}" + warn + other_lines,
                  "あなたの Mac の取得アプリが、楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。",
                  (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + when,
                  "そのあいだ Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）。",

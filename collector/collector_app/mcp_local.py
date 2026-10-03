@@ -63,6 +63,37 @@ class LocalHooks:
         return {"running": app_running(),
                 "login_wanted": worker_entry.need_login_flag().exists() or not st.get("logged_in_at")}
 
+    def inspect_many(self, urls: list) -> list:
+        """楽曲ページを順に開いて、題・作者・UGC 数を読む（1つの Chrome で。1本あたり数秒）"""
+        if os.environ.get("UGC_COLLECTOR_NO_INSPECT"):   # 試験用: TikTok に触らない。UGC 数は UGC_TEST_COUNTS（{id: 数}）から
+            import json as _json
+            counts = _json.loads(os.environ.get("UGC_TEST_COUNTS") or "{}")
+            out = []
+            for u in urls:
+                n = counts.get(u.rsplit("-", 1)[-1])
+                out.append({"title": os.environ.get("UGC_TEST_MUSIC_TITLE"), "creator": None,
+                            "video_count_text": f"{n} 動画" if n else None, "video_count": n})
+            return out
+        import time
+        import scraper
+        from acquire import pipeline
+        d = scraper.create_headless_driver()
+        out = []
+        try:
+            for u in urls:
+                try:
+                    d.get(u)
+                    time.sleep(scraper.PAGE_LOAD_TIME)
+                    out.append(pipeline.read_music_page(d, wait=8))
+                except Exception as e:
+                    out.append({"error": type(e).__name__})
+        finally:
+            try:
+                d.quit()
+            except Exception:
+                pass
+        return out
+
     def inspect_music(self, url: str) -> dict:
         """楽曲ページを1回だけ開いて、題・作者・UGC 数を読む（ヘッドレス・ログインなし。取得の一覧の段と同じ開き方）"""
         if os.environ.get("UGC_COLLECTOR_NO_INSPECT"):   # 試験用: TikTok に触らない

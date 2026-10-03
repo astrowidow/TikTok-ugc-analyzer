@@ -103,7 +103,7 @@ class TestKbUpdate(unittest.TestCase):
                          {"key": "nnew1", "noteUrl": "https://note.com/x/n/nnew1", "publishAt": "2026-10-01T10:00:00+09:00",
                           "name": "新しい記事"},
                          {"key": "nold1"}],
-                     2: [{"key": "nold2"}], 3: [{"key": "never"}]}
+                     2: [{"key": "nold2"}, {"key": "../../evil"}], 3: [{"key": "never"}]}
             self.calls.append(page)
             return {"data": {"contents": pages[page], "isLastPage": page == 3}}
         return {"data": {"body": "<p>こんにちは</p><h2>見出し</h2><p>本文<br>二行目</p>", "name": "新しい記事",

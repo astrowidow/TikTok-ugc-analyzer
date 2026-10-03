@@ -177,7 +177,9 @@ def check_new(log=print, fetch=None, sleep: float = 1.0) -> dict:
         data = (fetch(LIST_URL.format(creator=CREATOR, page=page)) or {}).get("data") or {}
         pages += 1
         contents = data.get("contents") or []
-        fresh = [c for c in contents if c.get("key") and c["key"] not in known]
+        # key はファイル名に使うので、note の形（n＋英数字）以外は見ない
+        contents = [c for c in contents if re.fullmatch(r"n[0-9a-z]{3,40}", str(c.get("key") or ""))]
+        fresh = [c for c in contents if c["key"] not in known]
         new_items += fresh
         unpinned = [c for c in contents if not c.get("isPinned")]
         # 新しい順に並んでいるので、固定表示以外が全部知っている記事のページまで来たら、その先は見ない
@@ -194,6 +196,8 @@ def check_new(log=print, fetch=None, sleep: float = 1.0) -> dict:
         time.sleep(sleep)
         body = html_to_text(d.get("body") or c.get("body") or "")
         date = str(d.get("publish_at") or c.get("publishAt") or "")[:10]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            date = datetime.date.today().isoformat()
         name = d.get("name") or c.get("name") or c["key"]
         fname = f"{date}_{c['key']}.md"
         url = c.get("noteUrl") or f"https://note.com/{CREATOR}/n/{c['key']}"

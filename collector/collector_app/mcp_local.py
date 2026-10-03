@@ -62,6 +62,24 @@ class LocalHooks:
         return {"running": app_running(),
                 "login_wanted": worker_entry.need_login_flag().exists() or not st.get("logged_in_at")}
 
+    def inspect_music(self, url: str) -> dict:
+        """楽曲ページを1回だけ開いて、題・作者・UGC 数を読む（ヘッドレス・ログインなし。取得の一覧の段と同じ開き方）"""
+        if os.environ.get("UGC_COLLECTOR_NO_INSPECT"):   # 試験用: TikTok に触らない
+            return {"title": None, "creator": None, "video_count_text": None, "video_count": None, "skipped": True}
+        import time
+        import scraper
+        from acquire import pipeline
+        d = scraper.create_headless_driver()
+        try:
+            d.get(url)
+            time.sleep(scraper.PAGE_LOAD_TIME)
+            return pipeline.read_music_page(d)
+        finally:
+            try:
+                d.quit()
+            except Exception:
+                pass
+
     def ensure_app(self) -> str:
         """メニューバーの取得アプリが動いていなければ起こす（仕事は、取得アプリが5秒おきに見て拾う）"""
         if app_running():
@@ -104,6 +122,11 @@ def main() -> int:
     config.setup_env()
     import logging
     from logging.handlers import RotatingFileHandler
+    try:   # 部品（scraper）の記録の設定は画面（標準出力）にも出す。Claude との通話を汚さないよう、ここでは使わせない
+        import log_setup
+        log_setup._configured = True   # noqa: SLF001
+    except Exception:
+        pass
     # 記録は全部 logs/mcp.log へ（mcp_proto・SDK の記録も。標準出力は Claude との通話に使う）。
     # ハンドラは根元にだけ付ける（名前つきのロガーにも付けると、伝わって2行ずつ出る）
     root = logging.getLogger()

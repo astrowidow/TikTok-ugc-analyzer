@@ -469,12 +469,19 @@ def parse_count(text):
     return int(round(v * mul))
 
 
-def read_music_page(driver) -> dict:
-    """楽曲ページの題・作者・UGC 数（表示の文字と数）。ページを開いたあとで呼ぶ（要求は増えない）"""
-    try:
-        info = driver.execute_script(MUSIC_PAGE_JS) or {}
-    except Exception as e:
-        return {"error": f"{type(e).__name__}"}
+def read_music_page(driver, wait: float = 15) -> dict:
+    """楽曲ページの題・作者・UGC 数（表示の文字と数）。ページを開いたあとで呼ぶ（要求は増えない）。
+    表示は読み込みのあとから出てくるので、UGC 数が出るまで最大 wait 秒待つ"""
+    info = {}
+    t0 = time.time()
+    while True:
+        try:
+            info = driver.execute_script(MUSIC_PAGE_JS) or {}
+        except Exception as e:
+            return {"error": f"{type(e).__name__}"}
+        if info.get("video_count_text") or time.time() - t0 > wait:
+            break
+        time.sleep(1)
     info["video_count"] = parse_count(info.get("video_count_text"))
     return info
 

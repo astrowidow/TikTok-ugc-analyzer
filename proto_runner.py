@@ -782,8 +782,39 @@ def _title_from_music_url(music_url: str) -> str:
     return re.sub(r"-\d+$", "", slug).replace("-", " ").strip() or music_url
 
 
-def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "") -> dict:
-    """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係か、利用者の Mac の取得アプリが走らせる）"""
+def _music_check(song: str, artist: str, music_url: str) -> dict:
+    """取得アプリの形: 楽曲ページを確かめてから始める（2026-10-04 ユーザー「楽曲まとめページ、これでいい？って確認は出ないんだっけ？」）。
+    URL が無ければ探し方を返し、URL があれば楽曲ページを開いて題・作者・UGC 数を読み、利用者に確かめるよう返す。どちらも分析は作らない"""
+    if not music_url:
+        q = " ".join(x for x in (song, artist) if x)
+        text = ("まだ取得を始めていない。始める前に、TikTok の楽曲ページ（https://www.tiktok.com/music/… ）の URL が要る。\n"
+                f"1. ウェブ検索で「{q} tiktok music」などを探し、楽曲ページの URL を見つける\n"
+                "2. 見つけた URL を music_url に入れて start_analysis を呼び直す（サービスが楽曲ページを開いて題・作者・UGC 数を返すので、それを利用者に見せて確かめる）\n"
+                "3. 見つからなければ、利用者に「TikTok アプリでその曲の音源のページを開き、共有 → リンクをコピー で URL を送ってください」と頼む\n"
+                "（AI へ: まだ「受け付けた」と伝えない）")
+        return {"text": text, "analysis_id": None, "created": False, "needs": "music_url"}
+    info = {}
+    try:
+        info = LOCAL.inspect_music(music_url) or {}
+    except Exception as e:   # 開けなくても、URL を見せて確かめてもらえば進める
+        info = {"error": f"{type(e).__name__}"}
+    from acquire import pipeline
+    n = info.get("video_count")
+    seen = (f"- 楽曲ページの題: {info.get('title') or '（読めなかった）'}\n- 作者: {info.get('creator') or '（読めなかった）'}\n"
+            f"- UGC 数（この音源を使った動画の数）: {info.get('video_count_text') or '（読めなかった）'}"
+            + (f"（約{n:,}本）" if n else ""))
+    text = (f"まだ取得を始めていない。次の楽曲ページで合っているかを、**利用者に確かめる**"
+            "（同じ曲名の別の音源・別の歌い手・切り抜きのページがよくある）。\n\n"
+            f"{seen}\n- URL: {music_url}\n\n"
+            "利用者に上の題・作者・UGC 数と URL を見せて「この楽曲ページで合っていますか」と聞く。"
+            f"合っていれば start_analysis(song=\"{song}\", artist=\"{artist}\", music_url=\"{music_url}\", confirmed=true) を呼ぶ。"
+            "違っていれば別の楽曲ページを探して、music_url を変えて呼び直す（confirmed は付けない）。")
+    return {"text": text, "analysis_id": None, "created": False, "needs": "confirm", "music_page": info}
+
+
+def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", confirmed: bool = False) -> dict:
+    """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係か、利用者の Mac の取得アプリが走らせる）。
+    取得アプリの形では、楽曲ページを利用者に確かめてから（confirmed=True で呼ばれてから）でないと始めない"""
     song, artist, music_url = (song or "").strip(), (artist or "").strip(), (music_url or "").strip().split("?")[0]
     if not song and not music_url:
         raise RunnerError("曲名（とアーティスト名）か、TikTok の楽曲ページの URL を教えてください")
@@ -791,6 +822,8 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
         raise RunnerError("楽曲ページの URL は https://www.tiktok.com/music/曲名-数字 の形です")
     if not song:
         song = _title_from_music_url(music_url)
+    if LOCAL is not None and (not music_url or not confirmed):
+        return _music_check(song, artist, music_url)
     from acquire import launch
     with _lock:
         aid = launch.find_active(user_id, song, music_url)

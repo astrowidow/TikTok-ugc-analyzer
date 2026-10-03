@@ -8,7 +8,7 @@ TikTok には触らない（メニューバーのアプリも起こさない）�
 
 確かめること:
   1. 初期化・道具9つ・instructions
-  2. status / start_analysis（この Mac の取得の設定・ポート 9250 で分析ができる。Windows の係は起こさない）
+  2. status / start_analysis（楽曲ページを利用者に確かめるまで始めない。確かめたらこの Mac の取得の設定・ポート 9250 で分析ができる）
   3. W1 の next_task（編集できる指示書から組み立てる）・read のシート画像
   4. 指示書の道具: 一覧・全文・使えない書き換えは断る・使える書き換えは使われる・初期に戻す
   5. 知識ベース: 取り込み待ちの記事があると next_task が取り込みの仕事を先に渡す・差し戻し・受け取り・用語集に追記が付く
@@ -62,7 +62,8 @@ async def main():
     args = ap.parse_args()
 
     home = Path(tempfile.mkdtemp(prefix="ugc-mcp-check-"))
-    env = {"UGC_COLLECTOR_HOME": str(home), "UGC_COLLECTOR_NO_APP_LAUNCH": "1", "PATH": os.environ.get("PATH", ""),
+    env = {"UGC_COLLECTOR_HOME": str(home), "UGC_COLLECTOR_NO_APP_LAUNCH": "1", "UGC_COLLECTOR_NO_INSPECT": "1",
+           "PATH": os.environ.get("PATH", ""),
            "HOME": os.environ.get("HOME", "")}
     if args.app:
         exe = str(Path(args.app) / "Contents" / "MacOS" / "UGC Collector")
@@ -94,8 +95,14 @@ async def main():
             print("[2] status と start_analysis")
             r = await c.call_tool("status", {})
             ok(not r.is_error, "status: " + text_of(r).splitlines()[0][:80])
-            r = await c.call_tool("start_analysis", {"song": "", "music_url":
-                                  "https://www.tiktok.com/music/%E3%81%A6%E3%81%99%E3%81%A8-7000000000000000001"})
+            url = "https://www.tiktok.com/music/%E3%81%A6%E3%81%99%E3%81%A8-7000000000000000001"
+            r = await c.call_tool("start_analysis", {"song": "てすと", "artist": "だれか"})
+            ok(not r.is_error and "まだ取得を始めていない" in text_of(r) and "ウェブ検索" in text_of(r)
+               and not list((home / "analyses").glob("a*")), "URL が無いと取得を始めず、探し方を返す")
+            r = await c.call_tool("start_analysis", {"song": "", "music_url": url})
+            ok(not r.is_error and "利用者に確かめる" in text_of(r) and "confirmed=true" in text_of(r)
+               and not list((home / "analyses").glob("a*")), "URL があっても、確かめるまでは始めない（楽曲ページの題・作者・UGC 数を返す）")
+            r = await c.call_tool("start_analysis", {"song": "", "music_url": url, "confirmed": True})
             t = text_of(r)
             ok(not r.is_error and "あなたの Mac" in t and "メール" not in t, "start_analysis が Mac 向けの文面で受け付ける")
             m_aid = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", t)

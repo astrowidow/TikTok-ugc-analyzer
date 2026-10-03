@@ -70,7 +70,7 @@
 
 1. Claude で「**〇〇（曲名）／△△（アーティスト名）を分析して**」
 2. Claude が楽曲ページを探して「この楽曲ページで合っていますか」と聞く → 確かめて答える
-3. Mac を開いたまま・電源につないで寝る（**画面は消える設定のまま**。ふたは閉じない）
+3. Mac を開いたまま・電源につないで寝る（**画面は消える設定のまま**。ふたは閉じない）。スリープの設定は変えなくてよい（取得の仕事が残っているあいだは、アプリが自動で Mac を眠らせない。2026-10-03 夜に、取り直しを待つあいだも眠らせないように直した）
 4. 翌朝、通知「〇〇の取得が終わりました」→ Claude で「〇〇の分析を続けて」
 
 翌朝に見るもの:
@@ -93,7 +93,7 @@
 | 戻すもの | やり方 |
 |---|---|
 | Claude の設定 | Claude を終了 → `claude_desktop_config.json.bak-20261003-before-ugc` を `claude_desktop_config.json` に戻す（道具の1行が消えるだけ） |
-| 取得アプリ | メニュー「終了」→ `/Applications/UGC Collector.app` を消す → worktree の `collector/dist/UGC-Collector-0.1.0.dmg` から入れ直す |
+| 取得アプリ | メニュー「終了」→ `/Applications/UGC Collector.app` を消す → `collector/dist/archive-0.1.0/UGC-Collector-0.1.0.dmg`（試作の作業フォルダを消したときに移した）から入れ直す |
 | 試しの分析 | `analyses-archive-20261003/` から `analyses/` に戻す |
 
 ## 結果の伝え方

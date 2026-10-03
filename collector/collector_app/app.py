@@ -24,6 +24,19 @@ RETRY_WAIT = 300    # 止まった取得を続きから取り直すまで（秒�
 CHROME_IDLE_QUIT = 90   # 仕事が無くなってから取得用の Chrome を閉じるまで（秒）
 KB_EVERY = 3600     # 知識ベースの新着を確かめる時期かを見る間隔（秒。実際に note を見るのは週1回）
 PROMPTS_EVERY = 15  # 編集された指示書を確かめる間隔（秒）
+POWER_EVERY = 60    # 取得の仕事があるあいだ、電源（電池で動いていないか）を確かめる間隔（秒）
+LOW_BATTERY = 20    # 電池の残りがこれを下回ったら、もう一度知らせる（%）
+
+
+def power_state() -> dict:
+    """電源の状態: {"ac": 電源につながっているか, "percent": 電池の残り（電池の無い Mac は None）}"""
+    try:
+        out = subprocess.run(["/usr/bin/pmset", "-g", "batt"], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return {"ac": True, "percent": None}
+    import re as _re
+    m = _re.search(r"(\d+)%", out)
+    return {"ac": "AC Power" in out, "percent": int(m.group(1)) if m else None}
 
 
 def _asset(name: str) -> str:
@@ -58,6 +71,10 @@ class Controller:
         self.next_prompts = 0.0
         self.prompt_rows = []          # 指示書の一覧（メニューに出す）
         self.prompt_seen = {}          # 指示書の名前 → 前に見た (mtime, 使えるか)
+        self.awake = None              # 取得の仕事があるあいだ Mac を眠らせない（caffeinate。このアプリが生きている間）
+        self.next_power = 0.0
+        self.power_warned = None       # 電池で動いていると知らせた段階（None / "battery" / "low"）
+        self.on_battery = False
         self.lock = threading.RLock()
         self.stopped = False
 
@@ -73,6 +90,7 @@ class Controller:
         self.stopped = True
         self.worker.stop("アプリの終了")
         self.chrome.quit()
+        self._hold_awake(False)
 
     # スリープの知らせは画面のスレッドに来る。見張りが Chrome の起動などで lock を持っていても待たない
     def on_sleep(self):
@@ -91,10 +109,60 @@ class Controller:
                     if not self.sleeping:
                         self._tick()
                         self._side_jobs()
+                        work = self._work_pending()
+                        self._hold_awake(work)
+                        self._watch_power(work)
             except Exception as e:   # 見張りは止めない
                 self.log.exception("見張りで例外: %s", e)
                 self.status_text = f"エラー: {e}"
             time.sleep(TICK)
+
+    # --- スリープさせない・電源（2026-10-03 ユーザー「Mac のスリープオフを導線に含められないか」） ---
+    def _work_pending(self) -> bool:
+        """取得の仕事が残っているか（取得中・順番待ち・止まって取り直し待ち・ログイン待ちのあいだ）。
+        係のプロセスが生きている間だけ眠らせない作りだと、取り直しを待つ5分のあいだに Mac が眠り、朝まで続きが取られない"""
+        if self.worker.running() or self.pending_retry:
+            return True
+        try:
+            return any((m.get("acquisition") or {}).get("status") in ("queued", "running") for m in jobs.analyses())
+        except Exception:
+            return False
+
+    def _hold_awake(self, on: bool):
+        """仕事があるあいだだけ、Mac を自動で眠らせない（-i。画面は消えてよい。設定で -d も）。ふたを閉じたときは眠る"""
+        alive = self.awake is not None and self.awake.poll() is None
+        if on and not alive:
+            flags = "-di" if self.worker.keep_display_on else "-i"
+            self.awake = subprocess.Popen(["/usr/bin/caffeinate", flags, "-w", str(os.getpid())],
+                                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.log.info("取得の仕事があるので、Mac を自動で眠らせないようにしました（%s）", flags)
+        elif not on and alive:
+            self.awake.terminate()
+            self.awake = None
+            self.log.info("取得の仕事が無くなったので、Mac の眠りを元に戻しました")
+
+    def _watch_power(self, work: bool):
+        """取得の仕事があるのに電池で動いていたら知らせる（電池が切れたところで止まるため）"""
+        if not work:
+            self.power_warned, self.on_battery = None, False
+            return
+        if time.time() < self.next_power:
+            return
+        self.next_power = time.time() + POWER_EVERY
+        ps = power_state()
+        self.on_battery = not ps["ac"]
+        if ps["ac"]:
+            self.power_warned = None
+            return
+        pct = ps["percent"]
+        if self.power_warned is None:
+            self.power_warned = "battery"
+            notify.send("電源につないでください",
+                        f"取得の途中です。電池で動いていると、電池が切れたところで止まります（残り {pct}%）。ふたも閉じないでください")
+            self.log.info("取得中に電池で動いている（残り %s%%）", pct)
+        elif self.power_warned == "battery" and pct is not None and pct <= LOW_BATTERY:
+            self.power_warned = "low"
+            notify.send("電池が少なくなっています", f"残り {pct}%。電源につながないと、このあと取得が止まります")
 
     def _side_jobs(self):
         """取得とは別の見張り: 編集された指示書・知識ベースの新着"""
@@ -363,6 +431,10 @@ class Controller:
     def set_keep_display(self, on: bool):
         config.save_state(keep_display_on=on)
         self.worker.restart_display_setting(on)
+        self.worker.keep_display_on = on
+        if self.awake is not None and self.awake.poll() is None:
+            self._hold_awake(False)
+            self._hold_awake(True)
 
 
 class CollectorApp(rumps.App):
@@ -436,7 +508,7 @@ class CollectorApp(rumps.App):
         rumps.Timer(self.refresh, 2).start()
 
     def refresh(self, _):
-        t = self.ctl.status_text
+        t = self.ctl.status_text + ("（電池で動作中・電源につないでください）" if self.ctl.on_battery else "")
         if self.status_item.title != t:
             self.status_item.title = t
         st = claude_link.status()

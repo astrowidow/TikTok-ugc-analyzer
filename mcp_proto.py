@@ -134,12 +134,12 @@ def _build_server(user_of=None, local: bool = False):
         title="分析を始める",
         description=("TikTok の楽曲の UGC 分析を始める（取得を待ち行列に入れる）。利用者が「〇〇を分析して」と頼んだときに使う。"
                      "song は曲名、artist はアーティスト名。music_url は TikTok の楽曲ページ（https://www.tiktok.com/music/…）。"
-                     + ("music_url（楽曲ページ）は、先にウェブ検索で探して付ける。同じ曲の楽曲ページが複数見つかったら（配信版・先行版・sped up 版など）、"
-                        "全部を candidate_urls に入れる（サービスが UGC 数を比べ、一番使われているページと、その2割以上使われている同じ曲の公式のページを合わせて取る）。"
-                        "1つしか見つからないときは、検索を変えてほかのページが無いか確かめてから、only_one=true を付けて渡す。"
+                     + ("楽曲ページは Mac が TikTok で探す（曲名で人気の動画を開いて使われている音源を読み、楽曲ページの UGC 数を比べ、"
+                        "一番使われているページと、その2割以上使われている同じ曲の公式のページ（sped up 版など）を合わせて取る。数十秒かかる）。"
+                        "**まず曲名とアーティスト名だけで呼んでよい**。ウェブ検索で楽曲ページ（https://www.tiktok.com/music/…）や、"
+                        "その曲を使った動画（https://www.tiktok.com/@…/video/…）がすでに見つかっていれば、candidate_urls・video_urls に足してもよい。"
+                        "Mac が見つけられなかったときや根拠が足りないときは、探し方が返ってくるので従って呼び直す。"
                         "利用者が楽曲ページの URL を渡したときは、探し直さずに全部を music_urls に入れる（2つ以上なら全部から取って合わせる）。"
-                        "楽曲ページが見つからなければ、その曲を使った TikTok の動画の URL を"
-                        "video_url に付けてもよい（サービスが動画から楽曲ページを読み取る）。どちらも無しで呼ぶと、探し方が返ってくるだけで取得は始まらない。"
                         "利用者に URL を頼むのは、何通りも検索して見つからないときの最後の手段。利用者に確認は求めない。"
                         "取得を始めると、どの楽曲ページで進めるか（題・作者・UGC 数・URL）が返ってくるので、それを利用者に伝える。"
                         "取得は利用者の Mac の取得アプリが半日ほどかけてやり、終わると Mac の通知が出る。" if local else
@@ -150,9 +150,10 @@ def _build_server(user_of=None, local: bool = False):
     )
     async def start_analysis(ctx: Context, song: str, artist: str = "", music_url: str | None = None,
                              video_url: str | None = None, candidate_urls: list[str] | None = None,
-                             only_one: bool = False, music_urls: list[str] | None = None) -> str:
+                             only_one: bool = False, music_urls: list[str] | None = None,
+                             video_urls: list[str] | None = None) -> str:
         return _call(runner.start_analysis, _user(ctx), song, artist, music_url or "", video_url or "",
-                     candidate_urls or [], only_one, music_urls or [])["text"]
+                     candidate_urls or [], only_one, music_urls or [], video_urls or [])["text"]
 
     @mcp.tool(
         title="分析の状態",

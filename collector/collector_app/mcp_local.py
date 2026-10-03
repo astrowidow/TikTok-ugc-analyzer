@@ -74,7 +74,6 @@ class LocalHooks:
                 out.append({"title": os.environ.get("UGC_TEST_MUSIC_TITLE"), "creator": None,
                             "video_count_text": f"{n} 動画" if n else None, "video_count": n})
             return out
-        import time
         import scraper
         from acquire import pipeline
         d = scraper.create_headless_driver()
@@ -83,8 +82,7 @@ class LocalHooks:
             for u in urls:
                 try:
                     d.get(u)
-                    time.sleep(scraper.PAGE_LOAD_TIME)
-                    out.append(pipeline.read_music_page(d, wait=8))
+                    out.append(pipeline.read_music_page(d, wait=12))   # UGC 数が出るまで待つ（決まった待ちはしない）
                 except Exception as e:
                     out.append({"error": type(e).__name__})
         finally:
@@ -112,26 +110,93 @@ class LocalHooks:
             except Exception:
                 pass
 
-    def music_from_video(self, url: str) -> dict:
-        """その曲を使った動画のページを1回だけ開いて、音源の id・題・作者と、楽曲ページの URL を返す"""
-        if os.environ.get("UGC_COLLECTOR_NO_INSPECT"):   # 試験用: TikTok に触らない
-            return {"id": "7000000000000000009", "title": os.environ.get("UGC_TEST_VIDEO_MUSIC_TITLE", "てすと"),
-                    "author": "だれか", "music_url": "https://www.tiktok.com/music/test-7000000000000000009"}
+    def find_sounds(self, song: str, video_urls: list | None = None, discover: bool = True,
+                    limit: int = 8, given_max: int = 3) -> dict:
+        """その曲の音源（楽曲ページ）を TikTok で探す。曲名の「discover」のページ（人気の動画が並ぶ。ログインなしで見られる）から
+        動画を集め、渡された動画と合わせて、動画ごとに使っている音源を読む（1つの Chrome で。1本数秒）。
+        （2026-10-04: AI のウェブ検索に出る動画は古いものが多く、先行版や個人の音源ばかりだった。discover の人気の動画8本では、
+        本命の 31.2K のページが3本・17.7K のページが1本）
+        戻り値 {"discover": URL, "found": discover で見つけた動画の数, "reads": [{id, title, author, music_url, video}]}"""
+        from urllib.parse import quote
+        slug = quote(re.sub(r"\s+", "-", (song or "").strip()), safe="-")
+        url = f"https://www.tiktok.com/discover/{slug}" if discover and slug else None
+        given = list(dict.fromkeys(video_urls or []))
+        if os.environ.get("UGC_COLLECTOR_NO_INSPECT"):   # 試験用: TikTok に触らない。UGC_TEST_DISCOVER（{曲名: [[音源 id, 題, 作者], …]}）から
+            import json as _json
+            found = (_json.loads(os.environ.get("UGC_TEST_DISCOVER") or "{}").get(song) or []) if discover else []
+            reads = [_with_music_url({"id": x[0], "title": x[1], "author": x[2], "video": f"discover-{i}"})
+                     for i, x in enumerate(found[:limit])]
+            g = given[:max(given_max, limit + given_max - len(found[:limit]))]
+            reads += [{**m, "video": v} for v, m in zip(g, self.music_from_videos(g))]
+            return {"discover": url, "found": len(found), "reads": reads}
+        import time
         import scraper
-        from acquire import pipeline
         d = scraper.create_headless_driver()
+        links = []
         try:
-            m = pipeline.read_video_music(d, url)
+            if url:
+                try:
+                    d.get(url)
+                    t0 = time.time()
+                    while time.time() - t0 < 8:   # 動画の並びは読み込みのあとから出てくる
+                        links = d.execute_script("return Array.from(document.querySelectorAll('a[href*=\"/video/\"]'))"
+                                                 ".map(a => a.href.split('?')[0]);") or []
+                        if len(set(links)) >= limit:
+                            break
+                        time.sleep(1)
+                except Exception:
+                    links = []
+                links = list(dict.fromkeys(links))
+            # 読むのは合わせて limit + given_max 本まで（道具の返事が遅くなりすぎないように）。discover で足りなければ、渡された動画で埋める
+            targets = list(dict.fromkeys(given[:max(given_max, limit + given_max - len(links[:limit]))] + links[:limit]))
+            reads = [{**self._read_music(d, v), "video": v} for v in targets]
         finally:
             try:
                 d.quit()
             except Exception:
                 pass
-        if m.get("id"):
-            from urllib.parse import quote   # URL は末尾の id だけで決まる。見出しの部分は曲名（読めるように）
-            slug = quote(re.sub(r"\s+", "-", (m.get("title") or "").strip()) or "sound", safe="-")
-            m["music_url"] = f"https://www.tiktok.com/music/{slug}-{m['id']}"
-        return m
+        return {"discover": url, "found": len(links), "reads": reads}
+
+    @staticmethod
+    def _read_music(d, url: str) -> dict:
+        import time
+        from acquire import pipeline
+        m = {}
+        for wait in (1.5, 4):   # 動画のデータはページの最初の HTML に入っている。読めなければ1回だけ待ち直す
+            try:
+                m = pipeline.read_video_music(d, url, wait=wait)
+            except Exception as e:
+                m = {"error": type(e).__name__}
+            if m.get("id"):
+                break
+            time.sleep(1)
+        return _with_music_url(m)
+
+    def music_from_videos(self, urls: list) -> list:
+        """その曲を使った動画のページを順に開いて、音源の id・題・作者と、楽曲ページの URL を読む（1つの Chrome で。1本あたり数秒）"""
+        if os.environ.get("UGC_COLLECTOR_NO_INSPECT"):   # 試験用: TikTok に触らない。UGC_TEST_VIDEO_MUSIC（{動画 id: [音源 id, 題, 作者]}）から
+            import json as _json
+            table = _json.loads(os.environ.get("UGC_TEST_VIDEO_MUSIC") or "{}")
+            out = []
+            for u in urls:
+                v = table.get(u.rstrip("/").rsplit("/", 1)[-1])
+                m = ({"id": v[0], "title": v[1], "author": v[2]} if v else
+                     {"id": "7000000000000000009", "title": os.environ.get("UGC_TEST_VIDEO_MUSIC_TITLE", "てすと"), "author": "だれか"})
+                out.append(_with_music_url(m))
+            return out
+        import scraper
+        d = scraper.create_headless_driver()
+        try:
+            return [self._read_music(d, u) for u in urls]
+        finally:
+            try:
+                d.quit()
+            except Exception:
+                pass
+
+    def music_from_video(self, url: str) -> dict:
+        """その曲を使った動画のページを1回だけ開いて、音源の id・題・作者と、楽曲ページの URL を返す"""
+        return self.music_from_videos([url])[0]
 
     def request_stop(self, analysis_id: str) -> None:
         """この分析の取得をやめる印を置く（メニューバーのアプリが5秒おきに見て、係を止める）"""
@@ -157,6 +222,15 @@ class LocalHooks:
             return "started"
         except Exception as e:
             return f"failed: {e}"
+
+
+def _with_music_url(m: dict) -> dict:
+    """音源の id から楽曲ページの URL を作る（URL は末尾の id だけで決まる。見出しの部分は曲名にして読めるように）"""
+    if m.get("id"):
+        from urllib.parse import quote
+        slug = quote(re.sub(r"\s+", "-", (m.get("title") or "").strip()) or "sound", safe="-")
+        m["music_url"] = f"https://www.tiktok.com/music/{slug}-{m['id']}"
+    return m
 
 
 def app_running() -> bool:

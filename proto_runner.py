@@ -799,23 +799,28 @@ def _music_search_hint(song: str, artist: str, note: str = "") -> dict:
     Mac からの検索は Bot 判定で塞がれるため、AI がウェブ検索で見つけて渡す（2026-10-04）。
     ユーザー「URL を渡すのは最後の手段。アーティスト名・曲名で Claude に頑張らせる」"""
     s_, a_ = song or "", artist or ""
-    queries = [f"{s_} – {a_} tiktok", f"{s_} {a_} TikTok 音源", f"site:tiktok.com/music {s_}",
-               f"{s_} {a_} tiktok music", f"{a_} {s_} TikTok 公式"]
+    queries = [f"{s_} – {a_} tiktok", f"{s_} {a_} tiktok 踊ってみた", f"{s_} {a_} tiktok 歌ってみた",
+               f"site:tiktok.com {s_}", f"site:tiktok.com/music {s_}"]
     text = ((note + "\n\n") if note else "") + (
-        "まだ取得を始めていない。TikTok の楽曲ページの URL を、**ウェブ検索で見つけて渡す**（利用者に URL を頼むのは最後の手段）。\n\n"
-        "1. 次の検索を順に試す（見つかるまで。少なくとも3つは試す）:\n" +
+        "まだ取得を始めていない。楽曲ページは、**その曲を使った TikTok の動画から Mac が見つける**（利用者に URL を頼むのは最後の手段）。\n"
+        "ウェブ検索には TikTok の楽曲ページ（tiktok.com/music/…）はほとんど出ないが、その曲を使った動画（tiktok.com/@…/video/…）はよく出る。"
+        "Mac が動画のページを開いて音源を読み、楽曲ページを見つけて UGC 数を比べるので、動画を集めて渡すのが本筋。\n\n"
+        "1. 次の検索を順に試す（少なくとも3つ）:\n" +
         "\n".join(f"   - {q.strip()}" for q in queries) +
-        "\n2. `https://www.tiktok.com/music/…` で始まる URL を探す。題に曲名が入り、作者がアーティスト名のもの（公式の音源）。"
-        "「オリジナル楽曲 - 〇〇」のような個人の音源は避ける。**同じ曲名・アーティストの楽曲ページは、配信版・先行版などで複数あることが多い。"
-        "最初の1つで止めず、検索で出てきた楽曲ページを全部集めて candidate_urls に入れて** start_analysis を呼び直す"
-        "（サービスが開いて UGC 数を比べ、一番使われているページと、その2割以上使われている同じ曲の公式のページ（sped up 版など）を合わせて取る）\n"
-        "3. 楽曲ページが見つからなくても、**その曲を使った TikTok の動画**（`https://www.tiktok.com/@…/video/…`。アーティストや公式アカウントの投稿がよい）"
-        "が見つかれば、それを video_url に入れて呼び直す。サービスが動画のページから楽曲ページを読み取る\n"
-        "4. 1〜3 を全部試しても見つからないときだけ、利用者に「TikTok アプリでその曲の音源のページを開き、共有 → リンクをコピー で URL を送ってください」と頼む")
+        f"\n2. 出てきた `https://www.tiktok.com/@…/video/…` の動画を **5〜{MAX_VIDEOS}本**、video_urls に入れる。"
+        "**一般の人の動画を中心に**（踊ってみた・歌ってみた・歌詞動画など。一番使われている音源を拾うため）、公式アカウントの動画も1〜2本。"
+        "同じ人の動画ばかりにしない\n"
+        "3. `https://www.tiktok.com/music/…` の URL が出てきたら、それも全部 candidate_urls に入れる\n"
+        "4. video_urls と candidate_urls を付けて start_analysis を呼び直す（Mac が音源を読んで UGC 数を比べ、一番使われているページと、"
+        "その2割以上使われている同じ曲の公式のページ（sped up 版など）を合わせて取る。数十秒かかる）\n"
+        "5. 1〜4 を全部試しても動画も楽曲ページも見つからないときだけ、利用者に「TikTok アプリでその曲の音源のページを開き、"
+        "共有 → リンクをコピー で URL を送ってください」と頼む")
     return {"text": text, "analysis_id": None, "created": False, "needs": "music_url"}
 
 
 MAX_CANDIDATES = 6
+MAX_VIDEOS = 8      # 音源を読む動画の上限（1本数秒。道具の返事が遅くなりすぎないように）
+MIN_FIT = 3         # 楽曲ページが1つしか見つからないとき、その音源を使った動画がこの本数あれば「ほかに無い」とみなす
 # 同じ曲の公式の楽曲ページ（配信版・先行版・sped up など）は、一番使われているページの UGC のこの割合以上なら合わせて取る
 # （2026-10-04 ユーザー「20%でよい」。少ないものは外して、外したと伝える。「それも入れて」で足せる）
 JOIN_RATIO = 0.2
@@ -875,11 +880,14 @@ def _clean_urls(urls) -> list:
 
 
 def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
-                   candidate_urls: list | None = None, only_one: bool = False, music_urls: list | None = None) -> dict:
+                   candidate_urls: list | None = None, only_one: bool = False, music_urls: list | None = None,
+                   video_urls: list | None = None) -> dict:
     """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係か、利用者の Mac の取得アプリが走らせる）。
     取得アプリの形では、どの楽曲ページで進めるか（題・作者・UGC 数・URL）を返事に出す（2026-10-04 ユーザー
     「止めるのではなく、このページで進めるからね、ってのがプロンプトに出るくらいがいい」）。
-    同じ曲の楽曲ページが複数あれば合わせて取る（candidate_urls は比べて選ぶ、music_urls は利用者が渡したもので全部取る）"""
+    同じ曲の楽曲ページが複数あれば合わせて取る（candidate_urls は比べて選ぶ、music_urls は利用者が渡したもので全部取る）。
+    video_urls（その曲を使った動画）は、Mac が動画のページを開いて音源を読み、楽曲ページの候補にする
+    （2026-10-04: AI のウェブ検索には楽曲ページがほぼ出ないが、動画は出る）"""
     song, artist, music_url = (song or "").strip(), (artist or "").strip(), (music_url or "").strip().split("?")[0]
     user_urls = _clean_urls(music_urls)
     if not song and not music_url and not user_urls:
@@ -899,42 +907,80 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
         only_one = True
     else:
         cands = _clean_urls([music_url] + list(candidate_urls or []))
-    if LOCAL is not None and len(cands) == 1 and not only_one:
-        # 楽曲ページが1つしか渡されていない: ほかの版（配信版・先行版）を探し直させる（2026-10-04 きゃわぽっぴんどぅー。
+    vids = []
+    for v in [video_url] + list(video_urls or []):
+        v = (v or "").strip().split("?")[0]
+        if v and v not in vids:
+            vids.append(v)
+    n_read = n_fit = 0
+    survey = {}
+    if LOCAL is not None and not user_urls and (vids or not only_one):
+        # 楽曲ページを TikTok で探す: 曲名の discover のページの人気の動画と、渡された動画の音源を読む（2026-10-04: AI のウェブ検索には
+        # 楽曲ページがほぼ出ず、出てくる動画は古いものが多く、先行版や個人の音源ばかりだった）。only_one なら渡された動画だけ読む
+        bad_v = [v for v in vids if not VIDEO_URL_RE.match(v)]
+        if bad_v:
+            return _music_search_hint(song, artist, "video_urls は https://www.tiktok.com/@投稿者/video/数字 の形にする"
+                                                    f"（形の違うもの: {', '.join(bad_v[:3])}）。")
+        try:
+            survey = LOCAL.find_sounds(song, vids, discover=not only_one) or {}
+        except Exception as e:
+            survey = {"error": type(e).__name__}
+        freq, other = {}, []
+        for vm in survey.get("reads") or []:
+            if not vm.get("music_url"):
+                continue
+            n_read += 1
+            if _music_fits(song, artist, {"title": vm.get("title"), "creator": vm.get("author")}):
+                freq[vm["music_url"]] = freq.get(vm["music_url"], 0) + 1
+            else:
+                other.append(vm)
+        n_fit = sum(freq.values())
+        if not freq and not cands:
+            if vids and n_read:
+                seen = "、".join(f"『{vm.get('title')}』（{vm.get('author')}）" for vm in other[:3])
+                return _music_search_hint(song, artist, f"渡された動画などの音源は {seen} で、頼まれた曲「{song}」と違う（個人のオリジナル音源など）。"
+                                                        "公式の音源を使った別の動画（一般の人の踊ってみた・歌ってみたなど）を探して渡す。")
+            return _music_search_hint(song, artist,
+                f"Mac が TikTok で「{song}」の人気の動画を開いて音源を読んだが（{survey.get('found', 0)}本見つけ、{n_read}本読めた）、"
+                "曲名・アーティスト名に合う公式の音源が見つからなかった。曲名の表記（カタカナ・英字・記号）を確かめ、下の探し方で動画か楽曲ページを探す。")
+        known = {c.rsplit("-", 1)[-1] for c in cands}
+        for u in sorted(freq, key=lambda u: -freq[u]):   # 多くの動画で使われている音源から
+            if u.rsplit("-", 1)[-1] not in known:
+                cands.append(u)
+                known.add(u.rsplit("-", 1)[-1])
+    if LOCAL is not None and len(cands) == 1 and not only_one and n_fit < MIN_FIT:
+        # 楽曲ページが1つしか見つかっておらず、根拠の動画も少ない: ほかの版（配信版・先行版）を探し直させる（2026-10-04 きゃわぽっぴんどぅー。
         # Claude が渡した1つは UGC 1,632 で、本命は 31.2K だった）。AI の中のやりとりで、利用者には聞かない
+        if not n_fit:
+            return _music_search_hint(song, artist,
+                f"楽曲ページが1つだけ渡された（{cands[0]}）。Mac が TikTok で探しても、ほかの版は見つからなかった"
+                f"（人気の動画 {survey.get('found', 0)}本のうち、この曲の公式の音源を使った動画が無かった）。"
+                "同じ曲の楽曲ページは配信版・先行版・sped up 版などで複数あることが多い。**その曲を使った動画を video_urls に入れて**、"
+                "今のページ（candidate_urls）と一緒に呼び直す（Mac が動画の音源を読んで、ほかの版を探す）。"
+                "動画が1本も見つからなければ、同じ URL を music_url に入れ、only_one=true を付けて呼び直す。"
+                "利用者が URL を指定した場合は、探し直さずに music_urls に入れて呼ぶ。")
         return _music_search_hint(song, artist,
-            f"楽曲ページが1つだけ渡された（{cands[0]}）。同じ曲の楽曲ページは配信版・先行版・sped up 版などで複数あることが多く、"
-            "本命は一番使われている（UGC 数が多い）ページのことが多い。下の検索のうち、まだ試していないものを2つ以上試して、"
-            "ほかの楽曲ページが無いか確かめる。見つかった全部（今のページも含めて）を candidate_urls に入れて呼び直す。"
-            "探してもほかに無ければ、同じ URL を music_url に入れ、only_one=true を付けて呼び直す。"
-            "利用者が URL を指定した場合は、探し直さずに music_urls に入れて呼ぶ。")
+            f"この曲の公式の音源を使った動画が {n_fit} 本しか見つからず、楽曲ページも1つだけ（{cands[0]}）。公式アカウントや初期の動画は、"
+            f"先行版などあまり使われていない音源のことがある。**一般の人の動画（踊ってみた・歌ってみた・歌詞動画など）を、あと {MIN_FIT - n_fit} 本以上**"
+            "探して video_urls に入れて呼び直す。探しても動画がほかに無ければ、only_one=true を付けて呼び直す。")
     if LOCAL is not None and len(cands) >= 2:   # 候補を比べる（利用者が渡したものは全部取る）
         pages, dropped = _pick_music_pages(song, artist, cands[:MAX_CANDIDATES], take_all=bool(user_urls))
         music_url = pages[0][0]
+        k = min(len(cands), MAX_CANDIDATES)
+        where = (f"TikTok で人気の動画など {n_read} 本の音源から見つけた楽曲ページ" if survey.get("found") else
+                 f"動画 {n_read} 本の音源などから見つけた楽曲ページ" if n_read else "同じ曲の楽曲ページ")
         if user_urls:
             found_via = f"（渡された楽曲ページ {len(pages)} つを全部合わせて取る）"
         elif len(pages) > 1:
-            found_via = (f"（同じ曲の楽曲ページ {min(len(cands), MAX_CANDIDATES)} つを比べ、"
+            found_via = (f"（{where} {k} つを比べ、"
                          f"一番使われているページの{int(JOIN_RATIO * 100)}%以上使われている {len(pages)} つを合わせて取る）")
         else:
-            found_via = f"（同じ曲の楽曲ページ {min(len(cands), MAX_CANDIDATES)} つを比べて、一番使われているものを選んだ）"
+            found_via = f"（{where} {k} つを比べて、一番使われているものを選んだ）"
     elif cands and not music_url:
         music_url = cands[0]
-    video_url = (video_url or "").strip().split("?")[0]
-    if LOCAL is not None and not music_url and video_url:   # 曲を使った動画から楽曲ページを読む
-        if not VIDEO_URL_RE.match(video_url):
-            return _music_search_hint(song, artist, "video_url は https://www.tiktok.com/@投稿者/video/数字 の形にする。")
-        try:
-            vm = LOCAL.music_from_video(video_url) or {}
-        except Exception as e:
-            vm = {"error": type(e).__name__}
-        if not vm.get("music_url"):
-            return _music_search_hint(song, artist, f"この動画（{video_url}）のページから音源を読めなかった。別の動画か、楽曲ページを探す。")
-        if _norm(song) and _norm(song) not in _norm(vm.get("title")):
-            return _music_search_hint(song, artist, f"この動画の音源は『{vm.get('title')}』（{vm.get('author')}）で、"
-                                                    f"頼まれた曲「{song}」と違う（個人のオリジナル音源など）。公式の音源を使った別の動画か、楽曲ページを探す。")
-        music_url = vm["music_url"]
-        found_via = f"（動画 {video_url} の音源から楽曲ページを見つけた）"
+        if n_read:
+            found_via = (f"（TikTok で人気の動画など {n_read} 本の音源を読み、この曲の公式の音源はこのページだけだった）"
+                         if survey.get("found") else f"（動画 {n_read} 本の音源から楽曲ページを見つけた）")
     if LOCAL is not None and not music_url:
         return _music_search_hint(song, artist)
     urls = [u for u, _ in pages] if pages else [music_url]

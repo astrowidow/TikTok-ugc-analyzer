@@ -64,6 +64,19 @@ async def main():
     home = Path(tempfile.mkdtemp(prefix="ugc-mcp-check-"))
     env = {"UGC_COLLECTOR_HOME": str(home), "UGC_COLLECTOR_NO_APP_LAUNCH": "1", "UGC_COLLECTOR_NO_INSPECT": "1",
            "UGC_TEST_COUNTS": json.dumps({"7000000000000000011": 1632, "7000000000000000012": 31200, "7000000000000000013": 17700}),
+           # 動画 → 音源（公式アカウントの動画は先行版 …11、一般の人の動画は多くが …12、sped up 版 …13、個人の音源 …99）
+           "UGC_TEST_VIDEO_MUSIC": json.dumps({
+               "7100000000000000001": ["7000000000000000011", "くらべる", "だれか"],
+               "7100000000000000002": ["7000000000000000012", "くらべる", "だれか"],
+               "7100000000000000003": ["7000000000000000012", "くらべる", "だれか"],
+               "7100000000000000004": ["7000000000000000012", "くらべる", "だれか"],
+               "7100000000000000005": ["7000000000000000013", "くらべる (sped up)", "だれか"],
+               "7100000000000000006": ["7000000000000000099", "オリジナル楽曲 - someone", "someone"]}),
+           # TikTok の discover のページの人気の動画の音源（「さがす」だけ）
+           "UGC_TEST_DISCOVER": json.dumps({"さがす": [
+               ["7000000000000000099", "オリジナル楽曲 - someone", "someone"], ["7000000000000000012", "さがす", "だれか"],
+               ["7000000000000000013", "さがす", "だれか"], ["7000000000000000012", "さがす", "だれか"],
+               ["7000000000000000098", "オリジナル楽曲 - other", "other"], ["7000000000000000012", "さがす", "だれか"]]}),
            "PATH": os.environ.get("PATH", ""),
            "HOME": os.environ.get("HOME", "")}
     if args.app:
@@ -138,6 +151,29 @@ async def main():
                 for x in (mc.group(1), mr.group(1) if mr else None):
                     if x:
                         shutil.rmtree(home / "analyses" / x, ignore_errors=True)
+            vu = [f"https://www.tiktok.com/@u{n}/video/710000000000000000{n}" for n in range(1, 7)]
+            r = await c.call_tool("start_analysis", {"song": "くらべる", "artist": "だれか", "video_urls": vu[:1]})
+            ok("一般の人の動画" in text_of(r) and "あと 2 本以上" in text_of(r) and not list((home / "analyses").glob("a*")),
+               "動画1本（公式アカウント）から楽曲ページが1つだけなら、始めずに一般の人の動画を足させる")
+            r = await c.call_tool("start_analysis", {"song": "くらべる", "artist": "だれか", "video_urls": vu})
+            tv2 = text_of(r)
+            mv2 = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", tv2)
+            meta_v = json.loads((home / "analyses" / mv2.group(1) / "analysis.json").read_text(encoding="utf-8")) if mv2 else {}
+            ok([u.rsplit("-", 1)[-1] for u in meta_v.get("music_urls", [])] == ["7000000000000000012", "7000000000000000013"]
+               and "動画 6 本の音源などから見つけた楽曲ページ 3 つを比べ" in tv2 and "7000000000000000011" in tv2.split("外した楽曲ページ", 1)[-1]
+               and "7000000000000000099" not in tv2,
+               "動画6本の音源から楽曲ページを見つけて比べ、31200 と 17700 を合わせて取る（先行版 1632 は外す・個人の音源は候補にしない）")
+            if mv2:
+                shutil.rmtree(home / "analyses" / mv2.group(1), ignore_errors=True)
+            r = await c.call_tool("start_analysis", {"song": "さがす", "artist": "だれか"})
+            ts = text_of(r)
+            ms = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", ts)
+            meta_s = json.loads((home / "analyses" / ms.group(1) / "analysis.json").read_text(encoding="utf-8")) if ms else {}
+            ok([u.rsplit("-", 1)[-1] for u in meta_s.get("music_urls", [])] == ["7000000000000000012", "7000000000000000013"]
+               and "TikTok で人気の動画など 6 本の音源から見つけた楽曲ページ 2 つを比べ" in ts and "7000000000000000099" not in ts,
+               "曲名だけで、Mac が TikTok の人気の動画の音源から楽曲ページを見つけ、31200 と 17700 を合わせて取る（個人の音源は候補にしない）")
+            if ms:
+                shutil.rmtree(home / "analyses" / ms.group(1), ignore_errors=True)
             r = await c.call_tool("start_analysis", {"song": "", "music_url": url})
             ok("1つだけ渡された" in text_of(r) and "only_one=true" in text_of(r) and not list((home / "analyses").glob("a*")),
                "楽曲ページが1つだけなら、始めずにほかの版を探し直させる")

@@ -134,19 +134,17 @@ def _build_server(user_of=None, local: bool = False):
         title="分析を始める",
         description=("TikTok の楽曲の UGC 分析を始める（取得を待ち行列に入れる）。利用者が「〇〇を分析して」と頼んだときに使う。"
                      "song は曲名、artist はアーティスト名。music_url は TikTok の楽曲ページ（https://www.tiktok.com/music/…）。"
-                     + ("取得を始める前に、楽曲ページを必ず利用者に確かめる（同じ曲名の別の音源・別の歌い手のページがよくあるため）: "
-                        "まず music_url を付けずに呼ぶか、ウェブ検索で見つけた music_url を付けて呼ぶ → サービスが探し方か、"
-                        "楽曲ページの題・作者・UGC 数を返す → それを利用者に見せて「この楽曲ページで合っていますか」と聞く → "
-                        "合っていれば同じ music_url で confirmed=true を付けて呼ぶ。confirmed=true が無い呼び出しでは取得は始まらない。"
+                     + ("music_url が分からなければ、先にウェブ検索で「<曲名> <アーティスト名> tiktok music」を探して付ける"
+                        "（付けずに呼ぶと、探し方が返ってくるだけで取得は始まらない）。利用者に確認は求めない。"
+                        "取得を始めると、どの楽曲ページで進めるか（題・作者・UGC 数・URL）が返ってくるので、それを利用者に伝える。"
                         "取得は利用者の Mac の取得アプリが半日ほどかけてやり、終わると Mac の通知が出る。" if local else
                         "分かれば music_url。取得は半日ほどかかる。")
                      + "返ってきた内容を利用者に短く伝えて止まる（取得を待たない・見に来ない）。" + rule),
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=True),
     )
-    async def start_analysis(ctx: Context, song: str, artist: str = "", music_url: str | None = None,
-                             confirmed: bool = False) -> str:
-        return _call(runner.start_analysis, _user(ctx), song, artist, music_url or "", confirmed)["text"]
+    async def start_analysis(ctx: Context, song: str, artist: str = "", music_url: str | None = None) -> str:
+        return _call(runner.start_analysis, _user(ctx), song, artist, music_url or "")["text"]
 
     @mcp.tool(
         title="分析の状態",

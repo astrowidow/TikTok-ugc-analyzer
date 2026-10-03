@@ -8,7 +8,7 @@ TikTok には触らない（メニューバーのアプリも起こさない）�
 
 確かめること:
   1. 初期化・道具9つ・instructions
-  2. status / start_analysis（楽曲ページを利用者に確かめるまで始めない。確かめたらこの Mac の取得の設定・ポート 9250 で分析ができる）
+  2. status / start_analysis（URL が無ければ探し方を返す。URL があればそのまま始め、どの楽曲ページで進めるかを返す。この Mac の取得の設定・ポート 9250）
   3. W1 の next_task（編集できる指示書から組み立てる）・read のシート画像
   4. 指示書の道具: 一覧・全文・使えない書き換えは断る・使える書き換えは使われる・初期に戻す
   5. 知識ベース: 取り込み待ちの記事があると next_task が取り込みの仕事を先に渡す・差し戻し・受け取り・用語集に追記が付く
@@ -98,12 +98,10 @@ async def main():
             url = "https://www.tiktok.com/music/%E3%81%A6%E3%81%99%E3%81%A8-7000000000000000001"
             r = await c.call_tool("start_analysis", {"song": "てすと", "artist": "だれか"})
             ok(not r.is_error and "まだ取得を始めていない" in text_of(r) and "ウェブ検索" in text_of(r)
-               and not list((home / "analyses").glob("a*")), "URL が無いと取得を始めず、探し方を返す")
+               and not list((home / "analyses").glob("a*")), "URL が無いと、AI に探し方を返す（利用者には聞かない）")
             r = await c.call_tool("start_analysis", {"song": "", "music_url": url})
-            ok(not r.is_error and "利用者に確かめる" in text_of(r) and "confirmed=true" in text_of(r)
-               and not list((home / "analyses").glob("a*")), "URL があっても、確かめるまでは始めない（楽曲ページの題・作者・UGC 数を返す）")
-            r = await c.call_tool("start_analysis", {"song": "", "music_url": url, "confirmed": True})
             t = text_of(r)
+            ok("次の楽曲ページで進めます" in t and url in t, "URL があればそのまま始め、どの楽曲ページで進めるかを返す")
             ok(not r.is_error and "あなたの Mac" in t and "メール" not in t, "start_analysis が Mac 向けの文面で受け付ける")
             m_aid = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", t)
             ok(m_aid is not None, "分析 ID が返る")

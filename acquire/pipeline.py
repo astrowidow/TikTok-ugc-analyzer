@@ -15,6 +15,7 @@ import csv
 import datetime
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -210,10 +211,15 @@ class Run:
         url = self.meta["music_url"]
         seen, order = {}, 0
         driver = scraper.create_headless_driver()
+        page_info = None
         try:
             for set_i in range(int(s["list_sets"])):
                 driver.get(url)
                 time.sleep(scraper.PAGE_LOAD_TIME)
+                if page_info is None:   # 楽曲ページの UGC 数（「131.9K 動画」）。記事は全体の UGC 数で語るため（2026-10-03 ユーザー）
+                    page_info = read_music_page(driver)
+                    write_json(self.p("raw", "music_page.json"), {**page_info, "at": now(), "url": url})
+                    self.log(f"    楽曲ページ: {page_info}")
                 last, stall = -1, 0
                 for scroll_i in range(int(s["list_scrolls"])):
                     driver.find_element(By.TAG_NAME, "body").send_keys(Keys.END)
@@ -251,7 +257,7 @@ class Run:
             for r in seen.values():
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         self._write_links_csv()
-        return {"links": len(seen)}
+        return {"links": len(seen), "ugc_total": (page_info or {}).get("video_count")}
 
     def _write_links_csv(self):
         with open(self.p("raw", "grid_links.csv"), "w", encoding="utf-8", newline="") as f:
@@ -446,6 +452,33 @@ class Run:
 
 
 # ---------------------------------------------------------------------------
+MUSIC_PAGE_JS = """const g = k => { const e = document.querySelector('[data-e2e="' + k + '"]'); return e ? (e.innerText || '').trim() : null; };
+return {title: g('music-title'), creator: g('music-creator'), video_count_text: g('music-video-count')};"""
+
+
+def parse_count(text):
+    """「131.9K 動画」「1.2M」「3.5万」「12,345」→ 数。読めなければ None"""
+    m = re.search(r"([\d.,]+)\s*([KkMmBb万億]?)", text or "")
+    if not m:
+        return None
+    try:
+        v = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    mul = {"k": 1e3, "m": 1e6, "b": 1e9, "万": 1e4, "億": 1e8}.get(m.group(2).lower(), 1)
+    return int(round(v * mul))
+
+
+def read_music_page(driver) -> dict:
+    """楽曲ページの題・作者・UGC 数（表示の文字と数）。ページを開いたあとで呼ぶ（要求は増えない）"""
+    try:
+        info = driver.execute_script(MUSIC_PAGE_JS) or {}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}"}
+    info["video_count"] = parse_count(info.get("video_count_text"))
+    return info
+
+
 def ensure_chrome(port, log) -> None:
     """収集用 Chrome（ログイン済み、9222）が待ち受けているか。無ければ決まった手順（schtasks）で起こす"""
     def listening():

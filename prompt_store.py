@@ -29,13 +29,18 @@ TITLES = {
     "confirm.md": "界隈の確認（利用者に見せる）",
     "label.md": "ラベル付け",
     "phases.md": "拡散の段階を区切る",
-    "comments.md": "コメント分析（動画1本ずつ）",
-    "synthesis.md": "界隈ごとのまとめ",
+    "comments_community.md": "コメント分析（界隈ごと）",
+    "ref_select.md": "参考にする過去記事を選ぶ",
+    "ref_digest.md": "参考記事の章立てと論理を取り出す",
+    "outline.md": "構成案（主張と根拠の割り振り）",
     "write.md": "レポートの執筆（章ごと）",
     "finish.md": "note 用の仕上げ（章ごと）",
     "finish_title.md": "note の題名と見出し",
     "revise.md": "レポートの直し",
     "done.md": "完了の知らせ",
+    # 2026-10-03 より前に始めた分析だけが使う（動画1本ずつのコメント分析 → 界隈ごとのまとめ）
+    "comments.md": "（前の形）コメント分析（動画1本ずつ）",
+    "synthesis.md": "（前の形）界隈ごとのまとめ",
 }
 
 PLACEHOLDER_RE = re.compile(r"\{\{([a-z_]+)\}\}")

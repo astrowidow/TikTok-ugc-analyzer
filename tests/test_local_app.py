@@ -174,3 +174,22 @@ class TestClock(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReaderWords(unittest.TestCase):
+    """読者（Web の記事）に見せない言葉の検査（2026-10-03 ユーザー「用語集の通り」「今回集めた20本」）"""
+
+    def test_reader_re(self):
+        import flow_w1
+        bad = ["用語集の通り、友人を召喚する口実", "因果パターンで言えば", "今回集めた動画は 20本です", "20本中11本が", "ラベル付きの動画"]
+        good = ["UGC 数は約13万", "TikTok のラベルは Lip-sync", "友達を誘う口実として機能した", "再生は 410万"]
+        for t in bad:
+            self.assertTrue(flow_w1.READER_RE.search(t), t)
+        for t in good:
+            self.assertFalse(flow_w1.READER_RE.search(t), t)
+
+    def test_parse_count(self):
+        from acquire import pipeline
+        self.assertEqual(pipeline.parse_count("131.9K 動画"), 131900)
+        self.assertEqual(pipeline.parse_count("3.5万"), 35000)
+        self.assertIsNone(pipeline.parse_count(""))

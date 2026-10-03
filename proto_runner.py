@@ -52,6 +52,10 @@ REPEAT_RULE = (
 
 _lock = threading.RLock()
 
+# 取得アプリ（各自の Mac で全部を回す形。docs/ALL_IN_APP_PLAN.md）が起動時に差し込むもの。Windows 機のサービスでは None のまま。
+# 持つもの: acquisition_settings() → 取得の設定 / ensure_app() → 取得アプリを起こす / app_state() → {"running", "login_wanted"}
+LOCAL = None
+
 
 class RunnerError(Exception):
     """利用者の AI に返す、日本語の短いエラー"""
@@ -662,26 +666,70 @@ def _hm(sec: float) -> str:
     return f"{h}時間{m}分" if h else f"{max(m, 1)}分"
 
 
+def _clock(eta_seconds: float, now: datetime.datetime | None = None) -> str:
+    """終わる見込みの時刻を「今日の23時ごろ」「明日（10/4）の6時半ごろ」の形で"""
+    now = now or datetime.datetime.now().astimezone()
+    t = now + datetime.timedelta(seconds=max(0, int(eta_seconds or 0)))
+    hm = f"{t.hour}時" + ("半" if 20 <= t.minute < 50 else "")
+    if t.minute >= 50:
+        t2 = t + datetime.timedelta(hours=1)
+        hm, t = f"{t2.hour}時", t2
+    days = (t.date() - now.date()).days
+    if days == 0:
+        return f"今日の{hm}ごろ"
+    if days == 1:
+        return f"明日（{t.month}/{t.day}）の{hm}ごろ"
+    return f"{t.month}/{t.day} の{hm}ごろ"
+
+
 def _acq_view(a: Analysis):
     """取得の段の様子。取得が無い（試作）か済んでいれば None"""
     acq = a.meta.get("acquisition")
     if not acq or acq.get("status") == "done":
         return None
+    back = f"終わったら「{a.title}の分析を続けて」と言ってください。"
     if acq.get("status") == "failed":
-        return {"state": "failed", "message": f"取得が止まりました（{acq.get('error')}）。運営が確認します。", "eta_seconds": None}
+        if LOCAL is not None:
+            msg = (f"取得が止まりました（{acq.get('error')}）。取得アプリのメニュー「止まった取得を続きから再開」で、"
+                   "済んだところの続きから取れます。何度も止まるときは運営に連絡してください。")
+        else:
+            msg = f"取得が止まりました（{acq.get('error')}）。運営に連絡してください。"
+        return {"state": "failed", "message": msg, "eta_seconds": None}
     try:
         from acquire import launch
         p = launch.progress(a.id)
     except Exception as e:  # 見込みが出せなくても状態は返す
         p = {"status": acq.get("status"), "eta_seconds": None, "error": str(e)}
     eta = p.get("eta_seconds")
+    when = f"終わるのは{_clock(eta)}の見込み（あと約{_hm(eta)}）。" if eta else ""
+    step = p.get("step_label") or "準備"
+    if p.get("step") == "comments" and p.get("n_pool"):
+        step += f" {p.get('comments_done') or 0}/{p['n_pool']}本"
+    if LOCAL is not None:
+        app = LOCAL.app_state() or {}
+        if not app.get("running"):
+            msg = ("あなたの Mac の取得アプリが動いていません（メニューバーに割れた音符のアイコンが無い）。"
+                   "アプリケーションフォルダの「UGC Collector」を開けば、済んだところの続きから取ります。")
+            return {"state": "stopped", "message": msg, "eta_seconds": eta}
+        if app.get("login_wanted"):
+            msg = ("取得アプリが TikTok のログインを待っています。取得アプリが開いた Chrome で、捨て垢でログインしてください。"
+                   "ログインすれば続きから取ります。")
+            return {"state": "login", "message": msg, "eta_seconds": eta}
+        if p.get("status") == "running":
+            msg = f"あなたの Mac で取得中（{step}）。{when}"
+        elif p.get("ahead"):
+            msg = f"あなたの Mac で取得の順番待ち（前に{p['ahead']}件）。{when}"
+        else:
+            msg = f"あなたの Mac で取得の開始待ち。{when}"
+        msg += back + "そのあいだ Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）。"
+        return {"state": "acquiring", "message": msg, "eta_seconds": eta}
     if p.get("status") == "queued" and p.get("ahead"):
-        msg = f"取得の順番待ち（前に{p['ahead']}件）。終わるまで約{_hm(eta)}。"
+        msg = f"取得の順番待ち（前に{p['ahead']}件）。{when}"
     elif p.get("status") == "running":
-        msg = f"取得中（{p.get('step_label') or '準備'}）。終わるまで約{_hm(eta)}。"
+        msg = f"取得中（{step}）。{when}"
     else:
-        msg = f"取得の開始待ち。終わるまで約{_hm(eta)}。" if eta else "取得の開始待ち。"
-    return {"state": "acquiring", "message": msg + "終わったらメールで知らせます。", "eta_seconds": eta}
+        msg = f"取得の開始待ち。{when}"
+    return {"state": "acquiring", "message": msg + back, "eta_seconds": eta}
 
 
 def status(user_id: str, ref: str | None = None) -> dict:
@@ -723,13 +771,22 @@ MUSIC_URL_RE = re.compile(r"^https://(www\.)?tiktok\.com/music/[^\s/]+-\d+")
 MAX_ACTIVE_PER_USER = 2
 
 
+def _title_from_music_url(music_url: str) -> str:
+    """楽曲ページの URL の曲名の部分（URL だけで頼まれたとき、題名が URL だらけにならないように）"""
+    from urllib.parse import unquote
+    slug = unquote(music_url.rstrip("/").split("?")[0].rsplit("/", 1)[-1])
+    return re.sub(r"-\d+$", "", slug).replace("-", " ").strip() or music_url
+
+
 def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "") -> dict:
-    """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係が走らせる）"""
-    song, artist, music_url = (song or "").strip(), (artist or "").strip(), (music_url or "").strip()
+    """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係か、利用者の Mac の取得アプリが走らせる）"""
+    song, artist, music_url = (song or "").strip(), (artist or "").strip(), (music_url or "").strip().split("?")[0]
     if not song and not music_url:
         raise RunnerError("曲名（とアーティスト名）か、TikTok の楽曲ページの URL を教えてください")
     if music_url and not MUSIC_URL_RE.match(music_url):
         raise RunnerError("楽曲ページの URL は https://www.tiktok.com/music/曲名-数字 の形です")
+    if not song:
+        song = _title_from_music_url(music_url)
     from acquire import launch
     with _lock:
         aid = launch.find_active(user_id, song, music_url)
@@ -740,16 +797,26 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
             if len(active) >= MAX_ACTIVE_PER_USER:
                 raise RunnerError(f"取得中・順番待ちの分析が{len(active)}件あります。終わってから次を頼んでください: "
                                   + ", ".join(a.title for a in active))
-            aid = launch.new_analysis(user_id, song, artist, music_url)
-    kick = launch.ensure_worker()
+            settings = LOCAL.acquisition_settings() if LOCAL is not None else None
+            aid = launch.new_analysis(user_id, song, artist, music_url, settings)
+    kick = LOCAL.ensure_app() if LOCAL is not None else launch.ensure_worker()
     p = launch.progress(aid)
-    title = song or music_url
+    title = song
     eta = p.get("eta_seconds")
-    lines = [f"「{title}」の{'取得を受け付けました' if created else '取得はもう受け付けています'}（分析 ID: {aid}）。",
-             "楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。",
-             (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + (f"終わるまで約{_hm(eta)}の見込みです。" if eta else ""),
-             "終わったらメールでお知らせします。そのあと「" + title + "の分析を続けて」と言ってください。",
-             "", "（AI へ: この内容を利用者に短く伝えて、ここで止まる。取得を待たない・見に来ない）"]
+    when = f"終わるのは{_clock(eta)}の見込みです（約{_hm(eta)}）。" if eta else ""
+    head = f"「{title}」の{'取得を受け付けました' if created else '取得はもう受け付けています'}（分析 ID: {aid}）。"
+    if LOCAL is not None:
+        lines = [head,
+                 "あなたの Mac の取得アプリが、楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。",
+                 (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + when,
+                 "そのあいだ Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）。",
+                 f"終わると Mac の通知が出ます。そのあと「{title}の分析を続けて」と言ってください。"]
+    else:
+        lines = [head,
+                 "楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。",
+                 (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + when,
+                 f"そのころに「{title}の分析を続けて」と言ってください。"]
+    lines += ["", "（AI へ: この内容を利用者に短く伝えて、ここで止まる。取得を待たない・見に来ない）"]
     return {"text": "\n".join(l for l in lines if l is not None), "analysis_id": aid, "created": created,
             "worker": kick, "eta_seconds": eta}
 
@@ -761,8 +828,45 @@ def _wait_task(a: Analysis, message: str) -> dict:
     return {"text": text, "task_id": None, "kind": "wait", "analysis_id": a.id, "progress": "取得の段"}
 
 
+# ---------------------------------------------------------------------------
+# 知識ベースの取り込み（kb_update.py）。取得アプリの形だけ。分析の仕事の合間にはさむ
+# ---------------------------------------------------------------------------
+def _kb():
+    if LOCAL is None:
+        return None
+    try:
+        import kb_update
+        return kb_update if kb_update.ready() else None
+    except Exception:
+        return None
+
+
+def _kb_ok_now(a) -> bool:
+    """この分析の今の段で、知識ベースの仕事をはさんでよいか。
+    取得中（利用者は「まだ」を聞きたい）と、界隈の確認の前（利用者が答えを待っている）にははさまない"""
+    if _acq_view(a):
+        return False
+    st = _load_state(a)
+    return not any(t["kind"] == "ask_user" and t["status"] != "done" for t in st["tasks"])
+
+
+def _kb_task_text(kb, t: dict) -> dict:
+    text = kb.render(t)
+    text += (f"\n## 提出\n`submit(task_id=\"{t['task_id']}\", output=<上の「出力の形」のテキスト>)`\n\n---\n" + REPEAT_RULE)
+    return {"text": text, "task_id": t["task_id"], "kind": "ai", "analysis_id": None, "progress": "知識ベース"}
+
+
 def next_task(user_id: str, ref: str | None = None) -> dict:
     with _lock:
+        kb = _kb()
+        kt = kb.next_task() if kb else None
+        if kt:
+            try:
+                a0 = resolve(user_id, ref)
+            except RunnerError:
+                a0 = None   # 分析がまだ無くても、知識ベースの仕事はできる
+            if a0 is None or _kb_ok_now(a0):
+                return _kb_task_text(kb, kt)
         a = resolve(user_id, ref)
         av = _acq_view(a)
         if av:
@@ -817,6 +921,21 @@ def next_task(user_id: str, ref: str | None = None) -> dict:
 
 def submit(user_id: str, task_id: str, output) -> dict:
     with _lock:
+        if (task_id or "").startswith("kb/"):
+            kb = _kb()
+            if kb is None:
+                raise RunnerError("知識ベースの仕事は、このサービスにはありません")
+            raw = output if isinstance(output, str) else json.dumps(output, ensure_ascii=False)
+            try:
+                errs = kb.accept(task_id, raw)
+            except kb.KbError as e:
+                raise RunnerError(str(e)) from e
+            if errs:
+                return {"ok": False, "reasons": errs, "progress": "知識ベース",
+                        "text": "差し戻しです。次の理由を直して、同じ task_id で submit し直してください。\n"
+                                + "\n".join(f"- {e}" for e in errs)}
+            return {"ok": True, "progress": "知識ベース",
+                    "text": f"受け取りました（知識ベースの残り {kb.pending_count()} 件）。続けて next_task を呼んでください。"}
         aid = (task_id or "").split("/", 1)[0]
         a = resolve(user_id, aid) if aid else None
         if a is None or a.id != aid:
@@ -1123,6 +1242,58 @@ def settings(user_id: str, action: str = "get", item: str | None = None, value: 
     except us.SettingsError as e:
         raise RunnerError(str(e)) from e
     return {"text": head + "\n" + us.describe(user_id), "current": us.get(user_id)}
+
+
+def prompts(user_id: str, action: str = "list", name: str | None = None, text: str | None = None) -> dict:
+    """指示書そのものを見る・書き換える・初期に戻す（取得アプリの形だけ。prompt_store.py）"""
+    import prompt_store as ps
+    if ps.user_root() is None:
+        raise RunnerError("指示書の編集は、このサービスでは使えません")
+    try:
+        if action == "get":
+            if not name:
+                raise RunnerError("見る指示書の名前（name）を指定してください。一覧は action=list")
+            body = ps.get(name)
+            return {"text": f"指示書「{ps.TITLES.get(ps._check_name(name), name)}」（{ps._check_name(name)}）の今の全文:\n\n"
+                            f"````markdown\n{body}````\n\n直すときは、この全文を直したものを action=set の text で渡す。"
+                            "{{…}} の印と「### 出力の形」の見出しは残す（出力の形の節は直しても使われない）"}
+        if action == "set":
+            if not name or not text:
+                raise RunnerError("書き換える指示書の名前（name）と、直した全文（text）を渡してください")
+            errs = ps.put(name, text)
+            if errs:
+                return {"text": "書き換えませんでした。次を直して、もう一度 set してください:\n" + "\n".join(f"- {e}" for e in errs)}
+            return {"text": f"指示書「{ps.TITLES[ps._check_name(name)]}」を書き換えました。次に渡す仕事から使います。"
+                            "初期に戻すときは action=reset。"}
+        if action == "reset":
+            done = ps.reset(name or None)
+            return {"text": "初期の指示書に戻しました: " + "、".join(ps.TITLES[n] for n in done)}
+        rows = ps.status()
+        lines = [f"- `{r['name']}` {r['title']}" + ("（編集済み）" if r["edited"] else "")
+                 + ("" if r["ok"] else f" ★使えない（{'; '.join(r['problems'])}）→ 初期の指示書を使っている") for r in rows]
+        return {"text": "指示書の一覧（name で指定する）:\n" + "\n".join(lines)
+                        + "\n\n利用者が「〇〇の指示書をこう変えて」と頼んだら、action=get で全文を読み、直した全文を action=set で渡す。"}
+    except ps.PromptError as e:
+        raise RunnerError(str(e)) from e
+
+
+def update_knowledge(user_id: str) -> dict:
+    """著者の note の新着を見て、知識ベースの取り込みの仕事を用意する（取得アプリの形だけ）"""
+    kb = _kb()
+    if kb is None:
+        raise RunnerError("知識ベースの更新は、このサービスでは使えません")
+    try:
+        res = kb.check_new(log=lambda m: None)
+    except Exception as e:
+        raise RunnerError(f"著者の note を確かめられませんでした（{type(e).__name__}）。ネットにつながっているか確かめて、少し待ってからもう一度") from e
+    n = kb.pending_count()
+    head = f"著者の note を確かめました。新しい記事 {len(res['new'])} 本。"
+    if n:
+        head += (f"取り込みの仕事が {n} 件あります。続けて next_task を呼んで片付ける（1件1〜2分。分析の仕事の前にはさまる）。"
+                 "利用者には「知識ベースを新しくしています」と短く伝える。")
+    else:
+        head += "取り込む記事はありません。"
+    return {"text": head + "\n" + kb.summary()}
 
 
 # ---------------------------------------------------------------------------

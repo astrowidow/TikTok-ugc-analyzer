@@ -152,8 +152,17 @@ def progress(analysis_id: str) -> dict:
         wait += _remaining_seconds(om)
     own = _remaining_seconds(m)
     step = acq.get("step")
-    return {"status": st, "ahead": ahead, "wait_seconds": wait, "own_seconds": own, "eta_seconds": wait + own,
-            "step": step, "step_label": pipeline.STEP_LABELS.get(step) if step else None}
+    res = {"status": st, "ahead": ahead, "wait_seconds": wait, "own_seconds": own, "eta_seconds": wait + own,
+           "step": step, "step_label": pipeline.STEP_LABELS.get(step) if step else None}
+    if step == "comments":   # 「コメントを取る 35/197本」と出すため
+        d = pipeline.ANALYSES_DIR / analysis_id
+        summ = pipeline.read_json(d / "fetch_log" / "comments_summary.json", {}) or {}
+        done_n = sum(1 for r in summ.get("rows", []) if r.get("status") == "ok")
+        if not done_n and (d / "raw" / "comments.jsonl").exists():
+            done_n = sum(1 for _ in open(d / "raw" / "comments.jsonl", encoding="utf-8"))
+        res["comments_done"] = done_n
+        res["n_pool"] = (((acq.get("steps") or {}).get("pool") or {}).get("detail") or {}).get("n_pool")
+    return res
 
 
 def main():

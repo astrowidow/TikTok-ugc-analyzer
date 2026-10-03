@@ -96,14 +96,23 @@ def add_user(user_id: str, name: str) -> str:
 # ---------------------------------------------------------------------------
 # MCP の道具
 # ---------------------------------------------------------------------------
-def _build_server():
+def _build_server(user_of=None, local: bool = False):
+    """道具をそろえた MCP サーバー。
+
+    - Windows 機のサービス（attach）: 利用者は秘密の URL から分かる
+    - 取得アプリ（各自の Mac で全部を回す形。collector/collector_app/mcp_local.py）: user_of で利用者を固定し、
+      local=True で「指示書の編集」と「知識ベースの更新」の道具を足す
+    """
     from mcp.server.mcpserver import Context, Image, MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
     from mcp.types import ToolAnnotations
 
-    mcp = MCPServer(name="ugc-analyzer", title="UGC Analyzer（試作）", instructions=INSTRUCTIONS, version="proto-1")
+    mcp = MCPServer(name="ugc-analyzer", title="UGC Analyzer" if local else "UGC Analyzer（試作）",
+                    instructions=INSTRUCTIONS, version="app-1" if local else "proto-1")
 
     def _user(ctx: Context) -> str:
+        if user_of is not None:
+            return user_of(ctx)
         req = getattr(ctx.request_context, "request", None)
         user = (getattr(req, "scope", None) or {}).get("ugc_user")
         if not user:
@@ -123,10 +132,14 @@ def _build_server():
 
     @mcp.tool(
         title="分析を始める",
-        description="TikTok の楽曲の UGC 分析を始める（取得を待ち行列に入れる）。利用者が「〇〇を分析して」と頼んだときに使う。"
-                    "song は曲名、artist はアーティスト名。分かれば music_url（https://www.tiktok.com/music/… の楽曲ページ）。"
-                    "取得は半日ほどかかり、終わったらメールで知らせる。返ってきた内容を利用者に短く伝えて止まる"
-                    "（取得を待たない・見に来ない）。" + rule,
+        description=("TikTok の楽曲の UGC 分析を始める（取得を待ち行列に入れる）。利用者が「〇〇を分析して」と頼んだときに使う。"
+                     "song は曲名、artist はアーティスト名。music_url は TikTok の楽曲ページ（https://www.tiktok.com/music/…）。"
+                     + ("music_url が分からなければ、先にウェブ検索で「<曲名> <アーティスト名> tiktok music」を探し、"
+                        "見つけた楽曲ページの URL と題を利用者に見せて「この楽曲ページで合っていますか」と確かめてから渡す"
+                        "（同じ曲名の別の音源・別の歌い手のページがよくあるため）。見つからなければ曲名だけで渡してよい（アプリが探す）。"
+                        "取得は利用者の Mac の取得アプリが半日ほどかけてやり、終わると Mac の通知が出る。" if local else
+                        "分かれば music_url。取得は半日ほどかかる。")
+                     + "返ってきた内容を利用者に短く伝えて止まる（取得を待たない・見に来ない）。" + rule),
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=True),
     )
@@ -209,6 +222,33 @@ def _build_server():
         if "image" in r:
             return [r["text"], Image(data=r["image"], format=r["format"])]
         return r["text"]
+
+    if not local:
+        return mcp
+
+    @mcp.tool(
+        title="指示書を見る・直す",
+        description="**利用者が、AI に渡す指示書そのものを見たい・変えたいと頼んだときだけ使う**（自分の判断では使わない）。"
+                    "action: list（一覧）/ get（name の全文を見る）/ set（name を text の全文で置き換える）/ reset（初期に戻す。name を省くと全部）。"
+                    "変えるときは、get で今の全文を読み、利用者の頼みどおりに直した全文を set で渡す。"
+                    "{{…}} の差し込みの印は消さない。「### 出力の形」の節は直しても使われない（検査が決まった形を前提にしている）。"
+                    "文体・重点などの短い追記で足りる頼みは settings のほうが軽い。",
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
+                                    open_world_hint=False),
+    )
+    async def prompts(ctx: Context, action: str = "list", name: str | None = None, text: str | None = None) -> str:
+        return _call(runner.prompts, _user(ctx), action, name, text)["text"]
+
+    @mcp.tool(
+        title="知識ベースを新しくする",
+        description="著者（山本慶太朗）の note の新しい記事を確かめ、知識ベースに取り込む準備をする。"
+                    "利用者が「知識ベースを更新して」と頼んだときに使う（取得アプリも週1回、自動で確かめている）。"
+                    "取り込む記事があれば、そのあと next_task を呼ぶと取り込みの仕事が渡される。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
+                                    open_world_hint=True),
+    )
+    async def update_knowledge(ctx: Context) -> str:
+        return _call(runner.update_knowledge, _user(ctx))["text"]
 
     return mcp
 

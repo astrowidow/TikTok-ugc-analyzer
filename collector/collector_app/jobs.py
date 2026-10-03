@@ -1,9 +1,8 @@
-"""仕事（分析1つぶんの取得）の受け取り先と、取得の係の起動・停止・再開。
+"""仕事（分析1つぶんの取得）の作り方と、取得の係の起動・停止・再開。
 
-受け取り先は差し替えられる作りにする:
-  - LocalJobs（試作）: メニューの「曲を取得する…」で、この Mac の中に分析を作る。サービスにはつながない
-  - 本線に合流するとき: サービスから「この人の仕事」を受け取り、終わったら結果を上げる受け取り先を足す
-    （docs/COLLECTOR_TRIAL.md「本線への合流」）。係・再開・状態の読み方はこのまま使う
+分析を作るのは2か所。どちらもこの Mac の分析フォルダ（config.ANALYSES_DIR）に作り、係が順に拾う:
+  - Claude の道具「分析を始める」（mcp_local.py → proto_runner.start_analysis）。ふだんはこれ
+  - LocalJobs: メニューの運営向けの「曲を取得する…」「ちょいとり…」
 
 取得の係は本線の acquire.worker をそのまま子プロセスで動かす（待ち行列を順に片付け、空になったら終わる。
 途中で止まったもの＝status が running なのに PID が死んでいるもの、は次に起こしたとき続きから）。
@@ -25,18 +24,14 @@ def _python_cmd() -> list:
 
 
 class LocalJobs:
-    """試作の受け取り先: この Mac の中で分析を作る"""
+    """メニューの運営向けの項目から、この Mac の中で分析を作る"""
     name = "local"
 
     def create(self, song: str, artist: str = "", music_url: str = "", trial: bool = False) -> str:
         from acquire import launch
         settings = {"chrome_port": str(config.CHROME_PORT)}
-        if trial:   # ちょいとり（約5分）: 一覧を先頭20本（属性1分ほど）、コメントは2本・各30件、返信は開かない。
-            # 切るのは worker_entry.py。要求の速さ（calls_per_min など）は変えない。
-            # 上限は20件にしない（20件ちょうどで止まると「描画が止まって20件で頭打ち」の確かめが誤報になる。2026-10-02）
-            settings.update({"list_sets": 1, "list_scrolls": 1, "trial_links": 20, "pool_budget": 2,
-                             "trial_pool": 2, "trial_cap": 30, "reply_top": 0, "reply_questions": 0,
-                             "reply_author": 0, "comment_deadline_hours": 0.25})
+        if trial:   # ちょいとり（約5分）。中身は config.TRIAL_SETTINGS
+            settings.update(config.TRIAL_SETTINGS)
         if music_url and not song:   # URL だけで頼まれたら、URL の曲名の部分を題名にする（通知が URL だらけにならないよう）
             slug = music_url.rstrip("/").rsplit("/", 1)[-1]
             song = re.sub(r"-\d+$", "", slug).replace("-", " ").strip() or music_url

@@ -32,6 +32,8 @@ BASE_DIR = Path(__file__).resolve().parent
 PROMPTS = BASE_DIR / "service_prompts" / "w1"
 KB_DIR = Path(os.environ.get("UGC_KB_DIR", BASE_DIR / "output" / "knowledge"))
 PUBLIC_URL = os.environ.get("UGC_PUBLIC_URL", "https://giblet-squishy-icing.ngrok-free.dev").rstrip("/")
+# 取得アプリ（各自の Mac で全部を回す形）では、成果物をダウンロードのリンクでなく、この Mac のフォルダに置く
+REPORTS_DIR = os.environ.get("UGC_REPORTS_DIR")
 
 # 仕事の刻み方（6-5。analysis.json の "ai_settings" で上書きできる）
 DEFAULTS = {
@@ -52,7 +54,9 @@ def cfg(a) -> dict:
 
 
 def tpl(name: str) -> str:
-    return (PROMPTS / name).read_text(encoding="utf-8")
+    """指示書。利用者が編集した指示書があればそれ（prompt_store.py。使えないときは初期の指示書）"""
+    import prompt_store
+    return prompt_store.load(name)
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +447,28 @@ def download_key(a) -> str:
     return key
 
 
+# 成果物の名前 → 分析フォルダの中の場所（downloads.py の FILES と同じ）
+DELIVERABLES = {"REPORT.md": "outputs/REPORT.md", "NOTE_BODY.md": "outputs/NOTE_BODY.md",
+                "EDITOR_NOTES.md": "outputs/EDITOR_NOTES.md", "data.zip": "outputs/data.zip",
+                "videos_review.csv": "derived/review/videos_review.csv"}
+
+
+def report_folder(a) -> Path:
+    """この Mac で成果物を置くフォルダ（取得アプリの形だけ）。曲名と分析を作った日で名前を付ける"""
+    title = re.sub(r'[\\/:*?"<>|\s]+', "_", a.title).strip("_")[:60] or a.id
+    day = str(a.meta.get("created_at") or "")[:10]
+    return Path(REPORTS_DIR) / (f"{title}（{day}）" if day else title)
+
+
 def dl_url(a, name: str) -> str:
+    if REPORTS_DIR:
+        from urllib.parse import quote
+        src = a.dir / DELIVERABLES[name]
+        dst = report_folder(a) / name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.exists():
+            shutil.copy2(src, dst)
+        return "file://" + quote(str(dst))
     return f"{PUBLIC_URL}/dl/{download_key(a)}/{name}"
 
 
@@ -767,6 +792,9 @@ def done_materials(a) -> dict:
     note = ""
     if errs or warns:
         note = f"- 検算: 確かめきれなかった点が {len(errs) + len(warns)} 件ある（運営が確認する）。利用者には「数字の一部を運営が確認中」と一言だけ"
+    if REPORTS_DIR and links:
+        links.append(f"  - 置き場所: この Mac の「{report_folder(a).name}」フォルダ"
+                     "（取得アプリのメニュー「レポートのフォルダを開く」で開ける）。リンクが開かないときはこちらから")
     return {"links": "\n".join(links) or "  - （成果物のリンクを作れなかった）", "summary": summary, "verify_note": note}
 
 
@@ -1357,6 +1385,9 @@ def units_of(a, name: str, st: dict):
         p = KB_DIR / "distilled" / f
         if not p.exists():
             raise pr.RunnerError("知識ベースが置かれていません（運営に連絡）")
+        if f == "GLOSSARY.md":   # 新しい記事から足した語を後ろに付ける（kb_update.py）
+            import kb_update
+            return re.split(r"(?m)^(?=#{1,3} )", kb_update.glossary_text())
         if f.endswith(".jsonl"):
             return [l + "\n" for l in p.read_text(encoding="utf-8").splitlines()]
         return _md_units(p)

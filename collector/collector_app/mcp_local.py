@@ -102,13 +102,17 @@ def build():
 
 def main() -> int:
     config.setup_env()
-    log = config.logger("mcp")
     import logging
+    from logging.handlers import RotatingFileHandler
+    # 記録は全部 logs/mcp.log へ（mcp_proto・SDK の記録も。標準出力は Claude との通話に使う）。
+    # ハンドラは根元にだけ付ける（名前つきのロガーにも付けると、伝わって2行ずつ出る）
     root = logging.getLogger()
-    if not root.handlers:   # mcp_proto・SDK の記録もファイルへ（標準出力は Claude との通話に使う）
-        for h in log.handlers:
-            root.addHandler(h)
+    if not root.handlers:
+        h = RotatingFileHandler(config.LOG_DIR / "mcp.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s [%(process)d] %(message)s"))
+        root.addHandler(h)
         root.setLevel(logging.INFO)
+    log = logging.getLogger("collector-mcp")
     config.seed_data(log)
     log.info("=== Claude の道具を開きます（%s %s、データ %s）", config.APP_NAME, __import__("collector_app").VERSION,
              config.DATA_DIR)

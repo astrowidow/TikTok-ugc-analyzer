@@ -71,7 +71,7 @@ def _read_json(p: Path, default=None):
 
 def _write_text(p: Path, text: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
+    tmp = p.with_name(f"{p.name}.tmp{os.getpid()}")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, p)
 
@@ -142,14 +142,7 @@ def html_to_text(body: str) -> str:
     t = re.sub(r"<[^>]+>", "", t)
     t = html.unescape(t).replace(" ", " ")
     lines = [ln.rstrip() for ln in t.split("\n")]
-    out, blank = [], False
-    for ln in lines:
-        if not ln.strip():
-            blank = True
-            continue
-        out.append(ln)
-        blank = False
-    return "\n".join(out).strip() + "\n"
+    return "\n".join(ln for ln in lines if ln.strip()).strip() + "\n"
 
 
 def _get_json(url: str):

@@ -146,13 +146,13 @@ def _manifest(group: str = GROUP) -> dict:
 
 def _save_manifest(data: dict, group: str = GROUP) -> None:
     p = _dir(group) / MANIFEST
-    tmp = p.with_suffix(".tmp")
+    tmp = p.with_name(f"{p.name}.tmp{os.getpid()}")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, p)
 
 
 def _write(p: Path, text: str) -> None:
-    tmp = p.with_name(p.name + ".tmp")
+    tmp = p.with_name(f"{p.name}.tmp{os.getpid()}")   # Claude は道具のプロセスを同時に2つ起こすことがある
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, p)
 

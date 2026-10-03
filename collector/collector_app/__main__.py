@@ -4,6 +4,7 @@
   -m <モジュール> [引数…]       python -m の代わり（取得の係 acquire.worker をこれで起こす）
   <スクリプト.py> [引数…]       python script.py の代わり（acquire/pipeline.py の _script が sys.executable で呼ぶ）
   --mcp                        Claude に出す道具（Claude デスクトップが起こす。標準入出力で話す）
+  --connect-claude             Claude デスクトップの設定に道具を足す（メニュー「Claude につなぐ」と同じ。運営用）
   --selftest                   同梱物が読めるかだけ確かめて終わる（TikTok には触らない）
 """
 import runpy
@@ -17,6 +18,11 @@ def main() -> None:
     if argv[:1] == ["--mcp"]:
         from . import mcp_local
         sys.exit(mcp_local.main())
+    if argv[:1] == ["--connect-claude"]:   # 運営用: メニューの「Claude につなぐ」と同じことを、画面を出さずに
+        from . import claude_link
+        backup = claude_link.connect()
+        print("控え:", backup or "（元の設定ファイル無し）", "／ 状態:", claude_link.status())
+        return
     code = config.setup_env()
     if argv[:1] == ["-m"] and len(argv) >= 2:
         mod = argv[1]

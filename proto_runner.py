@@ -787,17 +787,33 @@ def _title_from_music_url(music_url: str) -> str:
     return re.sub(r"-\d+$", "", slug).replace("-", " ").strip() or music_url
 
 
-def _music_search_hint(song: str, artist: str) -> dict:
+VIDEO_URL_RE = re.compile(r"^https://(www\.)?tiktok\.com/@[^/\s]+/(video|photo)/\d+")
+
+
+def _norm(s) -> str:
+    return re.sub(r"[\s・\-_/／（）()「」『』【】!！?？.,、。~〜–—]", "", str(s or "")).lower()
+
+
+def _music_search_hint(song: str, artist: str, note: str = "") -> dict:
     """取得アプリの形で、楽曲ページの URL が無いとき: AI に探し方を返す（分析は作らない）。
-    Mac の鍵なしの検索は Bot 判定で塞がれるため、URL は AI がウェブ検索で見つけて渡す（2026-10-04）。利用者には確認を求めない"""
-    q = " ".join(x for x in (song, artist) if x)
-    text = ("まだ取得を始めていない。TikTok の楽曲ページ（https://www.tiktok.com/music/… ）の URL が要る。\n"
-            f"ウェブ検索で「{q} tiktok music」などを探し、見つけた URL を music_url に入れて start_analysis を呼び直す（利用者に確認は求めない）。\n"
-            "どうしても見つからないときだけ、利用者に「TikTok アプリでその曲の音源のページを開き、共有 → リンクをコピー で URL を送ってください」と頼む。")
+    Mac からの検索は Bot 判定で塞がれるため、AI がウェブ検索で見つけて渡す（2026-10-04）。
+    ユーザー「URL を渡すのは最後の手段。アーティスト名・曲名で Claude に頑張らせる」"""
+    s_, a_ = song or "", artist or ""
+    queries = [f"{s_} – {a_} tiktok", f"{s_} {a_} TikTok 音源", f"site:tiktok.com/music {s_}",
+               f"{s_} {a_} tiktok music", f"{a_} {s_} TikTok 公式"]
+    text = ((note + "\n\n") if note else "") + (
+        "まだ取得を始めていない。TikTok の楽曲ページの URL を、**ウェブ検索で見つけて渡す**（利用者に URL を頼むのは最後の手段）。\n\n"
+        "1. 次の検索を順に試す（見つかるまで。少なくとも3つは試す）:\n" +
+        "\n".join(f"   - {q.strip()}" for q in queries) +
+        "\n2. `https://www.tiktok.com/music/…` で始まる URL を探す。題に曲名が入り、作者がアーティスト名のもの"
+        "（公式の音源）を選ぶ。「オリジナル楽曲 - 〇〇」のような個人の音源は避ける。見つけたら music_url に入れて start_analysis を呼び直す\n"
+        "3. 楽曲ページが見つからなくても、**その曲を使った TikTok の動画**（`https://www.tiktok.com/@…/video/…`。アーティストや公式アカウントの投稿がよい）"
+        "が見つかれば、それを video_url に入れて呼び直す。サービスが動画のページから楽曲ページを読み取る\n"
+        "4. 1〜3 を全部試しても見つからないときだけ、利用者に「TikTok アプリでその曲の音源のページを開き、共有 → リンクをコピー で URL を送ってください」と頼む")
     return {"text": text, "analysis_id": None, "created": False, "needs": "music_url"}
 
 
-def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "") -> dict:
+def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "") -> dict:
     """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係か、利用者の Mac の取得アプリが走らせる）。
     取得アプリの形では、どの楽曲ページで進めるか（題・作者・UGC 数・URL）を返事に出す（2026-10-04 ユーザー
     「止めるのではなく、このページで進めるからね、ってのがプロンプトに出るくらいがいい」）"""
@@ -808,6 +824,22 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
         raise RunnerError("楽曲ページの URL は https://www.tiktok.com/music/曲名-数字 の形です")
     if not song:
         song = _title_from_music_url(music_url)
+    found_via = ""
+    video_url = (video_url or "").strip().split("?")[0]
+    if LOCAL is not None and not music_url and video_url:   # 曲を使った動画から楽曲ページを読む
+        if not VIDEO_URL_RE.match(video_url):
+            return _music_search_hint(song, artist, "video_url は https://www.tiktok.com/@投稿者/video/数字 の形にする。")
+        try:
+            vm = LOCAL.music_from_video(video_url) or {}
+        except Exception as e:
+            vm = {"error": type(e).__name__}
+        if not vm.get("music_url"):
+            return _music_search_hint(song, artist, f"この動画（{video_url}）のページから音源を読めなかった。別の動画か、楽曲ページを探す。")
+        if _norm(song) and _norm(song) not in _norm(vm.get("title")):
+            return _music_search_hint(song, artist, f"この動画の音源は『{vm.get('title')}』（{vm.get('author')}）で、"
+                                                    f"頼まれた曲「{song}」と違う（個人のオリジナル音源など）。公式の音源を使った別の動画か、楽曲ページを探す。")
+        music_url = vm["music_url"]
+        found_via = f"（動画 {video_url} の音源から楽曲ページを見つけた）"
     if LOCAL is not None and not music_url:
         return _music_search_hint(song, artist)
     from acquire import launch
@@ -842,8 +874,11 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
         pg = page or {}
         shown = "／".join(x for x in (pg.get("title"), pg.get("creator")) if x)
         ugc = f"（UGC {pg['video_count_text']}）" if pg.get("video_count_text") else ""
+        warn = ""
+        if artist and pg.get("creator") and _norm(artist) not in _norm(pg.get("creator")) and _norm(pg.get("creator")) not in _norm(artist):
+            warn = f"（作者が「{pg.get('creator')}」で、アーティスト名と違う。公式でない音源の可能性がある。違っていたら「取得をやめて、このページでやり直して」で直せる）"
         lines = [head,
-                 f"次の楽曲ページで進めます: {('『' + shown + '』') if shown else ''}{ugc}\n{music_url}",
+                 f"次の楽曲ページで進めます{found_via}: {('『' + shown + '』') if shown else ''}{ugc}\n{music_url}" + warn,
                  "あなたの Mac の取得アプリが、楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。",
                  (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + when,
                  "そのあいだ Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）。",

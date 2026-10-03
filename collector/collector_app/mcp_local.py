@@ -11,6 +11,7 @@ Claude デスクトップが、設定ファイル（claude_link.py が書く）�
 """
 import fcntl
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -79,6 +80,27 @@ class LocalHooks:
                 d.quit()
             except Exception:
                 pass
+
+    def music_from_video(self, url: str) -> dict:
+        """その曲を使った動画のページを1回だけ開いて、音源の id・題・作者と、楽曲ページの URL を返す"""
+        if os.environ.get("UGC_COLLECTOR_NO_INSPECT"):   # 試験用: TikTok に触らない
+            return {"id": "7000000000000000009", "title": os.environ.get("UGC_TEST_VIDEO_MUSIC_TITLE", "てすと"),
+                    "author": "だれか", "music_url": "https://www.tiktok.com/music/test-7000000000000000009"}
+        import scraper
+        from acquire import pipeline
+        d = scraper.create_headless_driver()
+        try:
+            m = pipeline.read_video_music(d, url)
+        finally:
+            try:
+                d.quit()
+            except Exception:
+                pass
+        if m.get("id"):
+            from urllib.parse import quote   # URL は末尾の id だけで決まる。見出しの部分は曲名（読めるように）
+            slug = quote(re.sub(r"\s+", "-", (m.get("title") or "").strip()) or "sound", safe="-")
+            m["music_url"] = f"https://www.tiktok.com/music/{slug}-{m['id']}"
+        return m
 
     def request_stop(self, analysis_id: str) -> None:
         """この分析の取得をやめる印を置く（メニューバーのアプリが5秒おきに見て、係を止める）"""

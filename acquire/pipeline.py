@@ -486,6 +486,18 @@ def read_music_page(driver, wait: float = 15) -> dict:
     return info
 
 
+def read_video_music(driver, url: str, wait: float = 4) -> dict:
+    """動画のページ（ログインなし）から、使っている音源の id・題・作者を読む（属性の段と同じ読み方）"""
+    import enrich
+    from selenium.webdriver.common.by import By
+    driver.get(url)
+    time.sleep(wait)
+    tag = driver.find_element(By.XPATH, '//script[@id="__UNIVERSAL_DATA_FOR_REHYDRATION__"]')
+    it, _ = enrich.find_item_struct(json.loads(tag.get_attribute("innerHTML")))
+    m = (it or {}).get("music") or {}
+    return {"id": m.get("id"), "title": m.get("title"), "author": m.get("authorName"), "original": m.get("original")}
+
+
 def ensure_chrome(port, log) -> None:
     """収集用 Chrome（ログイン済み、9222）が待ち受けているか。無ければ決まった手順（schtasks）で起こす"""
     def listening():

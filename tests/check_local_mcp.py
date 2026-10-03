@@ -99,6 +99,19 @@ async def main():
             r = await c.call_tool("start_analysis", {"song": "てすと", "artist": "だれか"})
             ok(not r.is_error and "まだ取得を始めていない" in text_of(r) and "ウェブ検索" in text_of(r)
                and not list((home / "analyses").glob("a*")), "URL が無いと、AI に探し方を返す（利用者には聞かない）")
+            ok("site:tiktok.com/music" in text_of(r) and "video_url" in text_of(r) and "最後の手段" in text_of(r),
+               "探し方に、検索の言葉の候補・動画からの道・最後の手段が書いてある")
+            r = await c.call_tool("start_analysis", {"song": "べつのきょく", "artist": "だれか",
+                                                     "video_url": "https://www.tiktok.com/@someone/video/7000000000000000001"})
+            ok("頼まれた曲「べつのきょく」と違う" in text_of(r) and not list((home / "analyses").glob("a*")),
+               "動画の音源が頼まれた曲と違えば、始めずに別の動画を探すよう返す")
+            r = await c.call_tool("start_analysis", {"song": "てすと", "artist": "だれか",
+                                                     "video_url": "https://www.tiktok.com/@someone/video/7000000000000000001"})
+            tv = text_of(r)
+            mv = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", tv)
+            ok("動画" in tv and "音源から楽曲ページを見つけた" in tv and mv, "動画の URL から楽曲ページを見つけて始める")
+            if mv:
+                shutil.rmtree(home / "analyses" / mv.group(1), ignore_errors=True)
             r = await c.call_tool("start_analysis", {"song": "", "music_url": url})
             t = text_of(r)
             ok("次の楽曲ページで進めます" in t and url in t, "URL があればそのまま始め、どの楽曲ページで進めるかを返す")

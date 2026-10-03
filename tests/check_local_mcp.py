@@ -89,8 +89,8 @@ async def main():
         async with Client(params, read_timeout_seconds=120) as c:
             print("[1] 初期化・道具・instructions")
             tools = sorted(t.name for t in (await c.list_tools()).tools)
-            ok(tools == ["next_task", "prompts", "read", "restart_analysis", "revise", "settings", "start_analysis", "status",
-                         "submit", "update_knowledge"], f"道具 {tools}")
+            ok(tools == ["cancel_analysis", "next_task", "prompts", "read", "restart_analysis", "revise", "settings",
+                         "start_analysis", "status", "submit", "update_knowledge"], f"道具 {tools}")
             ok("next_task" in (c.instructions or ""), "instructions が返る")
 
             print("[2] status と start_analysis")
@@ -146,6 +146,11 @@ async def main():
                 ok(not r.is_error and "前の取得" in t2 and url2 in t2 and old["acquisition"]["status"] == "cancelled"
                    and (home / "locks" / f"cancel-{m_aid.group(1)}").exists() and m2 and m2.group(1) != m_aid.group(1),
                    "取得をやめて別の楽曲ページでやり直せる（前の分析はやめた・止める印・新しい分析）")
+                if m2:   # 最初からやり直す（URL なし）: やめて、探し方を返す
+                    r = await c.call_tool("restart_analysis", {"analysis_id": m2.group(1)})
+                    st2 = json.loads((home / "analyses" / m2.group(1) / "analysis.json").read_text(encoding="utf-8"))
+                    ok("最初にやり直す" in text_of(r) and "site:tiktok.com/music" in text_of(r)
+                       and st2["acquisition"]["status"] == "cancelled", "URL なしのやり直しは、やめて楽曲ページ探しから")
                 for x in (m_aid.group(1), m2.group(1) if m2 else None):
                     if x:
                         shutil.rmtree(home / "analyses" / x, ignore_errors=True)

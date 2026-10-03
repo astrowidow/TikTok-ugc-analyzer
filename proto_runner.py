@@ -1396,13 +1396,33 @@ def prompts(user_id: str, action: str = "list", name: str | None = None, text: s
         raise RunnerError(str(e)) from e
 
 
-def restart_analysis(user_id: str, ref: str | None, music_url: str) -> dict:
-    """取得をやめて、別の楽曲ページでやり直す（取得アプリの形。2026-10-04 ユーザー「〇〇の取得をやめて、このページでやり直して、
-    と言えば取り直せる道具を足しましょう」）。前の分析は「やめた」にして、取得アプリが係を止める（印のファイル）"""
+def cancel_analysis(user_id: str, ref: str | None) -> dict:
+    """取得をやめる（取得アプリの形。2026-10-04 ユーザー「取得を止めて、初めからもう一度やりたい」）"""
+    if LOCAL is None:
+        raise RunnerError("取得をやめるのは、このサービスでは使えません（運営に連絡してください）")
+    with _lock:
+        a = resolve(user_id, ref)
+        acq = a.meta.get("acquisition") or {}
+        if acq.get("status") == "done":
+            raise RunnerError(f"「{a.title}」の取得はもう終わっています")
+        if acq.get("status") == "cancelled":
+            return {"text": f"「{a.title}」の取得はもうやめてあります。", "analysis_id": a.id}
+        m = _read_json(a.dir / "analysis.json")
+        m["acquisition"].update({"status": "cancelled", "cancelled_at": _now(), "cancel_reason": "利用者がやめた"})
+        _write_json(a.dir / "analysis.json", m)
+        LOCAL.request_stop(a.id)
+    return {"text": f"「{a.title}」の取得をやめました（取得アプリが数秒で止めます）。"
+                    f"もう一度「{a.title}の分析をして」と頼めば、楽曲ページ探しから最初にやり直します。", "analysis_id": a.id}
+
+
+def restart_analysis(user_id: str, ref: str | None, music_url: str = "") -> dict:
+    """取得をやめて、やり直す（取得アプリの形）。music_url があればそのページで、無ければ楽曲ページ探しから最初に
+    （2026-10-04 ユーザー「〇〇の取得をやめて、このページでやり直して」「止めて初めからもう一度やって、正しい楽曲ページを抽出できるか試したい」）。
+    前の分析は「やめた」にして、取得アプリが係を止める（印のファイル）"""
     if LOCAL is None:
         raise RunnerError("取得のやり直しは、このサービスでは使えません（運営に連絡してください）")
     music_url = (music_url or "").strip().split("?")[0]
-    if not MUSIC_URL_RE.match(music_url):
+    if music_url and not MUSIC_URL_RE.match(music_url):
         raise RunnerError("楽曲ページの URL は https://www.tiktok.com/music/曲名-数字 の形です")
     with _lock:
         a = resolve(user_id, ref)
@@ -1419,6 +1439,11 @@ def restart_analysis(user_id: str, ref: str | None, music_url: str) -> dict:
         LOCAL.request_stop(a.id)   # 取得アプリが、この分析を取っている係を止める
         song = (m.get("song") or {}).get("title") or a.title
         artist = (m.get("song") or {}).get("artist") or ""
+    if not music_url:   # 最初から: 楽曲ページを探し直す（AI が検索して start_analysis を呼ぶ）
+        res = _music_search_hint(song, artist, f"「{a.title}」の前の取得（{old_url or '楽曲ページ不明'}）をやめた。"
+                                               "楽曲ページ探しから最初にやり直す。")
+        res["cancelled"] = a.id
+        return res
     res = start_analysis(user_id, song, artist, music_url, only_one=True)   # やり直しは利用者が選んだページで
     res["text"] = (f"「{a.title}」の前の取得（{old_url or '楽曲ページ不明'}）をやめました。\n" + res["text"])
     res["cancelled"] = a.id

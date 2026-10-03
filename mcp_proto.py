@@ -249,15 +249,25 @@ def _build_server(user_of=None, local: bool = False):
 
     @mcp.tool(
         title="取得をやめてやり直す",
-        description="**利用者が「〇〇の取得をやめて、このページでやり直して」のように頼んだときだけ使う**。"
-                    "取得中・順番待ち・止まった分析の取得をやめ、music_url（https://www.tiktok.com/music/…）の楽曲ページで取り直す。"
-                    "analysis_id は分析 ID か曲名。楽曲ページを利用者が貼ってくれたらその URL、無ければウェブ検索で探して渡す。"
-                    "返ってきた内容（どの楽曲ページでやり直すか）を利用者に短く伝えて止まる。" + rule,
+        description="**利用者が「〇〇の取得をやめて、このページでやり直して」「〇〇の取得をやめて、最初からやり直して」のように頼んだときだけ使う**。"
+                    "取得中・順番待ち・止まった分析の取得をやめ、music_url（https://www.tiktok.com/music/…）があればその楽曲ページで取り直す。"
+                    "music_url を省くと、楽曲ページ探しから最初にやり直す（返ってくる探し方に従って検索し、start_analysis を呼ぶ）。"
+                    "analysis_id は分析 ID か曲名。返ってきた内容を利用者に短く伝える。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False,
                                     open_world_hint=True),
     )
-    async def restart_analysis(ctx: Context, music_url: str, analysis_id: str | None = None) -> str:
-        return _call(runner.restart_analysis, _user(ctx), analysis_id, music_url)["text"]
+    async def restart_analysis(ctx: Context, music_url: str | None = None, analysis_id: str | None = None) -> str:
+        return _call(runner.restart_analysis, _user(ctx), analysis_id, music_url or "")["text"]
+
+    @mcp.tool(
+        title="取得をやめる",
+        description="**利用者が「〇〇の取得をやめて」と頼んだときだけ使う**（やり直しまで頼まれたら restart_analysis）。"
+                    "取得中・順番待ちの分析の取得をやめる。analysis_id は分析 ID か曲名。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True,
+                                    open_world_hint=False),
+    )
+    async def cancel_analysis(ctx: Context, analysis_id: str | None = None) -> str:
+        return _call(runner.cancel_analysis, _user(ctx), analysis_id)["text"]
 
     @mcp.tool(
         title="知識ベースを新しくする",

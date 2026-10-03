@@ -196,8 +196,31 @@ class Run:
         self.update(lambda m: m.update({"music_url": url}))
         return {"music_url": url, "how": "search"}
 
+    def music_urls(self) -> list:
+        """取得する楽曲ページ（1つ目が主）。同じ曲の配信版・sped up 版などで複数あるときは、全部から一覧を集めて合わせる
+        （2026-10-04 ユーザー「2つ以上の楽曲ページを参照させたい場合もある」）"""
+        m = self.meta
+        urls = [u for u in (m.get("music_urls") or []) if u]
+        if m.get("music_url") and m["music_url"] not in urls:
+            urls.insert(0, m["music_url"])
+        return urls
+
+    def link_sources(self) -> dict:
+        """動画 ID → どの楽曲ページ（1〜）のグリッドで見つけたか（コメントは見つけたページのグリッドから取る）"""
+        out = {}
+        p = self.p("raw", "grid_links.jsonl")
+        if p.exists():
+            for line in open(p, encoding="utf-8"):
+                try:
+                    g = json.loads(line)
+                except ValueError:
+                    continue
+                out[str(g.get("video_id"))] = int(g.get("source") or 1)
+        return out
+
     def step_list(self):
-        """scraper.py と同じ手順（未ログイン・ヘッドレス・END キーでスクロール）でリンクだけ集める（D16）"""
+        """scraper.py と同じ手順（未ログイン・ヘッドレス・END キーでスクロール）でリンクだけ集める（D16）。
+        楽曲ページが複数なら、ページごとに集めて重ねない（どのページで見つけたかを source に残す）"""
         s = self.settings()
         out = self.p("raw", "grid_links.jsonl")
         if out.exists() and out.stat().st_size:
@@ -208,44 +231,56 @@ class Run:
         import scraper
         from selenium.webdriver.common.by import By
         from selenium.webdriver.common.keys import Keys
-        url = self.meta["music_url"]
+        urls = self.music_urls()
+        # 受け付けのときに読んだ題・作者・UGC 数（ここで読めなかったときの控え）
+        before = {p.get("url"): p for p in (read_json(self.p("raw", "music_pages.json"), []) or []) if isinstance(p, dict)}
+        if not before:
+            m0 = read_json(self.p("raw", "music_page.json"), {}) or {}
+            if m0.get("url"):
+                before[m0["url"]] = m0
         seen, order = {}, 0
+        pages = []
         driver = scraper.create_headless_driver()
-        page_info = None
         try:
-            for set_i in range(int(s["list_sets"])):
-                driver.get(url)
-                time.sleep(scraper.PAGE_LOAD_TIME)
-                if page_info is None:   # 楽曲ページの UGC 数（「131.9K 動画」）。記事は全体の UGC 数で語るため（2026-10-03 ユーザー）
-                    page_info = read_music_page(driver)
-                    write_json(self.p("raw", "music_page.json"), {**page_info, "at": now(), "url": url})
-                    self.log(f"    楽曲ページ: {page_info}")
-                last, stall = -1, 0
-                for scroll_i in range(int(s["list_scrolls"])):
-                    driver.find_element(By.TAG_NAME, "body").send_keys(Keys.END)
-                    time.sleep(scraper.SCROLL_PAUSE_TIME)
-                    n = driver.execute_script(scraper._COUNT_LINKS_JS) or 0
-                    if n <= last:
-                        stall += 1
-                        if stall >= int(s["list_stall"]):
-                            break
-                    else:
-                        stall = 0
-                    last = n
-                hrefs = driver.execute_script(
-                    "return Array.from(document.querySelectorAll('a[href*=\"/video/\"], a[href*=\"/photo/\"]'))"
-                    ".map(a => a.href).filter(h => h);") or []
-                new = 0
-                for h in hrefs:
-                    h = h.split("?")[0]
-                    if h not in seen:
-                        seen[h] = {"url": h, "video_id": h.rstrip("/").rsplit("/", 1)[-1], "set": set_i,
-                                   "order": order, "type": "Photo" if "/photo/" in h else "Video",
-                                   "collected_at": now()}
-                        order += 1
-                        new += 1
-                self.log(f"    一覧 {set_i + 1}/{s['list_sets']}セット: このセット{len(hrefs)}件 / 新規{new} / 累計{len(seen)}"
-                         f"（スクロール{scroll_i + 1}回）")
+            for k, url in enumerate(urls, 1):
+                tag = f"{k}ページ目 " if len(urls) > 1 else ""
+                page_info = None
+                n0 = len(seen)
+                for set_i in range(int(s["list_sets"])):
+                    driver.get(url)
+                    time.sleep(scraper.PAGE_LOAD_TIME)
+                    if page_info is None:   # 楽曲ページの UGC 数（「131.9K 動画」）。記事は全体の UGC 数で語るため（2026-10-03 ユーザー）
+                        page_info = read_music_page(driver)
+                        self.log(f"    楽曲ページ{('（' + str(k) + '）') if len(urls) > 1 else ''}: {page_info}")
+                    last, stall = -1, 0
+                    for scroll_i in range(int(s["list_scrolls"])):
+                        driver.find_element(By.TAG_NAME, "body").send_keys(Keys.END)
+                        time.sleep(scraper.SCROLL_PAUSE_TIME)
+                        n = driver.execute_script(scraper._COUNT_LINKS_JS) or 0
+                        if n <= last:
+                            stall += 1
+                            if stall >= int(s["list_stall"]):
+                                break
+                        else:
+                            stall = 0
+                        last = n
+                    hrefs = driver.execute_script(
+                        "return Array.from(document.querySelectorAll('a[href*=\"/video/\"], a[href*=\"/photo/\"]'))"
+                        ".map(a => a.href).filter(h => h);") or []
+                    new = 0
+                    for h in hrefs:
+                        h = h.split("?")[0]
+                        if h not in seen:
+                            seen[h] = {"url": h, "video_id": h.rstrip("/").rsplit("/", 1)[-1], "set": set_i,
+                                       "order": order, "type": "Photo" if "/photo/" in h else "Video",
+                                       "source": k, "collected_at": now()}
+                            order += 1
+                            new += 1
+                    self.log(f"    一覧 {tag}{set_i + 1}/{s['list_sets']}セット: このセット{len(hrefs)}件 / 新規{new} / 累計{len(seen)}"
+                             f"（スクロール{scroll_i + 1}回）")
+                info = {**(before.get(url) or {}), **{key: v for key, v in (page_info or {}).items() if v is not None}}
+                info.pop("how", None)
+                pages.append({**info, "url": url, "page": k, "links": len(seen) - n0, "at": now()})
         finally:
             try:
                 driver.quit()
@@ -253,11 +288,17 @@ class Run:
                 pass
         if not seen:
             raise StepError("楽曲ページから動画が1本も見つかりませんでした（URL が違うか、TikTok 側の表示制限）")
+        write_json(self.p("raw", "music_pages.json"), pages)
+        write_json(self.p("raw", "music_page.json"), pages[0])   # 主のページ（前からの形）
         with open(out, "w", encoding="utf-8") as f:
             for r in seen.values():
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         self._write_links_csv()
-        return {"links": len(seen), "ugc_total": (page_info or {}).get("video_count")}
+        counts = [p.get("video_count") for p in pages]
+        res = {"links": len(seen), "ugc_total": sum(c for c in counts if c) or None}
+        if len(pages) > 1:
+            res["pages"] = [{"url": p["url"], "links": p["links"], "ugc": p.get("video_count")} for p in pages]
+        return res
 
     def _write_links_csv(self):
         with open(self.p("raw", "grid_links.csv"), "w", encoding="utf-8", newline="") as f:
@@ -342,6 +383,29 @@ class Run:
             args += ["--budget", int(s["pool_budget"])]
         return json.loads(self._script(*args).splitlines()[-1])
 
+    def comment_pages(self) -> list:
+        """コメントを取る楽曲ページごとの (URL, プール, 要約, 差し替えの記録)。コメントは楽曲ページのグリッドから動画へ移って取るので、
+        動画を見つけたページから取る。楽曲ページが1つなら前と同じファイル"""
+        urls = self.music_urls()
+        pool = self.p("derived", "pool.tsv")
+        if len(urls) <= 1:
+            return [(urls[0], pool, self.p("fetch_log", "comments_summary.json"), self.p("fetch_log", "substitutions.tsv"))]
+        src = self.link_sources()
+        lines = [ln for ln in pool.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        head, body = lines[0], lines[1:]
+        vi = head.split("\t").index("video_id")
+        out = []
+        for k, url in enumerate(urls, 1):
+            mine = [r for r in body if src.get(r.split("\t")[vi], 1) == k]
+            if not mine:
+                continue
+            pk = self.p("derived", f"pool_p{k}.tsv")
+            pk.write_text("\n".join([head, *mine]) + "\n", encoding="utf-8")
+            sfx = "" if k == 1 else f"_p{k}"   # 1ページ目は前と同じ名前（進み具合の表示がそのまま読める）
+            out.append((url, pk, self.p("fetch_log", f"comments_summary{sfx}.json"),
+                        self.p("fetch_log", f"substitutions{sfx}.tsv")))
+        return out
+
     def step_comments(self):
         s = self.settings()
         ensure_chrome(s["chrome_port"], self.log)
@@ -349,59 +413,66 @@ class Run:
         spent = float(((self.meta.get("acquisition") or {}).get("steps", {}).get("comments") or {}).get("active_hours") or 0)
         deadline = float(s.get("comment_deadline_hours") or 0)
         retries = 0
-        while True:
-            left = (deadline - spent) if deadline else 0.0      # 0 は spatest で「打ち切らない」
-            if deadline and left <= 0.02:
-                self.log("    時間の上限に達しています")
-                break
-            args = ["--port", str(s["chrome_port"]), "--music-url", self.meta["music_url"],
-                    "--pool", str(self.p("derived", "pool.tsv")),
-                    "--candidates", str(self.p("derived", "llm_input", "records.jsonl")),
-                    "--subs-out", str(self.p("fetch_log", "substitutions.tsv")),
-                    "--resume", "--collect-scrolls", str(s["collect_scrolls"]),
-                    "--reply-policy", "targets", "--reply-top", str(s["reply_top"]),
-                    "--reply-questions", str(s["reply_questions"]), "--reply-author", str(s["reply_author"]),
-                    "--cap", "40", "--min-comments", "20",
-                    "--calls-per-min", str(s["calls_per_min"]), "--max-calls-per-min", str(s["max_calls_per_min"]),
-                    "--interval", str(s["interval"]), "--jitter", "0.5", "--deadline-hours", f"{left:.3f}",
-                    "--out", str(self.p("raw", "comments.jsonl")), "--log", str(self.p("fetch_log", "comments.log")),
-                    "--summary", str(self.p("fetch_log", "comments_summary.json"))]
-            a = spatest.build_parser().parse_args(args)
-            self.lock("コメント")
-            c = spatest.SpaCollector(a)
-            c.between_videos = self.yield_lock
-            t0 = time.time()
-            blocked = False
-            try:
-                c.run()
-            except spatest.Blocked as e:
-                c.log(f"!! 開始前にブロック検知: {e}")
-                blocked = True
-            finally:
-                # chromedriver だけを止める。ログイン済みの Chrome 本体には quit を送らない
-                # （今までの走行も quit はしていない。送ったときの挙動は確かめていない）
+        blocked = False
+        pages = self.comment_pages()
+        for k, (url, pool, summary, subs) in enumerate(pages, 1):
+            if len(pages) > 1:
+                self.log(f"    楽曲ページ {k}/{len(pages)} のグリッドから取ります（プール {sum(1 for _ in open(pool, encoding='utf-8')) - 1}本、{url}）")
+            while True:
+                left = (deadline - spent) if deadline else 0.0      # 0 は spatest で「打ち切らない」
+                if deadline and left <= 0.02:
+                    self.log("    時間の上限に達しています")
+                    break
+                args = ["--port", str(s["chrome_port"]), "--music-url", url,
+                        "--pool", str(pool),
+                        "--candidates", str(self.p("derived", "llm_input", "records.jsonl")),
+                        "--subs-out", str(subs),
+                        "--resume", "--collect-scrolls", str(s["collect_scrolls"]),
+                        "--reply-policy", "targets", "--reply-top", str(s["reply_top"]),
+                        "--reply-questions", str(s["reply_questions"]), "--reply-author", str(s["reply_author"]),
+                        "--cap", "40", "--min-comments", "20",
+                        "--calls-per-min", str(s["calls_per_min"]), "--max-calls-per-min", str(s["max_calls_per_min"]),
+                        "--interval", str(s["interval"]), "--jitter", "0.5", "--deadline-hours", f"{left:.3f}",
+                        "--out", str(self.p("raw", "comments.jsonl")), "--log", str(self.p("fetch_log", "comments.log")),
+                        "--summary", str(summary)]
+                a = spatest.build_parser().parse_args(args)
+                self.lock("コメント")
+                c = spatest.SpaCollector(a)
+                c.between_videos = self.yield_lock
+                t0 = time.time()
+                blocked = False
                 try:
-                    if c.d:
-                        c.d.service.stop()
-                except Exception:
-                    pass
-            spent += max(0.0, (time.time() - t0 - c.yielded) / 3600)
-            self._mark("comments", {"active_hours": round(spent, 3)})
-            blocked = blocked or any(r.get("status") == "blocked" for r in c.rows)
-            errors = [r for r in c.rows if r.get("status") == "error"]
-            if blocked and retries < int(s["blocked_retries"]) and (not deadline or spent < deadline):
-                retries += 1
-                self.unlock()
-                self.log(f"    ブロックを検知したので {s['blocked_wait_min']}分空けてから続きを取ります（{retries}回目）")
-                time.sleep(float(s["blocked_wait_min"]) * 60)
-                continue
-            if len(errors) >= 2 and retries < int(s["blocked_retries"]):
-                retries += 1
-                self.log("    連続失敗で止まったので、少し空けて続きから取り直します")
-                self.unlock()
-                time.sleep(120)
-                continue
-            break
+                    c.run()
+                except spatest.Blocked as e:
+                    c.log(f"!! 開始前にブロック検知: {e}")
+                    blocked = True
+                finally:
+                    # chromedriver だけを止める。ログイン済みの Chrome 本体には quit を送らない
+                    # （今までの走行も quit はしていない。送ったときの挙動は確かめていない）
+                    try:
+                        if c.d:
+                            c.d.service.stop()
+                    except Exception:
+                        pass
+                spent += max(0.0, (time.time() - t0 - c.yielded) / 3600)
+                self._mark("comments", {"active_hours": round(spent, 3)})
+                blocked = blocked or any(r.get("status") == "blocked" for r in c.rows)
+                errors = [r for r in c.rows if r.get("status") == "error"]
+                if blocked and retries < int(s["blocked_retries"]) and (not deadline or spent < deadline):
+                    retries += 1
+                    self.unlock()
+                    self.log(f"    ブロックを検知したので {s['blocked_wait_min']}分空けてから続きを取ります（{retries}回目）")
+                    time.sleep(float(s["blocked_wait_min"]) * 60)
+                    continue
+                if len(errors) >= 2 and retries < int(s["blocked_retries"]):
+                    retries += 1
+                    self.log("    連続失敗で止まったので、少し空けて続きから取り直します")
+                    self.unlock()
+                    time.sleep(120)
+                    continue
+                break
+            if blocked:   # 空けても塞がれたまま: ほかの楽曲ページへ進まない
+                break
         self.unlock()
         return self._check_comments(blocked)
 
@@ -422,16 +493,23 @@ class Run:
         # 上位リストが20件未満なら、最低件数（--min-comments 20）で正しく止まっただけ（2026-10-01 の写しで1本、上位17件で誤報になった）
         capped20 = sum(1 for r in ok if len(r.get("comments") or []) == 20 and r.get("has_more")
                        and (r.get("top_list") or 0) >= 20)
-        summ = read_json(self.p("fetch_log", "comments_summary.json"), {}) or {}
+        summs = [read_json(p, {}) or {} for p in summary_files(self.dir)]   # 楽曲ページごとの要約を合わせる
         n_pool = sum(1 for _ in open(self.p("derived", "pool.tsv"), encoding="utf-8")) - 1
         res = {"videos_ok": len(ok), "pool": n_pool,
                "comments": sum(len(r.get("comments") or []) for r in ok),
                "replies": sum(len(r.get("reply_comments") or []) for r in ok),
                "mixed_comments": mixed, "stuck_at_20": capped20,
-               "substituted": sum(1 for s in (summ.get("substitutions") or []) if s.get("substitute")),
-               "unreachable": len(summ.get("missing") or []),
-               "not_fetched_time": len(summ.get("not_fetched_time") or []),
+               "substituted": sum(1 for summ in summs for s in (summ.get("substitutions") or []) if s.get("substitute")),
+               "unreachable": sum(len(summ.get("missing") or []) for summ in summs),
+               "not_fetched_time": sum(len(summ.get("not_fetched_time") or []) for summ in summs),
                "blocked": blocked, "spa_no": sum(1 for r in ok if r.get("spa") is False)}
+        if len(self.music_urls()) > 1:
+            src = self.link_sources()
+            by = {}
+            for r in ok:
+                k = src.get(str(r["video_id"]), 1)
+                by[k] = by.get(k, 0) + 1
+            res["videos_ok_by_page"] = {str(k): v for k, v in sorted(by.items())}
         if mixed:
             self.log(f"    ★ 混入 {mixed}件（aweme_id が動画と違うコメント）")
         if capped20:
@@ -454,6 +532,21 @@ class Run:
 # ---------------------------------------------------------------------------
 MUSIC_PAGE_JS = """const g = k => { const e = document.querySelector('[data-e2e="' + k + '"]'); return e ? (e.innerText || '').trim() : null; };
 return {title: g('music-title'), creator: g('music-creator'), video_count_text: g('music-video-count')};"""
+
+
+def summary_files(d: Path) -> list:
+    """コメント取得の要約（1ページ目は comments_summary.json、2ページ目からは comments_summary_p2.json …）"""
+    return sorted((d / "fetch_log").glob("comments_summary*.json"))
+
+
+def comments_ok(d: Path) -> int:
+    """コメントが取れた動画の数（楽曲ページごとの要約を合わせる。要約がまだ無ければ原本の行数）"""
+    n = 0
+    for p in summary_files(d):
+        n += sum(1 for r in (read_json(p, {}) or {}).get("rows", []) if r.get("status") == "ok")
+    if not n and (d / "raw" / "comments.jsonl").exists():
+        n = sum(1 for _ in open(d / "raw" / "comments.jsonl", encoding="utf-8"))
+    return n
 
 
 def parse_count(text):

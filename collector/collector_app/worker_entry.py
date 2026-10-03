@@ -66,10 +66,18 @@ def main() -> int:
         p = self.p("raw", "grid_links.jsonl")
         lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
         if len(lines) > n:
-            p.write_text("\n".join(lines[:n]) + "\n", encoding="utf-8")
+            # 楽曲ページが複数なら、ページごとに先頭から同じだけ（合算を試せるように）
+            groups = {}
+            for ln in lines:
+                groups.setdefault(int(json.loads(ln).get("source") or 1), []).append(ln)
+            per = max(1, n // len(groups))
+            keep = [ln for k in sorted(groups) for ln in groups[k][:per]]
+            p.write_text("\n".join(keep) + "\n", encoding="utf-8")
             self._write_links_csv()   # noqa: SLF001
-            self.log(f"    ちょいとり: 一覧を先頭{n}本に切りました（{len(lines)}本 → {n}本）")
-        return {**res, "links": min(len(lines), n), "trial_links_from": len(lines)}
+            self.log(f"    ちょいとり: 一覧を{'ページごとに' if len(groups) > 1 else ''}先頭{per}本に切りました"
+                     f"（{len(lines)}本 → {len(keep)}本）")
+            return {**res, "links": len(keep), "trial_links_from": len(lines)}
+        return {**res, "links": len(lines), "trial_links_from": len(lines)}
 
     pipeline.Run.step_list = step_list
 
@@ -85,9 +93,19 @@ def main() -> int:
         rows = [r for r in p.read_text(encoding="utf-8").splitlines() if r.strip()]
         head, body = rows[0], rows[1:]
         ci = head.split("\t").index("cap")
+        vi = head.split("\t").index("video_id")
         cap = str(int(s.get("trial_cap") or 30))
+        src = self.link_sources()   # 楽曲ページが複数なら、ページを順に回して選ぶ（どのページからも取れるか試せるように）
+        groups = {}
+        for r in body:
+            groups.setdefault(src.get(r.split("\t")[vi], 1), []).append(r)
+        picked = []
+        while len(picked) < n and any(groups.values()):
+            for k in sorted(groups):
+                if groups[k] and len(picked) < n:
+                    picked.append(groups[k].pop(0))
         cut = []
-        for r in body[:n]:
+        for r in picked:
             f = r.split("\t")
             f[ci] = cap
             cut.append("\t".join(f))

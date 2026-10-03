@@ -193,12 +193,8 @@ def describe(m: dict) -> str:
     extra = ""
     if step == "comments":
         d = config.ANALYSES_DIR / m["analysis_id"]
-        summ = pipeline.read_json(d / "fetch_log" / "comments_summary.json", {}) or {}
-        ok = sum(1 for r in summ.get("rows", []) if r.get("status") == "ok")
+        ok = pipeline.comments_ok(d)   # 楽曲ページごとの要約を合わせる（要約がまだ無ければ原本の行数）
         n_pool = (((acq.get("steps") or {}).get("pool") or {}).get("detail") or {}).get("n_pool")
-        if not ok:   # 走行中の要約がまだ無いとき: 原本の行数
-            p = d / "raw" / "comments.jsonl"
-            ok = sum(1 for _ in open(p, encoding="utf-8")) if p.exists() else 0
         extra = f" {ok}/{n_pool or '?'}本"
     try:
         left = launch._remaining_seconds(m)   # noqa: SLF001 本線と同じ見込みの出し方

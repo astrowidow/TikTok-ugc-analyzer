@@ -117,11 +117,27 @@ async def main():
             r = await c.call_tool("start_analysis", {"song": "くらべる", "artist": "だれか", "candidate_urls": cu})
             tc = text_of(r)
             mc = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", tc)
-            chosen = json.loads((home / "analyses" / mc.group(1) / "analysis.json").read_text(encoding="utf-8"))["music_url"] if mc else ""
-            ok(chosen == cu[1] and "3 本を比べて" in tc and tc.count("ほかの候補") == 2,
-               f"楽曲ページの候補を比べて、一番使われているもの（UGC 31200）で進める（選んだ: {chosen[-6:]}）")
+            meta_c = json.loads((home / "analyses" / mc.group(1) / "analysis.json").read_text(encoding="utf-8")) if mc else {}
+            chosen = meta_c.get("music_url") or ""
+            dropped_part = tc.split("外した楽曲ページ", 1)[-1] if "外した楽曲ページ" in tc else ""
+            ok(chosen == cu[1] and meta_c.get("music_urls") == [cu[1], cu[2]] and "3 つを比べ" in tc
+               and "合わせて進めます" in tc and cu[0] in dropped_part and "20%未満" in dropped_part and "それも入れて" in tc,
+               f"楽曲ページの候補を比べ、一番使われているもの（UGC 31200）と、その20%以上（17700）を合わせて取る。"
+               f"少ないもの（1632）は外したと伝える（主: {chosen[-6:]}）")
             if mc:
-                shutil.rmtree(home / "analyses" / mc.group(1), ignore_errors=True)
+                rec = json.loads((home / "analyses" / mc.group(1) / "raw" / "music_pages.json").read_text(encoding="utf-8"))
+                ok([x.get("video_count") for x in rec] == [31200, 17700] and "合わせて約48,900本" in tc,
+                   "受け付けのときに、ページごとの UGC 数を残し、合計を伝える")
+                r = await c.call_tool("restart_analysis", {"analysis_id": mc.group(1), "music_urls": cu})
+                tr = text_of(r)
+                mr = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", tr)
+                meta_r = json.loads((home / "analyses" / mr.group(1) / "analysis.json").read_text(encoding="utf-8")) if mr else {}
+                ok(not r.is_error and meta_r.get("music_urls") == [cu[1], cu[2], cu[0]] and "外した楽曲ページ" not in tr
+                   and "渡された楽曲ページ 3 つを全部合わせて取る" in tr,
+                   "「それも入れて」: 渡した楽曲ページは全部合わせて取り直す（主は一番使われているもの）")
+                for x in (mc.group(1), mr.group(1) if mr else None):
+                    if x:
+                        shutil.rmtree(home / "analyses" / x, ignore_errors=True)
             r = await c.call_tool("start_analysis", {"song": "", "music_url": url})
             ok("1つだけ渡された" in text_of(r) and "only_one=true" in text_of(r) and not list((home / "analyses").glob("a*")),
                "楽曲ページが1つだけなら、始めずにほかの版を探し直させる")

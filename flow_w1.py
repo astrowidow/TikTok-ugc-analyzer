@@ -163,12 +163,38 @@ def cards(a) -> list:
     return out
 
 
-def ugc_total(a):
-    """楽曲ページに出ている UGC 数（取得のときに読んだもの）。{"n", "text", "at"} か None"""
+def music_pages(a) -> list:
+    """取得した楽曲ページ（1つ目が主）。同じ曲の配信版・sped up 版などを合わせて取ったときは複数"""
+    pages = pr._read_json(a.dir / "raw" / "music_pages.json", None)
+    if isinstance(pages, list) and pages:
+        return pages
     m = pr._read_json(a.dir / "raw" / "music_page.json", {}) or {}
-    if not m.get("video_count"):
+    return [m] if m else []
+
+
+def ugc_total(a):
+    """楽曲ページに出ている UGC 数（取得のときに読んだもの。楽曲ページを合わせて取ったときは合計）。
+    {"n", "text", "at", "parts", "partial"} か None。parts はページごとの {"label", "n", "text", "url"}（2つ以上のとき）"""
+    pages = music_pages(a)
+    got = [m for m in pages if m.get("video_count")]
+    if not got:
         return None
-    return {"n": m["video_count"], "text": m.get("video_count_text") or "", "at": str(m.get("at") or "")[:10]}
+    at = str(got[0].get("at") or "")[:10]
+    if len(pages) == 1:
+        return {"n": got[0]["video_count"], "text": got[0].get("video_count_text") or "", "at": at, "parts": [],
+                "partial": False}
+    parts = [{"label": "／".join(x for x in (m.get("title"), m.get("creator")) if x) or "楽曲ページ",
+              "n": m.get("video_count"), "text": (m.get("video_count_text") or "読めず").replace(" 動画", ""),
+              "url": m.get("url")} for m in pages]
+    return {"n": sum(m["video_count"] for m in got), "text": "＋".join(x["text"] for x in parts), "at": at,
+            "parts": parts, "partial": len(got) < len(pages)}
+
+
+def ugc_parts_line(u) -> str:
+    """合計の内訳（楽曲ページが2つ以上のとき）"""
+    if not u or not u.get("parts"):
+        return ""
+    return "、".join(f"『{x['label']}』{x['text']}" for x in u["parts"])
 
 
 def fmt_count(n) -> str:
@@ -769,8 +795,14 @@ def common_materials(a, base) -> str:
     ph = phases(a)
     u = ugc_total(a)
     total_plays = sum(r["plays"] for r in recs.values())
-    head = (f"- **この曲の UGC 数**（楽曲ページの表示、{u['at']} 時点）: {fmt_count(u['n'])}（表示「{u['text']}」）。記事の数字はこれで語る"
-            if u else "- この曲の UGC 数: 取得していない（記事では UGC 数に触れず、再生数・期間・界隈の広がりで語る）")
+    if u and u["parts"]:
+        head = (f"- **この曲の UGC 数**（同じ曲の楽曲ページ {len(u['parts'])} つの表示の合計、{u['at']} 時点）: {fmt_count(u['n'])}"
+                f"（内訳: {ugc_parts_line(u)}）。記事の数字はこの合計で語る（内訳に触れるなら「原曲と sped up 版などを合わせて」のように、"
+                "読者に分かる言い方で）" + ("。一部のページは数が読めず、合計に入っていない" if u["partial"] else ""))
+    elif u:
+        head = f"- **この曲の UGC 数**（楽曲ページの表示、{u['at']} 時点）: {fmt_count(u['n'])}（表示「{u['text']}」）。記事の数字はこれで語る"
+    else:
+        head = "- この曲の UGC 数: 取得していない（記事では UGC 数に触れず、再生数・期間・界隈の広がりで語る）"
     n_comm = sum(len(v) for v in comment_seqs(a).values())
     return (head + "\n"
             f"- 投稿の期間: {base['period']}\n"
@@ -794,7 +826,9 @@ def analysis_summary(a) -> str:
                      for k, s in sorted(first.items(), key=lambda kv: recs[kv[1]]["date"]))
     path = a.outputs("pathway.md").read_text(encoding="utf-8") if a.outputs("pathway.md").exists() else ""
     u = ugc_total(a)
-    return ((f"- この曲の UGC 数: {fmt_count(u['n'])}（{u['at']} 時点）\n" if u else "") +
+    return ((f"- この曲の UGC 数: {fmt_count(u['n'])}（{u['at']} 時点"
+             + (f"。同じ曲の楽曲ページ {len(u['parts'])} つの合計: {ugc_parts_line(u)}" if u["parts"] else "") + "）\n"
+             if u else "") +
             "#### 段階\n" + "\n".join(f"- {p['name']}（{p['start']}〜{p['end']}）: {p.get('summary', '')}" for p in ph) +
             "\n\n#### 界隈（初出の順）\n" + comm + "\n\n#### 拡散経路の下書き\n" + path[:4000])
 
@@ -1637,8 +1671,12 @@ def appendix(a) -> str:
     miss = summ.get("cells_without_comments") or []
     u = ugc_total(a)
     lines = ["## 9. 付録：使ったデータと信頼度", "",
-             (f"- この曲の UGC 数（楽曲ページの表示）: {u['text']}（{u['at']} 時点）" if u else "- この曲の UGC 数: 取得していない"),
-             f"- 楽曲ページのグリッドから集めた動画: {len(recs)}本（取得 {str(acq.get('started_at', ''))[:10]}）。"
+             (f"- この曲の UGC 数（楽曲ページの表示）: {u['text']}（{u['at']} 時点）" if u and not u["parts"] else
+              f"- この曲の UGC 数（同じ曲の楽曲ページ {len(u['parts'])} つの表示の合計）: {fmt_count(u['n'])}（{ugc_parts_line(u)}。{u['at']} 時点）"
+              if u else "- この曲の UGC 数: 取得していない"),
+             f"- 楽曲ページのグリッドから集めた動画: {len(recs)}本（取得 {str(acq.get('started_at', ''))[:10]}"
+             + (f"。楽曲ページごと: " + "、".join(f"{x['label']} {m.get('links', '?')}本" for x, m in zip(u["parts"], music_pages(a)))
+                if u and u["parts"] else "") + "）。"
              f"属性が取れた動画 {sum(1 for r in recs.values() if r.get('enriched'))}本（取れなかったものは写真投稿・削除済みなど）",
              f"- ラベルを付けた動画: {len(labs)}本（確信度 H {conf.get('H', 0)} / M {conf.get('M', 0)} / L {conf.get('L', 0)}）",
              f"- コメントを取った動画: {cm.get('videos_ok', '?')}本・{cm.get('comments', '?')}件"

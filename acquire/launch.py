@@ -34,7 +34,9 @@ DERIVE_SECONDS = 120
 TYPICAL_VIDEOS = 900
 
 
-def new_analysis(owner: str, song: str, artist: str = "", music_url: str = "", settings: dict | None = None) -> str:
+def new_analysis(owner: str, song: str, artist: str = "", music_url: str = "", settings: dict | None = None,
+                 music_urls: list | None = None) -> str:
+    """music_urls: 同じ曲の楽曲ページが複数のとき全部（1つ目が主。music_url はその主）"""
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
     aid = f"a{stamp}-{secrets.token_hex(2)}"
     d = pipeline.ANALYSES_DIR / aid
@@ -47,6 +49,7 @@ def new_analysis(owner: str, song: str, artist: str = "", music_url: str = "", s
         "owner": owner,
         "created_at": pipeline.now(),
         "music_url": music_url or None,
+        "music_urls": [u for u in (music_urls or [music_url]) if u],
         "download_key": secrets.token_urlsafe(24),
         "acquisition": {"status": "queued", "queued_at": pipeline.now(), "steps": {}},
         "layout": {"raw": "①原本", "fetch_log": "②取得の記録", "derived": "③計算物", "outputs": "④成果物",
@@ -67,7 +70,7 @@ def find_active(owner: str, song: str, music_url: str = ""):
         st = (m.get("acquisition") or {}).get("status")
         if st not in ("queued", "running"):
             continue
-        if (music_url and m.get("music_url") == music_url) or \
+        if (music_url and music_url in ([m.get("music_url")] + list(m.get("music_urls") or []))) or \
                 (song and (m.get("song") or {}).get("title", "").strip().lower() == song.strip().lower()):
             return d.name
     return None
@@ -116,8 +119,7 @@ def _remaining_seconds(m: dict) -> int:
         if st.get("status") == "running" and step == "comments":
             e = max(600.0, e - float(st.get("active_hours") or 0) * 3600)
             # 走行中なら取れた本数から残りを見る
-            summ = pipeline.read_json(pipeline.ANALYSES_DIR / m["analysis_id"] / "fetch_log" / "comments_summary.json", {}) or {}
-            done_n = sum(1 for r in summ.get("rows", []) if r.get("status") == "ok")
+            done_n = pipeline.comments_ok(pipeline.ANALYSES_DIR / m["analysis_id"])
             if done_n:
                 e = min(e, max(0, n_pool - done_n) * float(s["min_per_video"]) * 60 + 300)
         elif st.get("status") == "running" and st.get("started_at"):
@@ -156,11 +158,7 @@ def progress(analysis_id: str) -> dict:
            "step": step, "step_label": pipeline.STEP_LABELS.get(step) if step else None}
     if step == "comments":   # 「コメントを取る 35/197本」と出すため
         d = pipeline.ANALYSES_DIR / analysis_id
-        summ = pipeline.read_json(d / "fetch_log" / "comments_summary.json", {}) or {}
-        done_n = sum(1 for r in summ.get("rows", []) if r.get("status") == "ok")
-        if not done_n and (d / "raw" / "comments.jsonl").exists():
-            done_n = sum(1 for _ in open(d / "raw" / "comments.jsonl", encoding="utf-8"))
-        res["comments_done"] = done_n
+        res["comments_done"] = pipeline.comments_ok(d)
         res["n_pool"] = (((acq.get("steps") or {}).get("pool") or {}).get("detail") or {}).get("n_pool")
     return res
 

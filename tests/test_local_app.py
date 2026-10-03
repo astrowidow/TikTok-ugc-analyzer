@@ -228,3 +228,230 @@ class TestCancelInApp(unittest.TestCase):
         finally:
             os.environ.pop("UGC_COLLECTOR_HOME", None)
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestMultiPage(unittest.TestCase):
+    """同じ曲の楽曲ページを合わせて取る（2026-10-04 ユーザー「20%でよい」）。TikTok には触らない"""
+    U1 = "https://www.tiktok.com/music/a-7000000000000000101"
+    U2 = "https://www.tiktok.com/music/a-sped-up-7000000000000000102"
+
+    def setUp(self):
+        from acquire import pipeline
+        self.pl = pipeline
+        self.tmp = tempfile.mkdtemp()
+        self.old = pipeline.ANALYSES_DIR
+        pipeline.ANALYSES_DIR = Path(self.tmp)
+        aid = "a20991231-0000-mult"
+        self.d = d = Path(self.tmp) / aid
+        for sub in ("raw", "derived", "fetch_log"):
+            (d / sub).mkdir(parents=True)
+        (d / "analysis.json").write_text(json.dumps({"analysis_id": aid, "title": "t", "music_url": self.U1,
+                                                     "music_urls": [self.U1, self.U2],
+                                                     "acquisition": {"status": "running"}}), encoding="utf-8")
+        with open(d / "raw" / "grid_links.jsonl", "w", encoding="utf-8") as f:
+            for vid, src in (("101", 1), ("102", 1), ("201", 2)):
+                f.write(json.dumps({"url": f"https://www.tiktok.com/@x/video/{vid}", "video_id": vid, "source": src}) + "\n")
+        (d / "derived" / "pool.tsv").write_text("video_id\tweek\tpriority\treasons\tcap\n101\tw1\t1\tkey\t120\n201\tw1\t2\tweek\t40\n",
+                                                encoding="utf-8")
+        self.run_ = pipeline.Run(aid)
+
+    def tearDown(self):
+        self.pl.ANALYSES_DIR = self.old
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_music_urls_keeps_main_first(self):
+        self.assertEqual(self.run_.music_urls(), [self.U1, self.U2])
+        self.assertEqual(self.run_.link_sources(), {"101": 1, "102": 1, "201": 2})
+
+    def test_comment_pages_split_pool(self):
+        pages = self.run_.comment_pages()
+        self.assertEqual([p[0] for p in pages], [self.U1, self.U2])
+        self.assertEqual(pages[0][2].name, "comments_summary.json")   # 1ページ目は前と同じ名前
+        self.assertEqual(pages[1][2].name, "comments_summary_p2.json")
+        self.assertEqual(pages[1][3].name, "substitutions_p2.tsv")
+        p1 = pages[0][1].read_text(encoding="utf-8").splitlines()
+        p2 = pages[1][1].read_text(encoding="utf-8").splitlines()
+        self.assertEqual((p1[0], len(p1), p1[1][:3]), ("video_id\tweek\tpriority\treasons\tcap", 2, "101"))
+        self.assertEqual((len(p2), p2[1][:3]), (2, "201"))
+
+    def test_comment_pages_single(self):
+        m = json.loads((self.d / "analysis.json").read_text(encoding="utf-8"))
+        m["music_urls"] = [self.U1]
+        (self.d / "analysis.json").write_text(json.dumps(m), encoding="utf-8")
+        pages = self.run_.comment_pages()
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0][1].name, "pool.tsv")   # 1ページなら前と同じファイル
+
+    def test_check_comments_merges_pages(self):
+        fl = self.d / "fetch_log"
+        (fl / "comments_summary.json").write_text(json.dumps({"rows": [{"status": "ok"}], "missing": ["9"],
+                                                              "substitutions": [{"substitute": "102"}]}), encoding="utf-8")
+        (fl / "comments_summary_p2.json").write_text(json.dumps({"rows": [{"status": "ok"}, {"status": "error"}],
+                                                                 "missing": ["8", "7"]}), encoding="utf-8")
+        with open(self.d / "raw" / "comments.jsonl", "w", encoding="utf-8") as f:
+            for vid in ("101", "201"):
+                f.write(json.dumps({"video_id": vid, "status": "ok", "comments": [{"aweme_id": vid}] * 3}) + "\n")
+        self.assertEqual(self.pl.comments_ok(self.d), 2)
+        res = self.run_._check_comments(False)
+        self.assertEqual((res["videos_ok"], res["unreachable"], res["substituted"]), (2, 3, 1))
+        self.assertEqual(res["videos_ok_by_page"], {"1": 1, "2": 1})
+
+    def test_ugc_total_sums_pages(self):
+        import types
+        import flow_w1
+        a = types.SimpleNamespace(dir=self.d)
+        (self.d / "raw" / "music_pages.json").write_text(json.dumps([
+            {"url": self.U1, "title": "きゃわぽっぴんどぅー", "creator": "iLiFE!", "video_count": 31200,
+             "video_count_text": "31.2K 動画", "at": "2026-10-04T12:00:00+09:00", "links": 400},
+            {"url": self.U2, "title": "きゃわぽっぴんどぅー (sped up)", "creator": "iLiFE!", "video_count": 17700,
+             "video_count_text": "17.7K 動画", "at": "2026-10-04T12:05:00+09:00", "links": 150}]), encoding="utf-8")
+        u = flow_w1.ugc_total(a)
+        self.assertEqual((u["n"], u["text"], u["at"], len(u["parts"]), u["partial"]),
+                         (48900, "31.2K＋17.7K", "2026-10-04", 2, False))
+        self.assertIn("『きゃわぽっぴんどぅー (sped up)／iLiFE!』17.7K", flow_w1.ugc_parts_line(u))
+        (self.d / "raw" / "music_pages.json").unlink()
+        (self.d / "raw" / "music_page.json").write_text(json.dumps({"video_count": 1632, "video_count_text": "1632 動画",
+                                                                    "at": "2026-10-04"}), encoding="utf-8")
+        u = flow_w1.ugc_total(a)
+        self.assertEqual((u["n"], u["parts"]), (1632, []))   # 1ページなら前と同じ
+
+
+class TestPickPages(unittest.TestCase):
+    """楽曲ページの選び方: 公式のページのうち一番使われているものを主に、その20%以上を合わせる。個人の音源は入れない"""
+
+    def test_rule(self):
+        import proto_runner as pr
+        urls = [f"https://www.tiktok.com/music/x-{n}" for n in (1, 2, 3, 4)]
+        infos = {urls[0]: ("きゃわぽっぴんどぅー", "iLiFE!", 1632), urls[1]: ("きゃわぽっぴんどぅー", "iLiFE!", 31200),
+                 urls[2]: ("きゃわぽっぴんどぅー (sped up)", "iLiFE!", 17700),
+                 urls[3]: ("オリジナル楽曲 - someone", "someone", 50000)}
+
+        class Fake:
+            def inspect_many(self, us):
+                return [{"title": infos[u][0], "creator": infos[u][1], "video_count": infos[u][2],
+                         "video_count_text": f"{infos[u][2]} 動画"} for u in us]
+        old = pr.LOCAL
+        pr.LOCAL = Fake()
+        try:
+            take, dropped = pr._pick_music_pages("きゃわぽっぴんどぅー", "iLiFE!", urls)
+            self.assertEqual([u for u, _ in take], [urls[1], urls[2]])
+            why = {u: w for u, _, w in dropped}
+            self.assertIn("20%未満", why[urls[0]])
+            self.assertIn("個人の音源", why[urls[3]])
+            take, dropped = pr._pick_music_pages("きゃわぽっぴんどぅー", "iLiFE!", urls, take_all=True)
+            self.assertEqual((len(take), dropped), (4, []))   # 利用者が渡したものは全部
+        finally:
+            pr.LOCAL = old
+
+
+class TestListMultiPage(unittest.TestCase):
+    """一覧の段を、偽のブラウザで楽曲ページ2つから回す（TikTok には触らない）"""
+
+    def test_step_list(self):
+        import types
+        from acquire import pipeline
+        tmp = tempfile.mkdtemp()
+        old_dir = pipeline.ANALYSES_DIR
+        pipeline.ANALYSES_DIR = Path(tmp)
+        U1, U2 = TestMultiPage.U1, TestMultiPage.U2
+        grids = {U1: [f"https://www.tiktok.com/@x/video/{v}?q=1" for v in ("101", "102", "300")],
+                 U2: [f"https://www.tiktok.com/@x/video/{v}" for v in ("300", "201")]}   # 300 は両方に出る
+        heads = {U1: {"title": "曲", "creator": "歌手", "video_count_text": "31.2K 動画"},
+                 U2: {"title": "曲 (sped up)", "creator": "歌手", "video_count_text": None}}   # 2つ目は読めない
+
+        class Driver:
+            url = None
+
+            def get(self, u):
+                self.url = u
+
+            def execute_script(self, js):
+                if js == pipeline.MUSIC_PAGE_JS:
+                    return dict(heads[self.url])
+                if js == "COUNT":
+                    return len(grids[self.url])
+                return list(grids[self.url])
+
+            def find_element(self, *a):
+                return types.SimpleNamespace(send_keys=lambda *k: None)
+
+            def quit(self):
+                pass
+        fake = types.SimpleNamespace(create_headless_driver=Driver, PAGE_LOAD_TIME=0, SCROLL_PAUSE_TIME=0,
+                                     _COUNT_LINKS_JS="COUNT")
+        old_mod = sys.modules.get("scraper")
+        sys.modules["scraper"] = fake
+        old_wait = pipeline.read_music_page.__defaults__
+        pipeline.read_music_page.__defaults__ = (0,)
+        try:
+            aid = "a20991231-0000-list"
+            d = Path(tmp) / aid
+            (d / "raw").mkdir(parents=True)
+            (d / "analysis.json").write_text(json.dumps({"analysis_id": aid, "title": "t", "music_url": U1,
+                                                         "music_urls": [U1, U2], "acquisition_settings":
+                                                         {"list_sets": 2, "list_scrolls": 2, "list_stall": 1},
+                                                         "acquisition": {"status": "running"}}), encoding="utf-8")
+            # 受け付けのときに読んだ UGC 数（2つ目はここでしか読めていない）
+            (d / "raw" / "music_pages.json").write_text(json.dumps([
+                {"url": U1, "video_count": 31000, "video_count_text": "31K 動画", "how": "受け付け"},
+                {"url": U2, "video_count": 17700, "video_count_text": "17.7K 動画", "how": "受け付け"}]), encoding="utf-8")
+            run = pipeline.Run(aid)
+            run.lock = lambda what: None
+            res = run.step_list()
+            links = [json.loads(x) for x in (d / "raw" / "grid_links.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([(g["video_id"], g["source"]) for g in links],
+                             [("101", 1), ("102", 1), ("300", 1), ("201", 2)])   # 重ねない・見つけたページを残す
+            pages = json.loads((d / "raw" / "music_pages.json").read_text(encoding="utf-8"))
+            self.assertEqual([(p["video_count"], p["links"], p["page"]) for p in pages], [(31200, 3, 1), (17700, 1, 2)])
+            self.assertNotIn("how", pages[0])
+            self.assertEqual(json.loads((d / "raw" / "music_page.json").read_text(encoding="utf-8"))["url"], U1)
+            self.assertEqual((res["links"], res["ugc_total"], len(res["pages"])), (4, 48900, 2))
+            self.assertEqual((d / "raw" / "grid_links.csv").read_text(encoding="utf-8").count("\n"), 5)
+        finally:
+            pipeline.read_music_page.__defaults__ = old_wait
+            if old_mod is not None:
+                sys.modules["scraper"] = old_mod
+            else:
+                sys.modules.pop("scraper", None)
+            pipeline.ANALYSES_DIR = old_dir
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestCommentsMultiPage(TestMultiPage):
+    """コメントの段: 楽曲ページごとに、そのページのプールで、そのページのグリッドから取る（取得の係は偽物）"""
+
+    def test_step_comments(self):
+        from acquire import spatest
+        calls = []
+        d = self.d
+
+        class Fake:
+            def __init__(self, a):
+                self.a, self.d, self.yielded, self.between_videos = a, None, 0.0, None
+                pool = open(a.pool, encoding="utf-8").read().splitlines()[1:]
+                self.rows = [{"video_id": r.split("\t")[0], "status": "ok"} for r in pool]
+
+            def run(self):
+                calls.append((self.a.music_url, Path(self.a.pool).name, Path(self.a.summary).name, Path(self.a.subs_out).name))
+                with open(self.a.out, "a", encoding="utf-8") as f:
+                    for r in self.rows:
+                        f.write(json.dumps({**r, "comments": [{"aweme_id": r["video_id"]}]}) + "\n")
+                Path(self.a.summary).write_text(json.dumps({"rows": self.rows}), encoding="utf-8")
+
+            def log(self, m):
+                pass
+        old = (spatest.SpaCollector, self.pl.ensure_chrome)
+        spatest.SpaCollector = Fake
+        self.pl.ensure_chrome = lambda port, log: None
+        (d / "derived" / "llm_input").mkdir(parents=True)
+        try:
+            self.run_.lock = lambda what: None
+            m = json.loads((d / "analysis.json").read_text(encoding="utf-8"))
+            m["acquisition"]["steps"] = {}
+            (d / "analysis.json").write_text(json.dumps(m), encoding="utf-8")
+            res = self.run_.step_comments()
+        finally:
+            spatest.SpaCollector, self.pl.ensure_chrome = old
+        self.assertEqual(calls, [(self.U1, "pool_p1.tsv", "comments_summary.json", "substitutions.tsv"),
+                                 (self.U2, "pool_p2.tsv", "comments_summary_p2.json", "substitutions_p2.tsv")])
+        self.assertEqual((res["videos_ok"], res["videos_ok_by_page"]), (2, {"1": 1, "2": 1}))

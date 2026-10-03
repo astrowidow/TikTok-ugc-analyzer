@@ -134,10 +134,10 @@ def _build_server(user_of=None, local: bool = False):
         title="分析を始める",
         description=("TikTok の楽曲の UGC 分析を始める（取得を待ち行列に入れる）。利用者が「〇〇を分析して」と頼んだときに使う。"
                      "song は曲名、artist はアーティスト名。music_url は TikTok の楽曲ページ（https://www.tiktok.com/music/…）。"
-                     + ("music_url（楽曲ページ）は、先にウェブ検索で探して付ける。同じ曲の楽曲ページが複数見つかったら（配信版・先行版など）、"
-                        "全部を candidate_urls に入れる（サービスが UGC 数を比べて一番使われているページを選ぶ）。"
-                        "1つしか見つからないときは、検索を変えてほかのページが無いか確かめてから、only_one=true を付けて渡す"
-                        "（利用者が URL を指定したときは、探し直さずに only_one=true）。"
+                     + ("music_url（楽曲ページ）は、先にウェブ検索で探して付ける。同じ曲の楽曲ページが複数見つかったら（配信版・先行版・sped up 版など）、"
+                        "全部を candidate_urls に入れる（サービスが UGC 数を比べ、一番使われているページと、その2割以上使われている同じ曲の公式のページを合わせて取る）。"
+                        "1つしか見つからないときは、検索を変えてほかのページが無いか確かめてから、only_one=true を付けて渡す。"
+                        "利用者が楽曲ページの URL を渡したときは、探し直さずに全部を music_urls に入れる（2つ以上なら全部から取って合わせる）。"
                         "楽曲ページが見つからなければ、その曲を使った TikTok の動画の URL を"
                         "video_url に付けてもよい（サービスが動画から楽曲ページを読み取る）。どちらも無しで呼ぶと、探し方が返ってくるだけで取得は始まらない。"
                         "利用者に URL を頼むのは、何通りも検索して見つからないときの最後の手段。利用者に確認は求めない。"
@@ -150,9 +150,9 @@ def _build_server(user_of=None, local: bool = False):
     )
     async def start_analysis(ctx: Context, song: str, artist: str = "", music_url: str | None = None,
                              video_url: str | None = None, candidate_urls: list[str] | None = None,
-                             only_one: bool = False) -> str:
+                             only_one: bool = False, music_urls: list[str] | None = None) -> str:
         return _call(runner.start_analysis, _user(ctx), song, artist, music_url or "", video_url or "",
-                     candidate_urls or [], only_one)["text"]
+                     candidate_urls or [], only_one, music_urls or [])["text"]
 
     @mcp.tool(
         title="分析の状態",
@@ -249,15 +249,17 @@ def _build_server(user_of=None, local: bool = False):
 
     @mcp.tool(
         title="取得をやめてやり直す",
-        description="**利用者が「〇〇の取得をやめて、このページでやり直して」「〇〇の取得をやめて、最初からやり直して」のように頼んだときだけ使う**。"
+        description="**利用者が「〇〇の取得をやめて、このページでやり直して」「〇〇の取得をやめて、最初からやり直して」「外したページも入れて」のように頼んだときだけ使う**。"
                     "取得中・順番待ち・止まった分析の取得をやめ、music_url（https://www.tiktok.com/music/…）があればその楽曲ページで取り直す。"
+                    "楽曲ページを2つ以上で取り直すとき（外したページを足すときは、進めていたページも含めて全部）は music_urls に入れる（全部から取って合わせる）。"
                     "music_url を省くと、楽曲ページ探しから最初にやり直す（返ってくる探し方に従って検索し、start_analysis を呼ぶ）。"
                     "analysis_id は分析 ID か曲名。返ってきた内容を利用者に短く伝える。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False,
                                     open_world_hint=True),
     )
-    async def restart_analysis(ctx: Context, music_url: str | None = None, analysis_id: str | None = None) -> str:
-        return _call(runner.restart_analysis, _user(ctx), analysis_id, music_url or "")["text"]
+    async def restart_analysis(ctx: Context, music_url: str | None = None, analysis_id: str | None = None,
+                               music_urls: list[str] | None = None) -> str:
+        return _call(runner.restart_analysis, _user(ctx), analysis_id, music_url or "", music_urls or [])["text"]
 
     @mcp.tool(
         title="取得をやめる",

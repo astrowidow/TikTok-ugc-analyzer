@@ -88,8 +88,8 @@ async def main():
         async with Client(params, read_timeout_seconds=120) as c:
             print("[1] 初期化・道具・instructions")
             tools = sorted(t.name for t in (await c.list_tools()).tools)
-            ok(tools == ["next_task", "prompts", "read", "revise", "settings", "start_analysis", "status", "submit",
-                         "update_knowledge"], f"道具 {tools}")
+            ok(tools == ["next_task", "prompts", "read", "restart_analysis", "revise", "settings", "start_analysis", "status",
+                         "submit", "update_knowledge"], f"道具 {tools}")
             ok("next_task" in (c.instructions or ""), "instructions が返る")
 
             print("[2] status と start_analysis")
@@ -112,7 +112,17 @@ async def main():
                 ok(meta["title"] == "てすと", f"URL だけで頼むと題名は曲名の部分（{meta['title']}）")
                 r = await c.call_tool("status", {"analysis_id": m_aid.group(1)})
                 ok("取得アプリが動いていません" in text_of(r), "取得アプリが止まっていると status がそう言う")
-                shutil.rmtree(home / "analyses" / m_aid.group(1))
+                url2 = "https://www.tiktok.com/music/%E3%81%A6%E3%81%99%E3%81%A8-7000000000000000002"
+                r = await c.call_tool("restart_analysis", {"analysis_id": m_aid.group(1), "music_url": url2})
+                t2 = text_of(r)
+                old = json.loads((home / "analyses" / m_aid.group(1) / "analysis.json").read_text(encoding="utf-8"))
+                m2 = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", t2)
+                ok(not r.is_error and "前の取得" in t2 and url2 in t2 and old["acquisition"]["status"] == "cancelled"
+                   and (home / "locks" / f"cancel-{m_aid.group(1)}").exists() and m2 and m2.group(1) != m_aid.group(1),
+                   "取得をやめて別の楽曲ページでやり直せる（前の分析はやめた・止める印・新しい分析）")
+                for x in (m_aid.group(1), m2.group(1) if m2 else None):
+                    if x:
+                        shutil.rmtree(home / "analyses" / x, ignore_errors=True)
 
             if aid:
                 print("[3] W1 の next_task と read")

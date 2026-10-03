@@ -178,7 +178,35 @@ class Controller:
             except Exception as e:
                 self.log.info("知識ベースの確かめができませんでした: %s", e)
 
+    def _handle_cancels(self):
+        """Claude の道具が「この取得をやめる」の印を置いたら、その分析を取っている係を止める（2026-10-04、取得のやり直し）。
+        係を止めたあと、分析の状態を「やめた」に書き直す（係が最後に書いた状態で上書きされていることがあるため）"""
+        for flag in config.LOCK_DIR.glob("cancel-*"):
+            aid = flag.name[len("cancel-"):]
+            p = config.ANALYSES_DIR / aid / "analysis.json"
+            try:
+                import json as _json
+                m = _json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                flag.unlink(missing_ok=True)
+                continue
+            acq = m.get("acquisition") or {}
+            wpid = self.worker.pid()
+            if wpid and acq.get("pid") == wpid and self.worker.running():
+                self.worker.stop(f"利用者がやめた（{aid}）")
+            if acq.get("status") != "cancelled":
+                from acquire import pipeline
+                acq.update({"status": "cancelled", "cancelled_at": acq.get("cancelled_at") or pipeline.now()})
+                m["acquisition"] = acq
+                pipeline.write_json(p, m)
+            self.known[aid] = "cancelled"
+            self.pending_retry.pop(aid, None)
+            flag.unlink(missing_ok=True)
+            self.log.info("取得をやめました（利用者の頼み）: %s", aid)
+            notify.send(f"「{m.get('title') or aid}」の取得をやめました", "別の楽曲ページでやり直します")
+
     def _tick(self):
+        self._handle_cancels()
         if not chrome.find_binary():
             self.status_text = "Google Chrome が必要です（入れてから開き直してください）"
             return

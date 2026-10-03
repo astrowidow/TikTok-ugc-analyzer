@@ -80,6 +80,11 @@ class LocalHooks:
             except Exception:
                 pass
 
+    def request_stop(self, analysis_id: str) -> None:
+        """この分析の取得をやめる印を置く（メニューバーのアプリが5秒おきに見て、係を止める）"""
+        config.LOCK_DIR.mkdir(parents=True, exist_ok=True)
+        (config.LOCK_DIR / f"cancel-{analysis_id}").write_text(str(os.getpid()), encoding="utf-8")
+
     def ensure_app(self) -> str:
         """メニューバーの取得アプリが動いていなければ起こす（仕事は、取得アプリが5秒おきに見て拾う）"""
         if app_running():

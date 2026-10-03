@@ -233,6 +233,8 @@ def list_analyses(user_id: str) -> list:
 def _is_active(a: Analysis) -> bool:
     """まだ終わっていない分析か（取得中・AI の仕事が残っている）"""
     acq = a.meta.get("acquisition")
+    if acq and acq.get("status") == "cancelled":   # 利用者がやめた取得（別の楽曲ページでやり直した）
+        return False
     if acq and acq.get("status") != "done":
         return True
     st = _state(a)
@@ -688,6 +690,9 @@ def _acq_view(a: Analysis):
     if not acq or acq.get("status") == "done":
         return None
     back = f"終わったら「{a.title}の分析を続けて」と言ってください。"
+    if acq.get("status") == "cancelled":
+        return {"state": "cancelled", "message": "この取得はやめました（" + (acq.get("cancel_reason") or "利用者がやめた") + "）。",
+                "eta_seconds": None}
     if acq.get("status") == "failed":
         if LOCAL is not None:
             msg = (f"取得が止まりました（{acq.get('error')}）。取得アプリのメニュー「止まった取得を続きから再開」で、"
@@ -1308,6 +1313,35 @@ def prompts(user_id: str, action: str = "list", name: str | None = None, text: s
                         + "\n\n利用者が「〇〇の指示書をこう変えて」と頼んだら、action=get で全文を読み、直した全文を action=set で渡す。"}
     except ps.PromptError as e:
         raise RunnerError(str(e)) from e
+
+
+def restart_analysis(user_id: str, ref: str | None, music_url: str) -> dict:
+    """取得をやめて、別の楽曲ページでやり直す（取得アプリの形。2026-10-04 ユーザー「〇〇の取得をやめて、このページでやり直して、
+    と言えば取り直せる道具を足しましょう」）。前の分析は「やめた」にして、取得アプリが係を止める（印のファイル）"""
+    if LOCAL is None:
+        raise RunnerError("取得のやり直しは、このサービスでは使えません（運営に連絡してください）")
+    music_url = (music_url or "").strip().split("?")[0]
+    if not MUSIC_URL_RE.match(music_url):
+        raise RunnerError("楽曲ページの URL は https://www.tiktok.com/music/曲名-数字 の形です")
+    with _lock:
+        a = resolve(user_id, ref)
+        acq = a.meta.get("acquisition") or {}
+        if acq.get("status") == "done":
+            raise RunnerError(f"「{a.title}」の取得はもう終わっています。別の楽曲ページで取り直すなら、新しく分析を頼んでください")
+        if acq.get("status") == "cancelled":
+            raise RunnerError(f"「{a.title}」の取得はもうやめてあります")
+        old_url = a.meta.get("music_url")
+        m = _read_json(a.dir / "analysis.json")
+        m["acquisition"].update({"status": "cancelled", "cancelled_at": _now(),
+                                 "cancel_reason": f"利用者が別の楽曲ページでやり直した（{music_url}）"})
+        _write_json(a.dir / "analysis.json", m)
+        LOCAL.request_stop(a.id)   # 取得アプリが、この分析を取っている係を止める
+        song = (m.get("song") or {}).get("title") or a.title
+        artist = (m.get("song") or {}).get("artist") or ""
+    res = start_analysis(user_id, song, artist, music_url)
+    res["text"] = (f"「{a.title}」の前の取得（{old_url or '楽曲ページ不明'}）をやめました。\n" + res["text"])
+    res["cancelled"] = a.id
+    return res
 
 
 def update_knowledge(user_id: str) -> dict:

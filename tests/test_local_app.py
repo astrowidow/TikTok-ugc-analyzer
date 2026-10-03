@@ -193,3 +193,38 @@ class TestReaderWords(unittest.TestCase):
         self.assertEqual(pipeline.parse_count("131.9K 動画"), 131900)
         self.assertEqual(pipeline.parse_count("3.5万"), 35000)
         self.assertIsNone(pipeline.parse_count(""))
+
+
+class TestCancelInApp(unittest.TestCase):
+    """取得のやり直し: 止める印があれば、メニューバーのアプリがその分析を取っている係を止める"""
+
+    def test_handle_cancels(self):
+        import logging
+        import subprocess
+        tmp = tempfile.mkdtemp()
+        os.environ["UGC_COLLECTOR_HOME"] = tmp
+        sys.path.insert(0, str(ROOT / "collector"))
+        try:
+            import collector_app.config as config
+            importlib.reload(config)
+            config.setup_env()
+            import collector_app.app as app
+            importlib.reload(app)
+            ctl = app.Controller(config.code_dir(), logging.getLogger("t"))
+            proc = subprocess.Popen(["sleep", "60"], start_new_session=True)   # 取得の係の代わり
+            ctl.worker.proc = proc
+            aid = "a20991231-0000-test"
+            d = config.ANALYSES_DIR / aid
+            d.mkdir(parents=True)
+            (d / "analysis.json").write_text(json.dumps({"analysis_id": aid, "title": "試験",
+                                                         "acquisition": {"status": "running", "pid": proc.pid}}), encoding="utf-8")
+            (config.LOCK_DIR / f"cancel-{aid}").write_text("1", encoding="utf-8")
+            app.notify.send = lambda *a, **k: None
+            ctl._handle_cancels()
+            self.assertIsNotNone(proc.poll())   # 係が止まった
+            m = json.loads((d / "analysis.json").read_text(encoding="utf-8"))
+            self.assertEqual(m["acquisition"]["status"], "cancelled")
+            self.assertFalse((config.LOCK_DIR / f"cancel-{aid}").exists())
+        finally:
+            os.environ.pop("UGC_COLLECTOR_HOME", None)
+            shutil.rmtree(tmp, ignore_errors=True)

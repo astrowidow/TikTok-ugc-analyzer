@@ -1,0 +1,13 @@
+# UGC Collector（試作）を作る・ソースから動かすための環境。Python 3.13（python.org 版）で作る（collector/build.sh）
+# 取得の部品が使うもの（本線の requirements.txt と同じ範囲）
+selenium>=4.39,<5
+pandas>=2.3,<4
+requests>=2.32,<3
+pillow>=11,<13
+# アプリ（メニューバー・通知・Chrome との話）
+websocket-client>=1.8,<2
+rumps>=0.4,<0.5
+pyobjc-framework-Cocoa>=11
+pyobjc-framework-UserNotifications>=11
+# 固める
+pyinstaller>=6.10,<7

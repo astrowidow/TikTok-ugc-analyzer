@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="250 160 620 760" width="44" height="44">
+  <!-- メニューバー用（テンプレート画像: 黒と透明だけ。Mac が明暗に合わせて色を変える）。割れた音符の形だけ -->
+  <defs>
+    <clipPath id="left"><path d="M0 0 L742 0 L700 182 L642 330 L694 424 L566 522 L604 604 L438 760 L474 862 L362 1024 L0 1024 Z"/></clipPath>
+    <clipPath id="right"><path d="M742 0 L1024 0 L1024 1024 L362 1024 L474 862 L438 760 L604 604 L566 522 L694 424 L642 330 L700 182 Z"/></clipPath>
+    <g id="note" fill="#000" stroke="#000">
+      <circle cx="432" cy="694" r="124"/>
+      <path d="M 514 700 L 514 262" stroke-width="96" stroke-linecap="round" fill="none"/>
+      <path d="M 514 292 C 556 410, 676 418, 752 482" stroke-width="96" stroke-linecap="round" fill="none"/>
+    </g>
+  </defs>
+  <!-- かけらごとずらす（clip の外側で動かさないと割れ目が開かない） -->
+  <g transform="translate(-22,-12)"><g clip-path="url(#left)"><use href="#note"/></g></g>
+  <g transform="translate(40,22) rotate(4 560 560)"><g clip-path="url(#right)"><use href="#note"/></g></g>
+</svg>

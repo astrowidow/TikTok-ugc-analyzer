@@ -106,7 +106,7 @@ async def main():
                                                      "video_url": "https://www.tiktok.com/@someone/video/7000000000000000001"})
             ok("頼まれた曲「べつのきょく」と違う" in text_of(r) and not list((home / "analyses").glob("a*")),
                "動画の音源が頼まれた曲と違えば、始めずに別の動画を探すよう返す")
-            r = await c.call_tool("start_analysis", {"song": "てすと", "artist": "だれか",
+            r = await c.call_tool("start_analysis", {"song": "てすと", "artist": "だれか", "only_one": True,
                                                      "video_url": "https://www.tiktok.com/@someone/video/7000000000000000001"})
             tv = text_of(r)
             mv = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", tv)
@@ -123,8 +123,11 @@ async def main():
             if mc:
                 shutil.rmtree(home / "analyses" / mc.group(1), ignore_errors=True)
             r = await c.call_tool("start_analysis", {"song": "", "music_url": url})
+            ok("1つだけ渡された" in text_of(r) and "only_one=true" in text_of(r) and not list((home / "analyses").glob("a*")),
+               "楽曲ページが1つだけなら、始めずにほかの版を探し直させる")
+            r = await c.call_tool("start_analysis", {"song": "", "music_url": url, "only_one": True})
             t = text_of(r)
-            ok("次の楽曲ページで進めます" in t and url in t, "URL があればそのまま始め、どの楽曲ページで進めるかを返す")
+            ok("次の楽曲ページで進めます" in t and url in t, "ほかに無ければ（only_one）そのまま始め、どの楽曲ページで進めるかを返す")
             ok(not r.is_error and "あなたの Mac" in t and "メール" not in t, "start_analysis が Mac 向けの文面で受け付ける")
             m_aid = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", t)
             ok(m_aid is not None, "分析 ID が返る")

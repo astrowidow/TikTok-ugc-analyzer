@@ -836,7 +836,7 @@ def _pick_music_page(song: str, artist: str, urls: list) -> tuple:
 
 
 def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
-                   candidate_urls: list | None = None) -> dict:
+                   candidate_urls: list | None = None, only_one: bool = False) -> dict:
     """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係か、利用者の Mac の取得アプリが走らせる）。
     取得アプリの形では、どの楽曲ページで進めるか（題・作者・UGC 数・URL）を返事に出す（2026-10-04 ユーザー
     「止めるのではなく、このページで進めるからね、ってのがプロンプトに出るくらいがいい」）"""
@@ -855,6 +855,15 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
         u = (u or "").strip().split("?")[0]
         if u and MUSIC_URL_RE.match(u) and u.rsplit("-", 1)[-1] not in {c.rsplit("-", 1)[-1] for c in cands}:
             cands.append(u)
+    if LOCAL is not None and len(cands) == 1 and not only_one:
+        # 楽曲ページが1つしか渡されていない: ほかの版（配信版・先行版）を探し直させる（2026-10-04 きゃわぽっぴんどぅー。
+        # Claude が渡した1つは UGC 1,632 で、本命は 31.2K だった）。AI の中のやりとりで、利用者には聞かない
+        return _music_search_hint(song, artist,
+            f"楽曲ページが1つだけ渡された（{cands[0]}）。同じ曲の楽曲ページは配信版・先行版などで複数あることが多く、"
+            "本命は一番使われている（UGC 数が多い）ページのことが多い。下の検索のうち、まだ試していないものを2つ以上試して、"
+            "ほかの楽曲ページが無いか確かめる。見つかった全部（今のページも含めて）を candidate_urls に入れて呼び直す。"
+            "探してもほかに無ければ、同じ URL を music_url に入れ、only_one=true を付けて呼び直す。"
+            "利用者が URL を指定した場合は、探し直さずに only_one=true で呼ぶ。")
     if LOCAL is not None and len(cands) >= 2:   # 候補を比べて、一番使われているページで進める
         music_url, page, others = _pick_music_page(song, artist, cands[:MAX_CANDIDATES])
         found_via = f"（同じ曲の楽曲ページ {min(len(cands), MAX_CANDIDATES)} 本を比べて、一番使われているものを選んだ）"
@@ -1410,7 +1419,7 @@ def restart_analysis(user_id: str, ref: str | None, music_url: str) -> dict:
         LOCAL.request_stop(a.id)   # 取得アプリが、この分析を取っている係を止める
         song = (m.get("song") or {}).get("title") or a.title
         artist = (m.get("song") or {}).get("artist") or ""
-    res = start_analysis(user_id, song, artist, music_url)
+    res = start_analysis(user_id, song, artist, music_url, only_one=True)   # やり直しは利用者が選んだページで
     res["text"] = (f"「{a.title}」の前の取得（{old_url or '楽曲ページ不明'}）をやめました。\n" + res["text"])
     res["cancelled"] = a.id
     return res

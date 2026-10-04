@@ -616,113 +616,28 @@ def dl_url(a, name: str) -> str:
     return f"{PUBLIC_URL}/dl/{download_key(a)}/{name}"
 
 
-MATERIALS_DIR = "素材"
-
-
-def _comment_file_name(src: Path) -> str:
-    """動画ごとのコメントのファイル名を、投稿日_投稿者（seq）に（並べると日付順になる）"""
-    head = src.read_text(encoding="utf-8", errors="replace")[:600]
-    m = re.match(r"# seq (\d+) \| (\d+) \| (\S+)", head)
-    au = re.search(r"投稿者: @([\w.\-]+)", head)
-    if not m:
-        return src.name
-    return f"{m.group(3)}_@{au.group(1) if au else m.group(2)}（seq{m.group(1)}）.md"
-
-
-def _materials_overview(a) -> str:
-    acq = a.meta.get("acquisition") or {}
-    steps = acq.get("steps") or {}
-    lines = [f"# 取得の概要（{a.title}）", "",
-             f"- 取得: {str(acq.get('started_at') or '')[:16].replace('T', ' ')} 〜 {str(acq.get('finished_at') or '')[:16].replace('T', ' ')}",
-             "", "## 楽曲ページ", "", "| | 題／作者 | UGC 数 | 作られた日 | 集めた投稿 | URL |", "|---|---|---|---|---|---|"]
-    for i, m in enumerate(music_pages(a), 1):
-        made = str(m.get("created_at") or "")[:10]
-        if not made:   # 前に取った分析: 楽曲ページの番号（上の32ビットが作られた時刻）から
-            try:
-                made = datetime.datetime.fromtimestamp(int(str(m.get("url", "")).rstrip("/").rsplit("-", 1)[-1]) >> 32).strftime("%Y-%m-%d")
-            except ValueError:
-                made = ""
-        lines.append(f"| {i} | {'／'.join(x for x in (m.get('title'), m.get('creator')) if x) or '?'} | "
-                     f"{m.get('video_count_text') or '読めず'} | {made} | {m.get('links', '')} | {m.get('url', '')} |")
-    b = pr._read_json(a.dir / "fetch_log" / "before_release.json", None)
-    if isinstance(b, dict) and b.get("release"):
-        lines += ["", "## 曲の公開日", "", f"- {str(b['release'])[:10]}（合わせて取った楽曲ページのうち、一番早く作られた日）"]
-        if b.get("videos"):
-            lines.append(f"- これより前の日付で楽曲ページに載っていた投稿 {b['dropped']}本は、あとから音源が付いたものとして、すべての分析から除いた:")
-            lines += [f"  - {str(v.get('posted_at'))[:10]} {v.get('url')}" for v in b["videos"]]
-    li, en, cm = (((steps.get(k) or {}).get("detail") or {}) for k in ("list", "enrich", "comments"))
-    lines += ["", "## 集めた本数", "",
-              f"- 楽曲ページに並んだ投稿: {len(records(a))}本（属性が取れた動画 {en.get('ok', '?')}本。取れなかったものは写真の投稿・削除済みなど）",
-              f"- コメントを取った動画: {cm.get('videos_ok', '?')}本（コメント {cm.get('comments', '?')}件・返信 {cm.get('replies', '?')}件）"]
-    return "\n".join(lines) + "\n"
-
-
-def _materials_axes(a) -> str:
-    tax = pr._read_json(a.outputs("taxonomy.json"), None)
-    fixed = tax is not None
-    tax = tax or pr._read_json(a.outputs("taxonomy_proposal.json"), None)
-    if not tax:
-        return ""
-    lines = [f"# 界隈の定義（{'確定版' if fixed else '案。確認の前'}）", "", "## 界隈（初めて現れた順・代表例つき）", "", present_axes(a, tax), ""]
-    for axis, name in (("community", "界隈"), ("format", "投稿の型"), ("motive", "この曲を使った理由の型")):
-        v = tax.get(axis) or {}
-        lines += [f"## {name}の定義（全文）", ""] + [f"- **{k}**: {d}" for k, d in v.items() if not k.startswith("_")] + [""]
-    return "\n".join(lines)
+WEEKLY_CSV = "週ごとの投稿数.csv"
 
 
 def copy_materials(a) -> None:
-    """レポートのフォルダの「素材」に、読み返しや確かめに使いそうな途中の成果物の写しを置く（取得アプリの形だけ）。
-    （2026-10-04 ユーザー「使いそうな途中生成物は、ユーザが触るレポートのフォルダのサブフォルダに。厳選して。整理はあなたが」）
-    本物は分析のフォルダ。ここは写しなので、消しても分析には響かない。何度呼んでもよい（その時点であるものだけ写す）"""
+    """レポートのフォルダに、週ごとの投稿数と再生の表（Excel 用）を置く（取得アプリの形だけ）。
+    （2026-10-04 ユーザー「週ごとの投稿数・再生数はいい。そのほかはいらない。data.zip があるならいい」）"""
     if not REPORTS_DIR:
         return
-    out = report_folder(a) / MATERIALS_DIR
-    out.mkdir(parents=True, exist_ok=True)
-    have = []
-
-    def put(name: str, text: str, what: str):
-        if text:
-            (out / name).write_text(text, encoding="utf-8")
-            have.append((name, what))
-
-    def tree(name: str, files, what: str, rename=lambda f: f.name):
-        files = [f for f in files if f.is_file()]
-        if not files:
-            return
-        d = out / name
-        d.mkdir(exist_ok=True)
-        for f in files:
-            shutil.copy2(f, d / rename(f))
-        have.append((name + "/", what))
-
-    put("取得の概要.md", _materials_overview(a), "楽曲ページ（題・作者・UGC 数・作られた日）、曲の公開日と除いた投稿、集めた本数")
     wk = a.derived("weekly.tsv")
-    if wk.exists():
-        rows = [ln.split("\t") for ln in wk.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        if rows:
-            import io
-            buf = io.StringIO()
-            w = csv.writer(buf)
-            w.writerow(["週", "投稿数", "再生の合計"])
-            w.writerows(rows[1:])
-            (out / "週ごとの投稿数.csv").write_text(buf.getvalue(), encoding="utf-8-sig")
-            have.append(("週ごとの投稿数.csv", "週ごとの投稿の本数と再生の合計（Excel で開けます。グラフ用）"))
-    put("界隈の定義.md", _materials_axes(a), "界隈・投稿の型・使った理由の型の定義と代表例（確認のあとは確定版）")
-    tree("コメント（動画ごと）", sorted(a.derived("comments").glob("*.md")),
-         "コメントを取った動画ごとの、コメントの一覧（いいね順）。ファイル名は 投稿日_投稿者", _comment_file_name)
-    tree("界隈ごとのコメント分析", sorted(a.outputs("synthesis").glob("*.md")), "界隈ごとにコメントを読んでまとめたもの")
-    for src, name, what in ((a.outputs("pathway.md"), "拡散経路の下書き.md", "段階ごとの広がり方の下書き"),
-                            (a.outputs("outline.md"), "構成案.md", "レポートの章立てと、各章に書くことの計画")):
-        if src.exists():
-            shutil.copy2(src, out / name)
-            have.append((name, what))
-    tree("サムネの一覧", sorted(a.derived("llm_input", "sheets").glob("*.jpg")), "分類に使った動画のサムネを並べた画像（番号は seq）")
-    readme = [f"# 素材（{a.title}）", "",
-              "レポートを作る途中でできたもののうち、読み返しや確かめに使いそうなものの写しです。",
-              "元は分析のフォルダにあるので、ここを消しても分析には影響しません。", "",
-              "| ファイル | 中身 |", "|---|---|"] + [f"| {n} | {w} |" for n, w in have] + [
-              "", "全動画の一覧・全コメント・ラベルの表は、ひとつ上のフォルダの data.zip（Excel 用）に入っています。"]
-    (out / "はじめに.md").write_text("\n".join(readme) + "\n", encoding="utf-8")
+    if not wk.exists():
+        return
+    rows = [ln.split("\t") for ln in wk.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if not rows:
+        return
+    import io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["週", "投稿数", "再生の合計"])
+    w.writerows(rows[1:])
+    d = report_folder(a)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / WEEKLY_CSV).write_text(buf.getvalue(), encoding="utf-8-sig")
 
 
 def review_csv(a, tax: dict) -> str:
@@ -1242,7 +1157,7 @@ def done_materials(a) -> dict:
     if errs or warns:
         note = f"- 検算: 確かめきれなかった点が {len(errs) + len(warns)} 件ある（運営が確認する）。利用者には「数字の一部を運営が確認中」と一言だけ"
     if REPORTS_DIR and links:   # 先頭にフォルダ（2026-10-03 ユーザー「最終の返答に、成果物フォルダや成果物へのリンクを含んで欲しい」）
-        links = folder_lines(a) + links + [f"- 途中の成果物（コメント・界隈の定義・週ごとの数など）: 同じフォルダの「{MATERIALS_DIR}」（中身は「はじめに.md」）"]
+        links = folder_lines(a) + links + [f"- 週ごとの投稿数と再生（{WEEKLY_CSV}）: 同じフォルダ（Excel で開けます）"]
     head = "**成果物**（この Mac に保存しました）" if REPORTS_DIR else "**成果物**"
     return {"links": head + "\n\n" + ("\n".join(links) or "- （成果物のリンクを作れなかった）"),
             "summary": summary, "verify_note": note}

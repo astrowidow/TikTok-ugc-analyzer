@@ -30,6 +30,44 @@ def ai_where() -> str:
 CONNECT_HINT = "「Claude につなぐ」か「ChatGPT につなぐ」（使っている方）"
 # 新しい分析を頼む言い方（名指しのときだけ始まる。2026-10-05 ユーザー）
 START_PHRASE = "UGC Analyzer で〇〇／△△を分析して"
+
+# 自動でつなぐ AI（キー・名前・つなぐ部品・入っているか・開いているか）
+AI_LINKS = (("claude", "Claude", claude_link, "claude_installed", "claude_running"),
+            ("chatgpt", "ChatGPT", codex_link, "chatgpt_installed", "chatgpt_running"))
+
+
+def ai_installed() -> bool:
+    return any(getattr(link, inst)() for _, _, link, inst, _ in AI_LINKS)
+
+
+def autolink(log) -> tuple:
+    """入っている AI に、まだつないでいなければつなぐ（2026-10-05 ユーザー「作る」。友達の手順から「〇〇につなぐ」を無くす。
+    名指しのときだけ始まる決まりになったので、つないでもふだんの会話に道具が入り込まない）。
+    AI ごとに1回だけ（state.json の autolinked）。あとで利用者が外したものは足し直さない。
+    返すのは (つないだ AI の名前, そのうち今開いている AI の名前)"""
+    st = config.load_state()
+    done = dict(st.get("autolinked") or {})
+    linked, running = [], []
+    for key, name, link, inst, is_running in AI_LINKS:
+        if done.get(key) or not getattr(link, inst)():
+            continue
+        if link.status() != "none":   # すでにつながっている（前の場所・ChatGPT で切られている、も含めて触らない）
+            done[key] = "already"
+            continue
+        try:
+            link.connect()
+        except link.LinkError as e:
+            log.warning("%s に自動でつなげませんでした（メニューから手でつなげます）: %s", name, e)
+            done[key] = "error"
+            continue
+        log.info("%s に自動でつなぎました", name)
+        done[key] = "linked"
+        linked.append(name)
+        if getattr(link, is_running)():
+            running.append(name)
+    if done != (st.get("autolinked") or {}):
+        config.save_state(autolinked=done)
+    return linked, running
 # 試験用: Chrome とログインを飛ばす（TikTok に触らずにメニュー・係・通知だけを確かめる）
 TEST_NO_CHROME = bool(os.environ.get("UGC_COLLECTOR_TEST_NO_CHROME"))
 TICK = 5            # 見張りの間隔（秒）
@@ -283,6 +321,8 @@ class Controller:
 
     def _idle_text(self, extra: str = "") -> str:
         where = ai_where()
+        if not where and not ai_installed():
+            return "準備OK・次は Claude か ChatGPT のアプリを入れてください（入れると自動でつなぎます）" + extra
         if not where:
             return f"準備OK・次はメニューの{CONNECT_HINT}を押してください" + extra
         return f"準備OK・待機中（{where} で「{START_PHRASE}」と言ってください）" + extra
@@ -308,10 +348,11 @@ class Controller:
             self.login_presented = False
             self.chrome.minimize()
             self.log.info("TikTok のログインを確かめました")
-            if not ai_where():
-                notify.send("ログインできました", f"最後に、メニューバーの割れた音符のアイコン →{CONNECT_HINT}を押してください")
-            else:
+            if ai_where():
                 notify.send("準備OK", "ログインできました。取得用の Chrome は Dock にしまいます。このまま使えます")
+            elif not ai_installed():
+                notify.send("ログインできました", "最後に、Claude か ChatGPT のアプリを入れて、ログインしてください（入れると自動でつなぎます）")
+            # AI のアプリが入っていれば、メニューのアプリがすぐ自動でつないで、開き直すかを聞く（CollectorApp._autolink）
             self.status_text = self._idle_text()
             return
         self.status_text = "TikTok のログイン待ち（取得用の Chrome で、捨て垢でログイン）"
@@ -488,6 +529,8 @@ class CollectorApp(rumps.App):
         if not Path(icon).exists():
             self.title = "UGC"
         self.ctl = ctl
+        self._autolink_at = 0.0
+        self._autolinking = False
         self.status_item = rumps.MenuItem("起動中…")
         self.claude_item = rumps.MenuItem("Claude につなぐ", callback=self.connect_claude)
         self.chatgpt_item = rumps.MenuItem("ChatGPT につなぐ", callback=self.connect_chatgpt)
@@ -554,6 +597,7 @@ class CollectorApp(rumps.App):
         rumps.Timer(self.refresh, 2).start()
 
     def refresh(self, _):
+        self._autolink_tick()
         t = self.ctl.status_text + ("（電池で動作中・電源につないでください）" if self.ctl.on_battery else "")
         if self.status_item.title != t:
             self.status_item.title = t
@@ -577,6 +621,37 @@ class CollectorApp(rumps.App):
             want = ("★ " if not r["ok"] else "") + r["title"] + ("（編集済み）" if r["edited"] else "")
             if item.title != want:
                 item.title = want
+
+    # --- 自動でつなぐ（2026-10-05。友達は「〇〇につなぐ」を押さなくてよい。メニューの項目は手でつなぎ直すときのため） ---
+    def _autolink_tick(self):
+        """TikTok のログインが済んだら、入っている AI に自動でつなぎ、開いている AI を開き直すかを聞く（10秒おきに見る）"""
+        if self._autolinking or time.time() - self._autolink_at < 10:
+            return
+        self._autolink_at = time.time()
+        if not config.FROZEN or system.is_translocated() or not system.in_applications():
+            return   # 置き場所が決まっていないと、AI から呼べる場所を書けない
+        if self.ctl.login_wanted or not config.load_state().get("logged_in_at"):
+            return   # ログインの最中に別の画面を出さない
+        self._autolinking = True
+        try:
+            linked, running = autolink(self.ctl.log)
+            if not linked:
+                return
+            names = "と".join(linked)
+            say = f"使うときは、{ai_where()} で「{START_PHRASE}」と言ってください。"
+            if not running:
+                notify.send(f"{names} につなぎました", say)
+                return
+            r = rumps.alert(f"{names} につなぎました",
+                            f"{'と'.join(running)} を開き直すと、UGC Analyzer が使えるようになります。今すぐ開き直しますか？\n"
+                            "（話している途中の会話は保存されています）\n\n" + say,
+                            ok="開き直す", cancel="あとで自分で")
+            if r == 1:
+                for n in running:
+                    threading.Thread(target=self._restart_claude if n == "Claude" else self._restart_chatgpt,
+                                     daemon=True).start()
+        finally:
+            self._autolinking = False
 
     # --- Claude につなぐ（段2） ---
     def connect_claude(self, _):

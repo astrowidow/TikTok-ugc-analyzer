@@ -661,6 +661,62 @@ class TestCodexLink(unittest.TestCase):
         finally:
             os.environ.pop("UGC_COLLECTOR_HOME", None)
 
+    def test_autolink(self):
+        """最初に開いたとき、入っている AI に自動でつなぐ（2026-10-05 ユーザー「作る」）。AI ごとに1回だけ"""
+        import logging
+        os.environ["UGC_COLLECTOR_HOME"] = self.tmp
+        from collector_app import config
+        importlib.reload(config)
+        try:
+            from collector_app import app
+
+            class Fake:
+                LinkError = RuntimeError
+
+                def __init__(self, inst, st, run=False, fail=False):
+                    self.inst, self.st, self.run, self.fail, self.calls = inst, st, run, fail, 0
+
+                def installed(self):
+                    return self.inst
+
+                def status(self):
+                    return self.st
+
+                def running(self):
+                    return self.run
+
+                def connect(self):
+                    self.calls += 1
+                    if self.fail:
+                        raise self.LinkError("設定ファイルが読めません")
+                    self.st = "connected"
+
+            orig = app.AI_LINKS
+            log = logging.getLogger("t")
+            try:
+                fc, fg = Fake(True, "none", run=True), Fake(False, "none")
+                app.AI_LINKS = (("claude", "Claude", fc, "installed", "running"),
+                                ("chatgpt", "ChatGPT", fg, "installed", "running"))
+                self.assertEqual(app.autolink(log), (["Claude"], ["Claude"]))   # 入っている Claude だけ。開いているので開き直しを聞く
+                self.assertEqual(app.autolink(log), ([], []))                   # 2回目は何もしない
+                fc.st = "none"                                                   # 利用者があとで外した
+                fg.inst = True                                                   # あとから ChatGPT を入れた
+                self.assertEqual(app.autolink(log), (["ChatGPT"], []))          # ChatGPT だけつなぐ（Claude は足し直さない）
+                self.assertEqual((fc.calls, fg.calls), (1, 1))
+                self.assertEqual(config.load_state()["autolinked"], {"claude": "linked", "chatgpt": "linked"})
+                config.save_state(autolinked={})
+                fc, fg = Fake(True, "connected"), Fake(True, "none", fail=True)
+                app.AI_LINKS = (("claude", "Claude", fc, "installed", "running"),
+                                ("chatgpt", "ChatGPT", fg, "installed", "running"))
+                self.assertEqual(app.autolink(log), ([], []))   # つながっているものには触らない・つなげなかったものは知らせない
+                self.assertEqual(fc.calls, 0)
+                self.assertEqual(config.load_state()["autolinked"], {"claude": "already", "chatgpt": "error"})
+            finally:
+                app.AI_LINKS = orig
+        finally:
+            os.environ.pop("UGC_COLLECTOR_HOME", None)
+            importlib.reload(config)
+
     def test_ai_where(self):
         os.environ["UGC_COLLECTOR_HOME"] = self.tmp
         try:

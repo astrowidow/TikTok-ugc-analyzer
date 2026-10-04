@@ -7,7 +7,7 @@ TikTok で曲がどう広まったかを、あなたの AI（Claude か ChatGPT�
 
 ## 最初の1回（運営と LINE 通話しながら、20分ほど）
 
-**用意するもの**: Mac（2020年以降の M1・M2・M3・M4）／Google Chrome／Claude の有料プラン（Pro 以上）か、ChatGPT（Mac のアプリ。macOS 14 以降）／
+**用意するもの**: Mac（2020年以降の M1・M2・M3・M4）／Google Chrome／Claude の有料プラン（Pro 以上）か、ChatGPT（無料のプランでも、分析1本を最後まで回せることを確かめています。Mac のアプリ・macOS 14 以降）／
 **ふだん使っていないメールアドレス**（TikTok の分析用アカウントを作るため。仕事や本アカウントのものは使わない）
 
 1. **AI のアプリを入れる**: Claude の人は https://claude.ai/download 、ChatGPT の人は https://openai.com/chatgpt/download/ から入れて、ログインする
@@ -17,7 +17,8 @@ TikTok で曲がどう広まったかを、あなたの AI（Claude か ChatGPT�
 4. **TikTok の分析用アカウントを作ってログイン**: UGC Analyzer が Chrome を開くので、TikTok の「新規登録」で用意したメールアドレスのアカウントを作り、ログインする
    - **スマホの TikTok アプリでは作らない**（ふだんのアカウントと同じスマホに入れないため）
    - 認証コードは、そのメールアドレスに届く
-5. 「ログインできました」と出たら、画面右上の **割れた音符のアイコン** →「**Claude につなぐ**」（ChatGPT の人は「**ChatGPT につなぐ**」）→「**開き直す**」
+5. ログインが済むと、UGC Analyzer が自動で Claude（ChatGPT）につなぎ、「**Claude につなぎました**」（ChatGPT の人は「**ChatGPT につなぎました**」）と出るので「**開き直す**」を押す
+   - 出てこないときは、画面右上の **割れた音符のアイコン** →「Claude につなぐ」（ChatGPT の人は「ChatGPT につなぐ」）→「開き直す」
 
 これで準備は終わりです。割れた音符のアイコンは、いつも画面右上にいます（Mac を起動すると自動で立ち上がります）。
 

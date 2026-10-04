@@ -455,3 +455,25 @@ class TestCommentsMultiPage(TestMultiPage):
         self.assertEqual(calls, [(self.U1, "pool_p1.tsv", "comments_summary.json", "substitutions.tsv"),
                                  (self.U2, "pool_p2.tsv", "comments_summary_p2.json", "substitutions_p2.tsv")])
         self.assertEqual((res["videos_ok"], res["videos_ok_by_page"]), (2, {"1": 1, "2": 1}))
+
+
+class TestReleaseFilter(TestMultiPage):
+    """曲の公開（楽曲ページが作られた時刻）より前の日付の投稿は、一覧の段で除く（2026-10-04 ユーザー「ノイズなので全ての分析から外す」）"""
+    PAGE = "https://www.tiktok.com/music/x-7643096893593897748"   # 2026-05-23 に作られた楽曲ページ
+
+    def test_id_time(self):
+        from acquire import pipeline
+        self.assertEqual(pipeline.iso_time(pipeline.id_time("7644119804865808400"))[:10], "2026-05-26")
+        self.assertIsNone(pipeline.id_time("101"))   # 番号の形が違うものは読まない
+        self.assertEqual(pipeline.iso_time(pipeline.release_time([self.PAGE, "https://www.tiktok.com/music/y-7644119804865808400"]))[:10],
+                         "2026-05-23")
+
+    def test_drop_before_release(self):
+        seen = {f"u{v}": {"url": f"u{v}", "video_id": v} for v in ("7195615227549977857", "7646403619218099476")}
+        n = self.run_.drop_before_release(seen, [self.PAGE])
+        self.assertEqual((n, list(seen)), (1, ["u7646403619218099476"]))
+        b = json.loads((self.d / "fetch_log" / "before_release.json").read_text(encoding="utf-8"))
+        self.assertEqual((b["dropped"], b["videos"][0]["video_id"], b["release"][:10]), (1, "7195615227549977857", "2026-05-23"))
+        import types
+        import flow_w1
+        self.assertEqual(flow_w1.release_info(types.SimpleNamespace(dir=self.d)), {"date": "2026-05-23", "dropped": 1})

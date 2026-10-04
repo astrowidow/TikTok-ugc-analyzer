@@ -288,6 +288,11 @@ class Run:
                 pass
         if not seen:
             raise StepError("楽曲ページから動画が1本も見つかりませんでした（URL が違うか、TikTok 側の表示制限）")
+        for pg in pages:   # 楽曲ページが作られた日時（番号から）
+            pg["created_at"] = iso_time(id_time(pg["url"].rstrip("/").rsplit("-", 1)[-1]))
+        dropped = self.drop_before_release(seen, urls)
+        if not seen:
+            raise StepError("楽曲ページの動画が、全部曲の公開より前の日付でした（楽曲ページが違う可能性）")
         write_json(self.p("raw", "music_pages.json"), pages)
         write_json(self.p("raw", "music_page.json"), pages[0])   # 主のページ（前からの形）
         with open(out, "w", encoding="utf-8") as f:
@@ -295,10 +300,67 @@ class Run:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         self._write_links_csv()
         counts = [p.get("video_count") for p in pages]
-        res = {"links": len(seen), "ugc_total": sum(c for c in counts if c) or None}
+        res = {"links": len(seen), "ugc_total": sum(c for c in counts if c) or None,
+               "release": iso_time(release_time(urls)), "dropped_before_release": dropped}
         if len(pages) > 1:
             res["pages"] = [{"url": p["url"], "links": p["links"], "ugc": p.get("video_count")} for p in pages]
         return res
+
+    def drop_before_release(self, seen: dict, urls: list) -> int:
+        """曲の公開（楽曲ページが作られた時刻）より前に投稿された動画を、一覧から除く。音源はページができる前には使えないので、
+        ページに載っていても、あとから音源が付いた投稿（ノイズ）。すべての分析から外す（2026-10-04 ユーザー
+        「曲の公開日より前の投稿は全ての分析から外す。動画収集の段階で弾けるなら弾く」）。除いたものは取得の記録に残す"""
+        rel = release_time(urls)
+        if not rel:
+            return 0
+        out = []
+        for h, r in list(seen.items()):
+            t = id_time(r.get("video_id"))
+            if t and t < rel:
+                out.append({**r, "posted_at": iso_time(t)})
+                del seen[h]
+        write_json(self.p("fetch_log", "before_release.json"),
+                   {"release": iso_time(rel), "dropped": len(out), "videos": out, "at": now()})
+        if out:
+            self.log(f"    曲の公開（{iso_time(rel)}）より前の日付の投稿 {len(out)}本を除きました（あとから音源が付いたもの）")
+        return len(out)
+
+    def apply_release_filter(self) -> dict:
+        """取得済みの分析に、曲の公開より前の投稿の除外をあとからかける（この直し（2026-10-04）より前に取った分析用）。
+        一覧・集計・AI の入力・コメントの整形を作り直す。コメントは取り直さない。AI の仕事の状態は、呼ぶ側で初めに戻す。
+        作り直す前の derived/ は呼ぶ側で控えを取っておく"""
+        p = self.p("raw", "grid_links.jsonl")
+        rows = [json.loads(ln) for ln in open(p, encoding="utf-8") if ln.strip()]
+        seen = {r["url"]: r for r in rows}
+        n = self.drop_before_release(seen, self.music_urls())
+        if not n:
+            return {"dropped_before_release": 0}
+        with open(p, "w", encoding="utf-8") as f:
+            for r in rows:
+                if r["url"] in seen:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        self._write_links_csv()
+        n_rows = self._write_list_csv()
+        derive = self.step_derive()
+        vids = {str(r["video_id"]) for r in seen.values()}
+        for pool in sorted(self.p("derived").glob("pool*.tsv")):   # コメントを取る動画の表からも外す
+            lines = [ln for ln in pool.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            vi = lines[0].split("\t").index("video_id")
+            pool.write_text("\n".join([lines[0]] + [ln for ln in lines[1:] if ln.split("\t")[vi] in vids]) + "\n",
+                            encoding="utf-8")
+        import shutil
+        for sub in ("comments", "ai", "review"):   # seq（通し番号）で引くものは、番号が変わるので消して作り直させる
+            shutil.rmtree(self.p("derived", sub), ignore_errors=True)
+        md = self.step_comments_md()
+        rel = iso_time(release_time(self.music_urls()))
+
+        def fn(m):
+            st = m["acquisition"].setdefault("steps", {})
+            (st.setdefault("list", {}).setdefault("detail", {}) or {}).update(
+                {"links": len(seen), "release": rel, "dropped_before_release": n})
+            m["acquisition"]["release_filter_applied_at"] = now()
+        self.update(fn)
+        return {"dropped_before_release": n, "release": rel, "list_rows": n_rows, "derive": derive, "comments_md": md}
 
     def _write_links_csv(self):
         with open(self.p("raw", "grid_links.csv"), "w", encoding="utf-8", newline="") as f:
@@ -532,6 +594,26 @@ class Run:
 # ---------------------------------------------------------------------------
 MUSIC_PAGE_JS = """const g = k => { const e = document.querySelector('[data-e2e="' + k + '"]'); return e ? (e.innerText || '').trim() : null; };
 return {title: g('music-title'), creator: g('music-creator'), video_count_text: g('music-video-count')};"""
+
+
+def id_time(i):
+    """TikTok の番号（動画・楽曲ページ。19桁）に入っている、作られた時刻（1970年からの秒）。上の32ビット。読めなければ None"""
+    try:
+        t = int(str(i).strip()) >> 32
+    except (TypeError, ValueError):
+        return None
+    return t if t > 1_400_000_000 else None   # 2014年より前は番号の形が違う（読み違えを防ぐ）
+
+
+def iso_time(t) -> str:
+    return datetime.datetime.fromtimestamp(t).astimezone().isoformat(timespec="seconds") if t else ""
+
+
+def release_time(urls: list):
+    """曲の公開の時刻: 合わせて取る楽曲ページのうち、一番早く作られたもの（URL の末尾の番号から）"""
+    ts = [id_time(u.rstrip("/").split("?")[0].rsplit("-", 1)[-1]) for u in urls or []]
+    ts = [t for t in ts if t]
+    return min(ts) if ts else None
 
 
 def summary_files(d: Path) -> list:

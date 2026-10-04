@@ -57,6 +57,8 @@ index = collections.defaultdict(list)
 n_embedded = 0
 for row in rows:
     vid = str(row.get("video_id"))
+    if records and vid not in records:   # 分析から外した動画（曲の公開より前の日付など）は出さない
+        continue
     rec = records.get(vid, {})
     rep = reps.get(vid, {})
     comments = row.get("comments") or []

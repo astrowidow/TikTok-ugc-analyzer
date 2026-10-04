@@ -213,6 +213,11 @@ async def main():
                 t = text_of(r)
                 m = re.search(r"task_id: `([^`]+)`", t)
                 ok(not r.is_error and m and "axes" in m.group(1), f"W1 の最初の仕事（{m.group(1) if m else t[:120]}）")
+                ok("kb:community" in t and "past:1" not in t, "界隈の案は、固定の過去レポート2本でなく、界隈の名付け方の手引きを読む")
+                r3 = await c.call_tool("read", {"name": "kb:community", "analysis_id": aid})
+                t3 = text_of(r3)
+                ok(not r3.is_error and "界隈の名付け方の手引き" in t3 and "そのまま当てはめない" in t3,
+                   f"手引き（kb:community）が読める（{len(t3)}字）")
                 sheets = re.findall(r"sheet:\d+", t)
                 if sheets:
                     r2 = await c.call_tool("read", {"name": sheets[0], "analysis_id": aid})

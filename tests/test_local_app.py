@@ -477,3 +477,60 @@ class TestReleaseFilter(TestMultiPage):
         import types
         import flow_w1
         self.assertEqual(flow_w1.release_info(types.SimpleNamespace(dir=self.d)), {"date": "2026-05-23", "dropped": 1})
+
+
+class TestCommunityGuide(unittest.TestCase):
+    """界隈の名付け方の手引き（2026-10-04 ユーザー「固定の2本でなく、蒸留して全レポート参照。名付け方と粒度だけを参考に」）"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        os.environ["UGC_KB_DIR"] = self.tmp
+        dd = Path(self.tmp) / "distilled"
+        dd.mkdir(parents=True)
+        (dd / "COMMUNITY_GUIDE.md").write_text("# 界隈の名付け方の手引き\n\n## 1. 名付け方\n\n- 投稿者の種類で呼ぶ\n", encoding="utf-8")
+        rows = [{"file": "a.md", "communities": [{"name": "歌い手", "signals": "歌ってみたを上げる個人"}]},
+                {"file": "b.md", "communities": [{"name": "歌い手", "signals": "カバー投稿が主"}, {"name": "ダンス界隈", "signals": "踊ってみた"}]},
+                {"file": "c.md", "communities": [{"name": "推し活層", "signals": "推しの切り抜き"}]}]
+        (dd / "community_defs.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        import kb_update
+        self.kb = importlib.reload(kb_update)
+
+    def tearDown(self):
+        os.environ.pop("UGC_KB_DIR", None)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_text(self):
+        t = self.kb.community_guide_text()
+        self.assertIn("## 1. 名付け方", t)
+        self.assertIn("過去レポート 3本から", t)
+        self.assertIn("**歌い手**（2本）", t)   # 2本以上で使われた名前
+        self.assertIn("1本のレポートだけで使われた名前", t)
+        self.assertLess(t.index("**歌い手**"), t.index("ダンス界隈"))
+        self.assertIn("そのまま当てはめない", t)
+        self.assertEqual(self.kb._community_key("Top TikToker界隈"), self.kb._community_key("TopTikToker"))   # 表記揺れ
+        t2 = self.kb.community_guide_text(exclude_files={"c"})   # 分析する曲を扱った記事の例は外す
+        self.assertNotIn("推し活層", t2)
+
+    def test_card_check(self):
+        base = {"card": {k: ([] if k in self.kb.CARD_LISTS else "x") for k in self.kb.CARD_KEYS if k not in ("file", "date")}}
+        base["card"].update({"kind": self.kb.KINDS[0], "platform": self.kb.PLATFORMS[0]})
+        self.assertEqual(self.kb.check_card({**base, "community_defs": [{"name": "歌い手", "signals": "歌ってみたの個人"}]}), [])
+        errs = self.kb.check_card({**base, "community_defs": [{"name": "歌い手"}]})
+        self.assertTrue(any("community_defs" in e for e in errs))
+
+    def test_sync_shipped(self):
+        sys.path.insert(0, str(ROOT / "collector"))
+        from collector_app import config
+        src = Path(self.tmp) / "ship"
+        src.mkdir()
+        (src / "COMMUNITY_GUIDE.md").write_text("# 新しい手引き\n", encoding="utf-8")
+        (src / "community_defs.jsonl").write_text(json.dumps({"file": "a.md", "communities": []}) + "\n", encoding="utf-8")
+        dst = Path(self.tmp) / "distilled"
+        with open(dst / "community_defs.jsonl", "a", encoding="utf-8") as f:   # この Mac で新しい記事から足した分
+            f.write(json.dumps({"file": "new.md", "communities": [{"name": "x", "signals": "y"}], "from": "kb_update"}) + "\n")
+        done = config.sync_shipped_knowledge(src, dst)
+        self.assertEqual(sorted(done), ["COMMUNITY_GUIDE.md", "community_defs.jsonl"])
+        self.assertEqual((dst / "COMMUNITY_GUIDE.md").read_text(encoding="utf-8"), "# 新しい手引き\n")
+        files = [json.loads(x)["file"] for x in (dst / "community_defs.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(files, ["a.md", "new.md"])   # アプリの分＋この Mac で足した分
+        self.assertEqual(config.sync_shipped_knowledge(src, dst), [])   # 2回目は何もしない

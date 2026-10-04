@@ -111,6 +111,31 @@ def setup_env() -> Path:
     return code
 
 
+def sync_shipped_knowledge(src: Path, dst: Path) -> list:
+    """運営が作ってアプリに入れる蒸留物を、すでに入れた Mac にも届ける（最初の写しのあとに足したもの）。
+    - COMMUNITY_GUIDE.md（界隈の名付け方の手引き）: 運営のものなので、アプリのものと違えば入れ替える
+    - community_defs.jsonl（レポートごとの界隈の名前と見分け方）: アプリの分に、この Mac で新しい記事から足した分（from=kb_update）を残して合わせる
+    何をしたかの一覧を返す"""
+    import json as _json
+    done = []
+    g = src / "COMMUNITY_GUIDE.md"
+    if g.exists() and (not (dst / g.name).exists() or (dst / g.name).read_bytes() != g.read_bytes()):
+        shutil.copy2(g, dst / g.name)
+        done.append(g.name)
+    d = src / "community_defs.jsonl"
+    if d.exists():
+        rows = [_json.loads(x) for x in d.read_text(encoding="utf-8").splitlines() if x.strip()]
+        have = {r.get("file") for r in rows}
+        old = dst / d.name
+        local = [_json.loads(x) for x in old.read_text(encoding="utf-8").splitlines() if x.strip()] if old.exists() else []
+        rows += [r for r in local if r.get("from") == "kb_update" and r.get("file") not in have]
+        text = "".join(_json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+        if not old.exists() or old.read_text(encoding="utf-8") != text:
+            old.write_text(text, encoding="utf-8")
+            done.append(d.name)
+    return done
+
+
 def seed_data(log=None) -> dict:
     """最初の起動（とアプリを新しくしたとき）: 知識ベースと指示書を置く。何をしたかを返す"""
     done = {}
@@ -131,12 +156,15 @@ def seed_data(log=None) -> dict:
             done["knowledge"] = "copied"
         except OSError:
             shutil.rmtree(tmp, ignore_errors=True)
+    if src and (KB_DIR / "distilled").exists():
+        done["knowledge_sync"] = sync_shipped_knowledge(src / "distilled", KB_DIR / "distilled")
     try:
         import prompt_store
         done["prompts"] = prompt_store.seed()
     except Exception as e:   # 指示書が置けなくても、初期の指示書で動く
         done["prompts_error"] = str(e)
-    if log and (done.get("knowledge") or any((done.get("prompts") or {}).get(k) for k in ("copied", "updated"))):
+    if log and (done.get("knowledge") or done.get("knowledge_sync")
+                or any((done.get("prompts") or {}).get(k) for k in ("copied", "updated"))):
         log.info("知識ベース・指示書を置きました: %s", done)
     return done
 

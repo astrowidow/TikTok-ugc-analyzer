@@ -419,14 +419,15 @@ def render(a, t: dict, st: dict) -> dict:
         pages = pr._pages_of(a, "taxonomy_sample")
         idx = sheet_index(a)
         sheets = sorted({idx[s_] for s_ in body if s_ in idx and idx[s_].startswith("sheet:")})
-        past = [f"past:{i}" for i in range(1, len(c["past_reports"]) + 1)]
-        cat.append(pr._catalog_line(", ".join(past), "別の曲の過去レポート（著者の分析）。**最初に全ページ読む**"))
+        # 過去レポートの固定の2本はやめ、全レポートから蒸留した「界隈の名付け方の手引き」を読む（2026-10-04 ユーザー
+        # 「固定するくらいなら蒸留して全レポート参照。既存レポートに引っ張られすぎない。参考にするのは名付け方と粒度」）
+        cat.append(pr._catalog_line("kb:community", "界隈の名付け方の手引き（全レポートから蒸留）。**最初に全ページ読む**"))
         cat.append(pr._catalog_line("taxonomy_sample", f"分類軸を考えるためのサンプル {len(body)} 本（page=1〜{len(pages)}）"))
         if sheets:
             cat.append(pr._catalog_line(", ".join(sheets), f"サムネイルの一覧画像 {len(sheets)} 枚（サンプルの動画が載っているもの）"))
         text = pr._fill(tpl("axes.md"), {**base, "n_sample": len(body), "n_pages": len(pages), "n_sheets": len(sheets),
                                          "sheet_list": "、".join(sheets) or "なし",
-                                         "past_reports": "、".join(past),
+                                         "past_reports": "kb:community",
                                          "settings": _settings(a, ["community_policy"], t)})
 
     elif typ == "confirm":
@@ -1906,16 +1907,20 @@ def units_of(a, name: str, st: dict):
             raise pr.RunnerError(f"{name} は分析する曲を扱った記事なので読めません")
         return _md_units(p)
     if name.startswith("kb:"):
-        files = {"readme": "README.md", "glossary": "GLOSSARY.md", "style": "STYLE_GUIDE.md", "cards": "cards.jsonl"}
+        files = {"readme": "README.md", "glossary": "GLOSSARY.md", "style": "STYLE_GUIDE.md", "cards": "cards.jsonl",
+                 "community": "COMMUNITY_GUIDE.md"}
         f = files.get(name.split(":", 1)[1])
         if not f:
-            raise pr.RunnerError(f"{name} はありません（kb:readme / kb:glossary / kb:style / kb:cards）")
+            raise pr.RunnerError(f"{name} はありません（kb:readme / kb:glossary / kb:style / kb:cards / kb:community）")
         p = KB_DIR / "distilled" / f
         if not p.exists():
             raise pr.RunnerError("知識ベースが置かれていません（運営に連絡）")
         if f == "GLOSSARY.md":   # 新しい記事から足した語を後ろに付ける（kb_update.py）
             import kb_update
             return re.split(r"(?m)^(?=#{1,3} )", kb_update.glossary_text())
+        if f == "COMMUNITY_GUIDE.md":   # 界隈の名付け方の手引き＋全レポートの例（分析する曲を扱った記事の例は外す）
+            import kb_update
+            return re.split(r"(?m)^(?=#{1,3} )", kb_update.community_guide_text(same_song_files(a)))
         if f.endswith(".jsonl"):   # カード: 分析する曲を扱った記事は外す
             return [json.dumps(c_, ensure_ascii=False) + "\n" for c_ in cards(a)]
         return _md_units(p)

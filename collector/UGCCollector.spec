@@ -29,7 +29,7 @@ if not (KB / "distilled" / "GLOSSARY.md").exists():
 for q in sorted(KB.glob("*.md")):
     datas.append((str(q), "knowledge/notes"))
 datas.append((str(KB / "INDEX.json"), "knowledge"))
-for n in ("README.md", "GLOSSARY.md", "STYLE_GUIDE.md", "cards.jsonl"):
+for n in ("README.md", "GLOSSARY.md", "STYLE_GUIDE.md", "cards.jsonl", "COMMUNITY_GUIDE.md", "community_defs.jsonl"):
     datas.append((str(KB / "distilled" / n), "knowledge/distilled"))
 
 datas += [(str(HERE / "assets" / n), "assets") for n in ("menubar.png", "menubar@2x.png") if (HERE / "assets" / n).exists()]

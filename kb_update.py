@@ -247,6 +247,97 @@ def glossary_text() -> str:
     return "\n".join(parts) + "\n"
 
 
+COMMUNITY_GUIDE = "COMMUNITY_GUIDE.md"     # 界隈の名付け方の手引き（運営が全レポートから蒸留。アプリに同梱）
+COMMUNITY_DEFS = "community_defs.jsonl"    # レポートごとの界隈の名前と見分け方（同梱分＋新しい記事から足す分）
+COMMUNITY_SIGNALS_MAX = 120
+
+
+def community_defs() -> list:
+    return [json.loads(ln) for ln in (kb_dir() / "distilled" / COMMUNITY_DEFS).read_text(encoding="utf-8").splitlines()
+            if ln.strip()] if (kb_dir() / "distilled" / COMMUNITY_DEFS).exists() else []
+
+
+def _community_key(name: str) -> str:
+    """表記揺れをまとめる鍵（空白・末尾の「界隈」・大文字小文字の違いを無視）"""
+    return re.sub(r"界隈$", "", re.sub(r"\s+", "", name)).lower()
+
+
+WEAK_SIGNAL_RE = re.compile(r"定義なし|定義は(書|な)|説明はない|説明がない|列挙され|挙げるだけ|挙がる|言及|参照し")
+
+
+def _known_titles() -> list:
+    """過去の記事で扱った曲名・アーティスト名・記事の題の【】の中（見分け方から過去の曲の話を除くため）"""
+    out = set()
+    p = kb_dir() / "distilled" / "cards.jsonl"
+    for ln in (p.read_text(encoding="utf-8").splitlines() if p.exists() else []):
+        try:
+            c = json.loads(ln)
+        except ValueError:
+            continue
+        for v in (c.get("song"), c.get("artist")):
+            for part in re.split(r"[/／・、,（）()]+", str(v or "")):
+                part = part.replace("例:", "").strip()
+                # 短い語・ひらがなだけの短い語は、ふつうの文にも出るので照合に使わない（「して」「だよ」など）
+                if len(part) >= 3 and not (re.fullmatch(r"[ぁ-んー]+", part) and len(part) < 5):
+                    out.add(part.lower())
+        out.update(m.lower() for m in re.findall(r"【([^】]{2,})】", str(c.get("title") or "")))
+    return sorted(out, key=len, reverse=True)
+
+
+def _clean_signal(sig: str, titles=()) -> str:
+    """見分け方から、過去の曲・人の具体例（括弧の中）を除く。中身の無いもの・過去の曲名や人名を含むものは空にする
+    （手本は名付け方と粒度だけ。過去の曲の話に引っ張らない）"""
+    sig = re.sub(r"[（(][^）)]*[）)]", "", sig).strip()
+    low = sig.lower()
+    if WEAK_SIGNAL_RE.search(sig) or len(sig) < 12 or any(t in low for t in titles) or re.search(r"『[^』]*』で|[A-Za-z0-9]+公式", sig):
+        return ""
+    return sig
+
+
+def community_guide_text(exclude_files=()) -> str:
+    """kb:community で読ませる手引き: 原則（COMMUNITY_GUIDE.md）＋全レポートの「名前と見分け方」の例。
+    例は名前ごとにまとめ（表記揺れは1つに）、曲名は出さない。2本以上で使われた名前は見分け方つき、1本だけの名前は名前だけ並べる。
+    exclude_files（分析する曲を扱った記事。拡張子なし）の例は入れない（その記事の分け方に引っ張られないため）"""
+    base = (kb_dir() / "distilled" / COMMUNITY_GUIDE).read_text(encoding="utf-8")
+    ex = {str(f).replace(".md", "") for f in exclude_files}
+    by = {}
+    n_rep = 0
+    titles = _known_titles()
+    for row in community_defs():
+        if str(row.get("file", "")).replace(".md", "") in ex or not row.get("communities"):
+            continue
+        n_rep += 1
+        seen = set()
+        for c in row["communities"]:
+            name = str(c.get("name") or "").strip()
+            k = _community_key(name)
+            if not k or k in seen:
+                continue
+            seen.add(k)
+            d = by.setdefault(k, {"n": 0, "names": {}, "signals": []})
+            d["n"] += 1
+            d["names"][name] = d["names"].get(name, 0) + 1
+            sig = _clean_signal(str(c.get("signals") or ""), titles)
+            if sig and sig not in d["signals"]:
+                d["signals"].append(sig)
+    if not by:
+        return base
+
+    def shown(d):   # いちばん多い表記（「界隈」の付かない方を先に）
+        return sorted(d["names"].items(), key=lambda kv: (-kv[1], kv[0].endswith("界隈"), len(kv[0])))[0][0]
+    multi = sorted((d for d in by.values() if d["n"] >= 2), key=lambda d: (-d["n"], shown(d)))
+    single = sorted(n for n in (shown(d) for d in by.values() if d["n"] < 2) if len(n) <= 16)   # 長い説明の名前は手本にしない
+    lines = [base.rstrip(), "", "---", "",
+             f"## 付録: 名前と見分け方の例（界隈に分けて語っている過去レポート {n_rep}本から）", "",
+             "**語彙と名付け方の手本として見る。ここにある名前を、この曲の界隈にそのまま当てはめない。**", "",
+             "### 2本以上のレポートで使われた名前（多い順。見分け方はレポートごとの書き方から）", ""]
+    for d in multi:
+        lines.append(f"- **{shown(d)}**（{d['n']}本）" + ("— " + " ／ ".join(d["signals"][:2]) if d["signals"] else ""))
+    if single:
+        lines += ["", "### 1本のレポートだけで使われた名前（名付けの幅の例）", "", "、".join(single)]
+    return "\n".join(lines) + "\n"
+
+
 def pending_count() -> int:
     s = state()
     return len(s["pending"]) + len(s["merge_pending"])
@@ -316,8 +407,12 @@ def render(t: dict) -> str:
   "platform": "{'|'.join(PLATFORMS)}", "buzz_type": "文字列か null", "pathway": "拡大経路の要約",
   "communities": ["…"], "formats": ["…"], "why_claims": ["…"], "reproducible": ["…"], "evidence_style": "…",
   "coined_terms": ["…"], "numbers": "主な数字（短く）", "reusable_insight": "他の曲にも使える見方"}},
- "glossary": [{{"section": "D", "term": "語", "text": "定義・使い方（{ADDITION_MAX_CHARS}字まで）"}}]}}
+ "glossary": [{{"section": "D", "term": "語", "text": "定義・使い方（{ADDITION_MAX_CHARS}字まで）"}}],
+ "community_defs": [{{"name": "記事が使った界隈の名前（本文の表記のまま）", "signals": "その界隈をどんな属性・特徴で見分けているか（{COMMUNITY_SIGNALS_MAX}字まで）"}}]}}
 ```
+
+- `community_defs` は、記事が UGC の投稿者を界隈・層に分けて語っているときだけ、その界隈を全部（記事の表記のまま）。分けていなければ []。
+  「イノベーター」などの普及段階の呼び名は界隈ではないので入れない。見分け方は本文に書かれているものを要約する（推測で足さない）
 
 - カード1行（JSON にしたとき）は {CARD_MAX_CHARS} 字まで。file と date はサービスが入れる
 """
@@ -380,6 +475,15 @@ def check_card(obj) -> list:
             errs.append(f"card の kind は {' / '.join(KINDS)} のどれか")
         if card.get("platform") not in PLATFORMS:
             errs.append(f"card の platform は {' / '.join(PLATFORMS)} のどれか")
+    cd = obj.get("community_defs", [])
+    if not isinstance(cd, list):
+        errs.append("`community_defs` は配列にしてください（界隈に分けていない記事なら []）")
+    else:
+        for i, c in enumerate(cd, 1):
+            if not isinstance(c, dict) or not str(c.get("name") or "").strip() or not str(c.get("signals") or "").strip():
+                errs.append(f"community_defs の {i} 件目は name・signals がそろっていません")
+            elif len(str(c["signals"])) > COMMUNITY_SIGNALS_MAX:
+                errs.append(f"community_defs の {i} 件目（{c['name']}）の signals が {len(str(c['signals']))} 字です（{COMMUNITY_SIGNALS_MAX}字まで）")
     gl = obj.get("glossary", [])
     if not isinstance(gl, list):
         errs.append("`glossary` は配列にしてください（足す語が無ければ []）")
@@ -425,6 +529,13 @@ def accept(task_id: str, raw: str) -> list:
                 add.setdefault(g["section"], []).append({"term": str(g["term"]).strip(), "text": str(g["text"]).strip(),
                                                          "file": it["file"], "title": it["name"][:60], "date": it["date"]})
             _write_json(kb_dir() / "distilled" / "GLOSSARY_ADDITIONS.json", add)
+            defs = [{"name": str(c["name"]).strip(), "signals": str(c["signals"]).strip()}
+                    for c in obj.get("community_defs") or []]
+            cp = kb_dir() / "distilled" / COMMUNITY_DEFS   # 界隈の名付け方の手引きの例に足す
+            rows = [r for r in community_defs() if r.get("file") != it["file"]]
+            rows.append({"file": it["file"], "title": it["name"][:60], "date": it["date"], "classifies": bool(defs),
+                         "communities": defs, "from": "kb_update"})
+            _write_text(cp, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
             s = state()
             s["pending"] = [k for k in s["pending"] if k != t["key"]]
             s["ingested"].append({"key": t["key"], "file": it["file"], "at": _now(),

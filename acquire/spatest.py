@@ -40,6 +40,17 @@ pagetest.py との違いはナビゲーション方式**だけ**。対照実験�
   --deadline-hours H 取得に使う時間の上限（ロックを譲っていた時間は数えない）。超えたら区切りで止める
   between_videos     ライブラリとして使うときの口。動画の間に呼ぶ（待っている CSV ジョブにロックを譲る）
 グリッドのリンク集めと対象のリンク探しは、要素ごとに get_attribute を呼ばず JS 1回で読む（TikTok への要求は変わらない）。
+
+--- 2026-10-05 速さ（要求の間隔の設定は変えずに、待ちの無駄と無駄な要求を削る。既定はどれも切）---
+  --stop-on-no-more  この動画の最新の応答が「続き無し」（has_more=0）なら、最低件数に届かなくても底で粘らない
+                     （シルエット本番で41本が約75秒ずつ粘り、増えた動画は0本だった）
+  --prescroll        次の要求を待っている間に、底の手前（--prescroll-margin px）まで送っておく。
+                     待ちが明けてからスクロールを始めると、1ページあたり約8秒遅れていた
+  --only-open-video  開いた動画以外の1ページ目（隣の動画の先読み）を送らない。フックが「失敗」として返すので、
+                     ページはその動画の結果を持たず、開いたときに改めて要求する。シルエット本番で要求の17%が
+                     取らない動画への先読みと、開いたときの取り直しだった。開く瞬間の要求が1回になるので、待ちも need=1
+  --remount-on-stall 開き直しを最初からはせず、底で止まって続きがあるのに増えないときだけ開き直す
+                     （開き直しは先読みのデータで描かれた欄のためのもの。--only-open-video なら先読みは無い）
 """
 import argparse
 import collections
@@ -91,9 +102,24 @@ HOOK = r"""
   };
   const inflight = new Map();
   const of = window.fetch;
+  // --only-open-video: 開いた動画（__capOnly）以外の1ページ目は送らず、失敗として返す。
+  // 成功の形で空を返すと、ページが「コメント0件」として持ち、開いたときに要求しないおそれがあるため
+  const skip = u => {
+    const only = window.__capOnly;
+    if (!only) return false;
+    try { const x = new URL(u, location.origin);
+          const aw = x.searchParams.get('aweme_id');
+          return x.pathname.indexOf('/reply') < 0 && !!aw && aw !== String(only)
+                 && (x.searchParams.get('cursor') || '0') === '0'; }
+    catch (e) { return false; }
+  };
   window.fetch = function (...a) {
     const u = (a[0] && a[0].url) || a[0];
     if (!want(u)) return of.apply(this, a);
+    if (skip(u)) {
+      (window.__cap.drops = window.__cap.drops || []).push({url: String(u), at: Math.round(performance.now())});
+      return Promise.reject(new TypeError('Failed to fetch'));
+    }
     const k = keyOf(u);
     const prev = inflight.get(k);
     if (prev) {
@@ -145,10 +171,13 @@ const seen = new Set();
 let zeros = 0, mine = 0;
 const topSeen = new Set();
 const reps = new Set();
+let lastCur = -1, lastMore = null;   // この動画の本体の応答のうち、いちばん先のページの has_more
 for (const h of hs) {
   try {
     const b = JSON.parse(h.body);
     const cs = b.comments || [];
+    if (cs.length && String(cs[0].aweme_id) === vid && String(cs[0].reply_id || '0') === '0'
+        && Number(b.cursor || 0) > lastCur) { lastCur = Number(b.cursor || 0); lastMore = b.has_more; }
     for (const c of cs) {
       // 隣の動画の先読みが混ざるので、対象の動画のものだけ数える
       if (String(c.aweme_id) !== vid) continue;
@@ -171,8 +200,19 @@ for (const h of hs) {
 return {top: Math.round(m.scrollTop), h: m.scrollHeight, client: m.clientHeight,
         atBottom: m.scrollTop + m.clientHeight >= m.scrollHeight - 5,
         hits: hs.length, got: seen.size, topn: topSeen.size, replies: reps.size,
-        zeros: zeros, mine: mine,
+        zeros: zeros, mine: mine, more0: lastMore === 0 || lastMore === false,
+        dist: m.scrollHeight - m.scrollTop - m.clientHeight,
         empty: hs.filter(h => !(h.body || '').length).length};
+"""
+
+# --prescroll: 底から margin px より手前までだけ送る（次のページを呼ばせない）。動いたかと、その場の状態を返す
+PRESCROLL_JS = r"""
+const m = document.querySelector('[class*="DivCommentMain"]');
+if (!m) return null;
+const room = m.scrollHeight - m.scrollTop - m.clientHeight - arguments[1];
+if (room > 0) m.scrollTop = m.scrollTop + Math.min(arguments[0], room);
+return {moved: room > 0, dist: m.scrollHeight - m.scrollTop - m.clientHeight,
+        sent: (window.__cap || {}).sent || 0};
 """
 # --- ここまで pagetest.py と同一 -------------------------------------------
 
@@ -325,6 +365,16 @@ class SpaCollector:
         # ライブラリとして使うときの口。動画の間に呼び、ロックを譲っていた秒数を返す
         self.between_videos = None
         self.yielded = 0.0
+        # 動画ごとの本体の応答のうち、いちばん先のページの (cursor, has_more)。--stop-on-no-more の判定に使う
+        # （先読みで取った1ページ目はブラウザ側の記録から消えているので、こちらに控える）
+        self.page_state_of = {}
+        # --prescroll: 底からこれだけ手前まで送っておく。待ちの間に次のページを呼んでしまったら広げる
+        self.margin = a.prescroll_margin
+        self.early = 0
+        # --only-open-video: フックが送らなかった1ページ目（累計）
+        self.drops = []
+        self.noted_hits = 0          # 開いた瞬間に数えた要求の数（ブラウザ側の記録の件数）
+        self.trigger_dists = []      # 次のページを呼んだときの底までの距離
 
     # ------------------------------------------------------------------
     def log(self, m):
@@ -528,10 +578,15 @@ class SpaCollector:
         # リセットせず、溜めてから進む。直前の動画にいる間に先読みされた
         # この動画のコメントが、ここで pool に入る（1ページ目が無料で手に入る）
         self.harvest()
+        drops_before = len(self.drops)
+        early_before = self.early
 
         # 動画を開くと「この動画の1ページ目」と「隣の動画の先読み」が
-        # ほぼ同時に飛ぶ（実測111ms差）。2本ぶんの枠が空くまで待つ
-        self.pace_wait(need=2)
+        # ほぼ同時に飛ぶ（実測111ms差）。2本ぶんの枠が空くまで待つ。
+        # --only-open-video なら先読みは送らないので1本ぶん
+        self.pace_wait(need=1 if self.a.only_open_video else 2)
+        if self.a.only_open_video:
+            self.d.execute_script("window.__capOnly = arguments[0];", str(vid))
 
         how, err = self.open_video(href)
         if err:
@@ -550,8 +605,10 @@ class SpaCollector:
 
         if st.get("empty"):
             raise Blocked("コメントAPIが空応答（HTTP 200 / 0バイト）を返した")
+        self.noted_hits = 0
         if st.get("hits"):
             self.note_call(st["hits"])   # 開いた瞬間の自動読み込みも1回に数える
+            self.noted_hits = st["hits"]
 
         # モーダルが最初からコメントを読んでいるか（＝アイコンのクリックが不要か）
         auto = st.get("hits", 0) > 0
@@ -570,14 +627,10 @@ class SpaCollector:
         # 先読みされたデータで描画されたパネルは読み込み位置の状態を持たないらしく、
         # そのままスクロールしても次ページを要求しない（実測: 底に55秒留めても飛ばない）。
         # 閉じて開き直すと要求するようになる。
-        if self.a.remount:
-            els = self.d.find_elements(By.CSS_SELECTOR, '[data-e2e="comment-icon"]')
-            if els:
-                self.d.execute_script("arguments[0].click();", els[0])   # 閉じる
-                time.sleep(self.a.remount_pause)
-                self.pace_wait()
-                self.d.execute_script("arguments[0].click();", els[0])   # 開き直す
-                time.sleep(self.a.remount_pause)
+        # --remount-on-stall なら最初は開き直さず、底で止まったときだけ開き直す（scroll_for_more）
+        self.remounted = 0
+        if self.a.remount and not self.a.remount_on_stall:
+            self.remount_panel()
 
         # コメント欄を刻んでスクロールし、ページ自身に次ページを読ませる
         scrolls, got = self.scroll_for_more(vid)
@@ -617,6 +670,8 @@ class SpaCollector:
 
         closed = self.close_video()
         self.wait_for(lambda s: not s.get("modal"), 15)
+        if self.a.only_open_video:
+            self.drops = self.d.execute_script("return ((window.__cap||{}).drops||[]).slice();") or self.drops
 
         return {
             "video_id": vid, "status": "ok" if comments else "no_comments",
@@ -634,7 +689,65 @@ class SpaCollector:
             "cursor": meta.get("cursor"),
             "resources_delta": max(st.get("resources", 0) - res_before, 0),
             "closed_by": closed, "comments": comments, "reply_comments": reply_rows,
+            # 2026-10-05 速さの切り替えの記録（送らなかった先読み・待ちの間に呼んでしまった回数・開き直した回数・底の手前の幅）
+            "dropped": len(self.drops) - drops_before, "early": self.early - early_before,
+            "remounted": self.remounted, "margin": self.margin if self.a.prescroll else None,
         }
+
+    def remount_panel(self):
+        """コメント欄を閉じて開き直す（要求するかもしれないので間隔を空けてから開く）"""
+        els = self.d.find_elements(By.CSS_SELECTOR, '[data-e2e="comment-icon"]')
+        if not els:
+            return
+        self.d.execute_script("arguments[0].click();", els[0])   # 閉じる
+        time.sleep(self.a.remount_pause)
+        self.pace_wait()
+        self.d.execute_script("arguments[0].click();", els[0])   # 開き直す
+        time.sleep(self.a.remount_pause)
+        self.remounted += 1
+
+    def no_more(self, vid, st=None):
+        """この動画の本体はもう続きが無い（いちばん先のページの応答が has_more=0）"""
+        if st and st.get("more0"):
+            return True
+        s = self.page_state_of.get(str(vid))
+        return bool(s) and not s[1]
+
+    def pace_ready_at(self, need=1):
+        """pace_wait が待たずに返る時刻（①前回からの間隔 ②直近60秒の本数）"""
+        t = self.last_call_at + self.pending_spacing if self.call_spacing else 0.0
+        if self.a.max_calls_per_min:
+            now = time.time()
+            ts = sorted(x for x in self.call_times if now - x < 60.0)
+            k = len(ts) + need - int(self.a.max_calls_per_min)
+            if k > 0:
+                t = max(t, ts[k - 1] + 60.0)
+        return t
+
+    def prescroll_wait(self):
+        """--prescroll: 次の要求を出してよい時刻まで、底の手前まで送っておく。
+        待ちの間に次のページを呼んでしまったら（ページが早めに読む作りなら）、手前の幅を広げて記録する。
+        呼んだかは送った数（__cap.sent）で見る。届いた数だと、前の要求の応答が遅れて届いたのを取り違える"""
+        until = self.pace_ready_at()
+        sent0 = None
+        moved = False
+        while time.time() < until - self.a.step_pause:
+            p = self.d.execute_script(PRESCROLL_JS, self.a.step_px, self.margin)
+            if p is None:
+                break
+            if sent0 is None:
+                sent0 = p.get("sent", 0)
+            elif p.get("sent", 0) > sent0 and moved:
+                # 送ったのがこちらが動かした直後のときだけ数える（1ページ目が短い動画では、ページが自分で2ページ目を呼ぶ）
+                self.early += 1
+                self.margin = int(self.margin * 1.5) + 300
+                self.log(f"    待ちの間に次のページを呼んだ（底まで{p.get('dist')}px）→ 手前の幅を{self.margin}pxに広げる")
+                return
+            moved = bool(p.get("moved"))
+            if not moved:
+                break
+            time.sleep(self.a.step_pause)
+        self.pace_wait()
 
     def next_spacing(self):
         """次の要求まで空ける秒数。平均は calls_per_min、最短でも min_spacing。"""
@@ -688,9 +801,18 @@ class SpaCollector:
         stall = 0
         nudges = 0
         last_hits = -1
+        # 開いた瞬間の要求は collect_one で数え済み。今までは最初の1段でもう一度数えていた（開き直しの60秒待ちに隠れていた）。
+        # 開き直しを最初にしない走り方では、数え直すと「直近60秒に2回」に引っかかるので、数え済みから始める
+        if self.a.only_open_video or self.a.prescroll or self.a.remount_on_stall:
+            last_hits = self.noted_hits
         last_got = -1
+        prev_dist = None
         while steps < self.a.max_steps:
-            self.pace_wait()       # 次の要求が飛ぶ前に間隔を空ける
+            # 次の要求が飛ぶ前に間隔を空ける（--prescroll なら、待つ間に底の手前まで送っておく）
+            if self.a.prescroll:
+                self.prescroll_wait()
+            else:
+                self.pace_wait()
             st = self.d.execute_script(STEP_JS, self.a.step_px, vid)
             if st is None:
                 if self.a.scroll_log:
@@ -708,6 +830,11 @@ class SpaCollector:
                 # これ以上は返ってこない。留まるとアプリが同じ要求を延々リトライする
                 if self.a.scroll_log:
                     self.log(f"    0件応答を受けたので打ち切り（{st['got']}件で終了）")
+                break
+            if self.a.stop_on_no_more and self.no_more(vid, st):
+                # 応答が「続き無し」と言っている。最低件数に届かなくても、粘って増えることはない
+                if self.a.scroll_log:
+                    self.log(f"    続き無し（has_more=0）なので打ち切り（{st['got']}件で終了）")
                 break
             # 上位リストを抜けた（＝印なしのコメントが現れた）ら、そこで十分。
             # ただし --min-comments に満たないうちは続ける
@@ -729,6 +856,9 @@ class SpaCollector:
             if st["hits"] > last_hits:
                 self.note_call(st["hits"] - max(last_hits, 0))
                 last_hits = st["hits"]
+                if prev_dist is not None:
+                    self.trigger_dists.append(prev_dist)   # 次のページを呼んだときの底までの距離（--prescroll の幅の目安）
+            prev_dist = st.get("dist")
             # 停滞は「その動画の取得数が増えたか」で見る。
             # hits には隣の動画の先読みも混ざるので判定に使えない
             if st["got"] > last_got:
@@ -738,6 +868,12 @@ class SpaCollector:
             elif st["atBottom"]:
                 stall += 1
                 if stall >= self.a.stall_limit:
+                    if self.a.remount_on_stall and not self.remounted and not self.no_more(vid, st):
+                        # 続きがあるのに次のページを呼ばない欄。開き直すと呼ぶようになる（collect_one の開き直しの説明）
+                        self.log(f"    底で止まった（{st['got']}件・続きあり）ので開き直す")
+                        self.remount_panel()
+                        stall = 0
+                        continue
                     if nudges >= self.a.max_nudges:
                         break          # 戻して下り直しても増えない＝もう無い
                     self.d.execute_script(
@@ -774,10 +910,11 @@ class SpaCollector:
         """
         recs = self.d.execute_script(r"""
           return ((window.__cap||{}).hits||[]).map(h => {
-            let cur = null, n = -1, aweme = null;
+            let cur = null, n = -1, aweme = null, more = null, main = null;
             try { const b = JSON.parse(h.body);
-                  cur = b.cursor; n = (b.comments||[]).length;
-                  aweme = (b.comments||[])[0] ? String(b.comments[0].aweme_id) : null; }
+                  cur = b.cursor; n = (b.comments||[]).length; more = b.has_more;
+                  aweme = (b.comments||[])[0] ? String(b.comments[0].aweme_id) : null;
+                  main = (b.comments||[])[0] ? String(b.comments[0].reply_id || '0') === '0' : null; }
             catch (e) {}
             const m = /[?&]cursor=(\d+)/.exec(h.url || '');
             const am = /[?&]aweme_id=(\d+)/.exec(h.url || '');
@@ -787,9 +924,16 @@ class SpaCollector:
             return {path: path, req_aweme: am ? am[1] : null, req_count: cm ? cm[1] : null,
                     url_cursor: m ? m[1] : null, via: h.via, sentAt: h.sentAt, gotAt: h.gotAt,
                     status: h.status, len: (h.body||'').length,
-                    n: n, resp_cursor: cur, aweme: aweme, body: h.body};
+                    n: n, resp_cursor: cur, aweme: aweme, has_more: more, main: main, body: h.body};
           });
         """)
+        for r in recs:
+            # 本体の応答のうち、いちばん先のページの has_more を控える（--stop-on-no-more）
+            if r.get("main") and r.get("aweme"):
+                cur = int(r.get("resp_cursor") or 0)
+                prev = self.page_state_of.get(r["aweme"])
+                if prev is None or cur > prev[0]:
+                    self.page_state_of[r["aweme"]] = (cur, r.get("has_more"))
         self.coalesced = self.d.execute_script(
             "return (window.__cap||{}).coalesced || 0;") or self.coalesced
         self.d.execute_script("window.__capReset && window.__capReset();")
@@ -1263,7 +1407,10 @@ class SpaCollector:
                 f"上位{r.get('top_list')}件 総数{r.get('total')}"
                 + (f" 返信{r.get('replies')}件/{r.get('replies_opened')}コメント"
                    if self.a.replies or self.a.reply_policy == "targets" else "")
-                + (f" 上限{r.get('cap')}" if self.a.pool else ""))
+                + (f" 上限{r.get('cap')}" if self.a.pool else "")
+                + (f" 先読みを送らず{r.get('dropped')}" if self.a.only_open_video else "")
+                + (f" 待ち中に呼んだ{r.get('early')}" if self.a.prescroll else "")
+                + (f" 開き直し{r.get('remounted')}" if self.a.remount_on_stall else ""))
             out.write(json.dumps(r, ensure_ascii=False) + "\n")
             out.flush()
             self.write_summary(len(links))
@@ -1286,6 +1433,10 @@ class SpaCollector:
                    "yielded_min": round(self.yielded / 60, 1),
                    "api_calls": self.calls,
                    "requests": self.req_log,
+                   "speed_flags": {k: getattr(self.a, k) for k in ("stop_on_no_more", "prescroll", "only_open_video",
+                                                                   "remount_on_stall")},
+                   "dropped_prefetch": self.drops, "early_triggers": self.early,
+                   "prescroll_margin": self.margin, "trigger_dists": self.trigger_dists,
                    "calls_per_min": round(self.calls / (el / 60), 2) if el else None},
                   open(self.a.summary, "w", encoding="utf-8"),
                   ensure_ascii=False, indent=2)
@@ -1459,6 +1610,16 @@ def build_parser():
     ap.add_argument("--reply-questions", type=int, default=2, help="targets: 質問形の親（返信1件以上）を何件まで開くか")
     ap.add_argument("--reply-author", type=int, default=2, help="targets: 投稿者本人のコメントを何件まで開くか")
     ap.add_argument("--reply-more", type=int, default=0, help="targets: 「あとM件表示」を押す回数（0なら最初の3件だけ）")
+    # 2026-10-05 速さ（冒頭の説明。既定はどれも切）
+    ap.add_argument("--stop-on-no-more", action="store_true",
+                    help="この動画の最新の応答が続き無し（has_more=0）なら、最低件数に届かなくても粘らない")
+    ap.add_argument("--prescroll", action="store_true", help="次の要求を待つ間に、底の手前まで送っておく")
+    ap.add_argument("--prescroll-margin", type=int, default=600,
+                    help="--prescroll: 底からこれだけ手前で止める（待ちの間に次を呼んだら自動で広げる）")
+    ap.add_argument("--only-open-video", action="store_true",
+                    help="開いた動画以外の1ページ目（隣の動画の先読み）を送らない")
+    ap.add_argument("--remount-on-stall", action="store_true",
+                    help="開き直しは最初にせず、底で止まって続きがあるのに増えないときだけ")
     ap.add_argument("--deadline-hours", type=float, default=0.0,
                     help="取得に使う時間の上限（ロックを譲っていた時間は数えない）。0で無制限")
     return ap

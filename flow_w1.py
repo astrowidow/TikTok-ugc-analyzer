@@ -602,7 +602,7 @@ def folder_lines(a) -> list:
     d.mkdir(parents=True, exist_ok=True)
     shown = str(d).replace(str(Path.home()), "~", 1)
     return [f"- フォルダ: [{d.name}](file://{quote(str(d))}/)",
-            f"  （場所: `{shown}`。取得アプリのメニュー「レポートのフォルダを開く」でも開けます）"]
+            f"  （場所: `{shown}`。UGC Analyzer のメニュー「レポートのフォルダを開く」でも開けます）"]
 
 
 def dl_url(a, name: str) -> str:

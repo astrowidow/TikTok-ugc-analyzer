@@ -33,34 +33,37 @@ TOOLS = ("start_analysis", "status", "next_task", "submit", "read", "revise", "s
          "update_knowledge", "cancel_analysis", "restart_analysis")
 STARTUP_TIMEOUT_SEC = 60    # 入れた直後の初回は、macOS の検査で起動が遅いことがある
 TOOL_TIMEOUT_SEC = 300      # start_analysis（30〜40秒）と、仕事の合間のサービスの工程（組み立て・Excel 用 ZIP）
-MARK = "# UGC Collector の道具（メニュー「ChatGPT につなぐ」が書いた。この節は UGC Collector が書き直す）"
+MARK = "# UGC Analyzer の道具（メニュー「ChatGPT につなぐ」が書いた。この節は UGC Analyzer が書き直す）"
 
+# いつ使うかは道具の案内（mcp_proto.USE_RULE）と同じ。ChatGPT は道具の案内を会話に入れないので、ここにも書く
 SKILL_MD = """---
 name: ugc-analyzer
-description: TikTok の楽曲の UGC 分析（UGC Analyzer。この Mac の「UGC Collector」アプリが取得とデータを持つ）。利用者が曲の分析にかかわることを頼んだら必ずこれを使う。例:「〇〇を分析して」「〇〇／（アーティスト名）を分析して」「〇〇の分析を続けて」「〇〇の取得をやめて」「分析はどこまで進んだ？」「レポートを直して」「知識ベースを更新して」。ウェブ検索・会話の履歴・自分の考察で答えない。
+description: UGC Analyzer（この Mac のアプリ。TikTok の楽曲の UGC を集めて分析レポートを作る）の道具を使う。使うのは、利用者が「UGC Analyzer で〇〇／△△を分析して」と名指しして新しい分析を頼んだときと、この Mac にすでにある分析のこと（「〇〇の分析を続けて」「〇〇の取得をやめて」「〇〇はどうなってる？」「〇〇のレポートの3章に〜を足して」）を頼んだとき。名指しの無い「〇〇を分析して」には使わない。
 ---
 
-# UGC Analyzer（この Mac の UGC Collector）
+# UGC Analyzer
 
-曲の分析は、この Mac の UGC Collector アプリの道具（MCP サーバー `ugc-analyzer`）で進める。
-道具の一覧（ALL_TOOLS など）で `ugc_analyzer` を探す: start_analysis・status・next_task・submit・read・revise・settings・prompts・update_knowledge・cancel_analysis・restart_analysis。
+道具は MCP サーバー `ugc-analyzer`。道具の一覧（ALL_TOOLS など）で `ugc_analyzer` を探す: start_analysis・status・next_task・submit・read・revise・settings・prompts・update_knowledge・cancel_analysis・restart_analysis。
 
-- 分析の状態（取得したデータ・進み具合・成果物）はアプリが持っている。「続けて」は会話の続きではない。会話の履歴や前のスレッドを探さない。ウェブで曲を調べて自分で分析しない
-- 「〇〇を分析して」→ `start_analysis`（曲名とアーティスト名。30〜40秒かかる）
+- 「UGC Analyzer で〇〇／△△を分析して」→ `start_analysis`（曲名とアーティスト名。30〜40秒かかる）
+- 名指しの無い「〇〇を分析して」→ 道具を使わず、ふつうに答える
+- すでにある分析の頼み（「〇〇の分析を続けて」など）→ 分析があるか分からなければ、まず `status`（読むだけ）で、その曲の分析がこの Mac にあるかを確かめる。無ければ道具を使わず、ふつうに答える
+- 分析の状態（集めたデータ・進み具合・成果物）はアプリが持っている。「続けて」は会話の続きではない。会話の履歴や前のスレッド、ウェブを探さない
 - 「〇〇の分析を続けて」→ `next_task`（analysis_id に曲名）。返ってきた指示書どおりに作業して `submit` し、また `next_task`。kind が done か wait になるまで、利用者に確認せずに繰り返す。kind が ask_user のときだけ、その内容を利用者に見せて答えを待つ
-- そのほか（進み具合・取得をやめる・やり直す・レポートの直し・設定）は、道具の説明に従う
-- 道具の説明と返事に書いてある決まりが、ここより優先する
+- 今後ずっと使う設定・指示書・知識ベースの頼みは、「UGC Analyzer の〜」と名指しがあるか、分析の会話の途中のときだけ
+- そのほか（進み具合・取得をやめる・やり直す・レポートの直し）は、道具の説明に従う。道具の説明と返事に書いてある決まりが、ここより優先する
 """
 
 OPENAI_YAML = """interface:
   display_name: "UGC Analyzer"
-  short_description: "TikTok の楽曲の UGC 分析（この Mac の UGC Collector）"
+  short_description: "TikTok の楽曲の UGC 分析（この Mac の UGC Analyzer）"
 """
 SKILL_FILES = {"SKILL.md": SKILL_MD, "agents/openai.yaml": OPENAI_YAML}
 
 # [mcp_servers.ugc-analyzer] と、その下の表（.env・.tools.<道具>）の見出し。ChatGPT が書き直すと名前が引用符つきになることもある
 _OUR_HEADER = re.compile(r"""^\s*\[\s*mcp_servers\s*\.\s*(?:"ugc-analyzer"|'ugc-analyzer'|ugc-analyzer)\s*(?:\.[^\]]*)?\]\s*(?:#.*)?$""")
 _ANY_HEADER = re.compile(r"^\s*\[")
+_OUR_MARK = re.compile(r"^\s*# UGC (?:Collector|Analyzer) の道具")   # 前の版（アプリ名が UGC Collector のころ）の目印も
 
 
 class LinkError(Exception):
@@ -104,7 +107,7 @@ def _strip(text: str) -> str:
             continue
         if ours and _ANY_HEADER.match(line):
             ours = False
-        if ours or line.strip() == MARK:
+        if ours or _OUR_MARK.match(line):
             continue
         out.append(line)
     return "\n".join(out).rstrip("\n")

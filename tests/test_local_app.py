@@ -589,7 +589,8 @@ class TestCodexLink(unittest.TestCase):
         self.assertTrue(all(v == {"approval_mode": "approve"} for v in u["tools"].values()))
         text = cl.CONFIG.read_text(encoding="utf-8")
         self.assertEqual(text.count(cl.MARK), 1)
-        self.assertNotIn("試し。2026-10-04", text.split(cl.MARK)[1])   # 前の節は置き換えた（目印より後ろに残らない）
+        self.assertNotIn("試し。2026-10-04", text)   # 前の節と、前の版の目印の行は置き換えた
+        self.assertNotIn("UGC Collector", text)
         self.assertEqual(cl.CONFIG.stat().st_mode & 0o777, 0o600)
         self.assertIn("name: ugc-analyzer", (cl.SKILL_DIR / "SKILL.md").read_text(encoding="utf-8"))
         self.assertTrue((cl.SKILL_DIR / "agents" / "openai.yaml").exists())
@@ -643,6 +644,22 @@ class TestCodexLink(unittest.TestCase):
             self.assertIn('args = ["--mcp"]', block)
         finally:
             cl.config.FROZEN = False
+
+    def test_start_phrase_same_everywhere(self):
+        """新しい分析は「UGC Analyzer で〇〇／△△を分析して」と名指ししたときだけ（2026-10-05 ユーザー）。
+        アプリの案内・ChatGPT のスキル・道具の案内（Claude と ChatGPT の両方）で同じ言い方"""
+        os.environ["UGC_COLLECTOR_HOME"] = self.tmp
+        try:
+            from collector_app import app
+            import mcp_proto
+            self.assertEqual(app.START_PHRASE, "UGC Analyzer で〇〇／△△を分析して")
+            self.assertIn(app.START_PHRASE, self.cl.SKILL_MD)
+            self.assertIn(app.START_PHRASE, mcp_proto.USE_RULE)
+            self.assertIn(mcp_proto.USE_RULE, mcp_proto.INSTRUCTIONS)
+            self.assertIn("名指しの無い「〇〇を分析して」には使わない", self.cl.SKILL_MD)
+            self.assertNotIn("UGC Collector", self.cl.SKILL_MD + self.cl.OPENAI_YAML + self.cl.MARK)
+        finally:
+            os.environ.pop("UGC_COLLECTOR_HOME", None)
 
     def test_ai_where(self):
         os.environ["UGC_COLLECTOR_HOME"] = self.tmp

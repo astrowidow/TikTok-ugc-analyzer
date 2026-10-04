@@ -50,11 +50,11 @@ hidden += collect_submodules("mcp", filter=lambda n: not n.startswith("mcp.cli")
 a = Analysis([str(HERE / "run_collector.py")], pathex=[str(HERE)], datas=datas, hiddenimports=hidden,
              excludes=["tkinter", "matplotlib", "IPython", "pytest"], noarchive=False)
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="UGC Collector", console=False, argv_emulation=False,
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="UGC Analyzer", console=False, argv_emulation=False,
           target_arch="arm64", codesign_identity=None)
-coll = COLLECT(exe, a.binaries, a.datas, name="UGC Collector")
-app = BUNDLE(coll, name="UGC Collector.app", icon=str(HERE / "assets" / "AppIcon.icns"),
+coll = COLLECT(exe, a.binaries, a.datas, name="UGC Analyzer")
+app = BUNDLE(coll, name="UGC Analyzer.app", icon=str(HERE / "assets" / "AppIcon.icns"),
              bundle_identifier="jp.ugc-analyzer.collector", version=VERSION,
-             info_plist={"LSUIElement": True, "CFBundleDisplayName": "UGC Collector",
+             info_plist={"LSUIElement": True, "CFBundleDisplayName": "UGC Analyzer",
                          "CFBundleShortVersionString": VERSION, "LSMinimumSystemVersion": "13.0",
                          "NSHumanReadableCopyright": "UGC Analyzer"})

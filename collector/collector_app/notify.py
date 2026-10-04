@@ -7,6 +7,8 @@ import os
 import subprocess
 import uuid
 
+from . import config
+
 _center = None
 _delegate = None
 _allowed = False   # 通知センターに許可されたか（許可の返事は非同期で来る）
@@ -63,4 +65,4 @@ def send(title: str, body: str) -> None:
             pass
     esc = lambda s: s.replace("\\", "\\\\").replace('"', '\\"')  # noqa: E731
     subprocess.run(["osascript", "-e", f'display notification "{esc(body)}" with title "{esc(title)}" '
-                    'subtitle "UGC Collector" sound name "default"'], capture_output=True)
+                    f'subtitle "{config.APP_NAME}" sound name "default"'], capture_output=True)

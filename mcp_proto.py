@@ -33,9 +33,23 @@ logger = logging.getLogger("mcp")
 PREFIX = "/mcp/"
 USERS_FILE = Path(os.environ.get("UGC_MCP_USERS", Path.home() / "ugc-secrets" / "mcp_users.json"))
 
+# いつ使うか（2026-10-05 ユーザー「UGC Analyzer を使いたくない時はどうしたらいいの？」）:
+# 新しい分析は名指しのときだけ。すでにある分析の続き・やめる・直しは名指しが無くても（status で確かめてから）
+USE_RULE = (
+    "使うのは次のときだけ。"
+    "(1) 利用者が「UGC Analyzer で〇〇／△△を分析して」と名指しして新しい分析を頼んだとき（start_analysis）。"
+    "名指しの無い「〇〇を分析して」には使わず、道具なしでふつうに答える。"
+    "(2) すでにある分析のことを頼まれたとき（「〇〇の分析を続けて」「〇〇の取得をやめて」「〇〇はどうなってる？」"
+    "「〇〇のレポートの3章に〜を足して」など）。分析があるか分からなければ、まず status（読むだけ）で確かめ、"
+    "その曲の分析が無ければ、道具なしでふつうに答える。"
+    "(3) 分析の会話の途中の返事（界隈の案への「OK」など）。"
+    "今後ずっと使う設定・指示書・知識ベースの頼みは、「UGC Analyzer の〜」と名指しがあるか、分析の会話の途中のときだけ。"
+)
+
 INSTRUCTIONS = (
     "UGC Analyzer（TikTok の楽曲 UGC 分析サービス）への接続です。分析の手順・指示書・検査はサービスが持っていて、"
     "あなたは「次の仕事を聞く → 指示書どおりにやる → 返す」を繰り返す係です。\n"
+    + USE_RULE + "\n"
     + runner.REPEAT_RULE
     + "\n分析 ID が分からなければ、曲名をそのまま渡すか、status で一覧を見る。"
     + "\nレポートの完成後に利用者が直しを頼んだら revise（このレポートだけ）。今後ずっと続く指示の変更は settings"
@@ -132,7 +146,9 @@ def _build_server(user_of=None, local: bool = False):
 
     @mcp.tool(
         title="分析を始める",
-        description=("TikTok の楽曲の UGC 分析を始める（取得を待ち行列に入れる）。利用者が「〇〇を分析して」と頼んだときに使う。"
+        description=("TikTok の楽曲の UGC 分析を始める（取得を待ち行列に入れる）。"
+                     "**利用者が「UGC Analyzer で〇〇／△△を分析して」と名指しして頼んだときだけ使う**"
+                     "（名指しの無い「〇〇を分析して」には使わない。restart_analysis の返事で呼び直すように言われたときは呼ぶ）。"
                      "song は曲名、artist はアーティスト名。music_url は TikTok の楽曲ページ（https://www.tiktok.com/music/…）。"
                      + ("楽曲ページは Mac が TikTok で探す（曲名で人気の動画を開いて使われている音源を読み、楽曲ページの UGC 数を比べ、"
                         "一番使われているページと、その2割以上使われている同じ曲の公式のページ（sped up 版など）を合わせて取る。数十秒かかる）。"
@@ -142,7 +158,7 @@ def _build_server(user_of=None, local: bool = False):
                         "利用者が楽曲ページの URL を渡したときは、探し直さずに全部を music_urls に入れる（2つ以上なら全部から取って合わせる）。"
                         "利用者に URL を頼むのは、何通りも検索して見つからないときの最後の手段。利用者に確認は求めない。"
                         "取得を始めると、どの楽曲ページで進めるか（題・作者・UGC 数・URL）が返ってくるので、それを利用者に伝える。"
-                        "取得は利用者の Mac の取得アプリが半日ほどかけてやり、終わると Mac の通知が出る。" if local else
+                        "取得は利用者の Mac の UGC Analyzer が半日ほどかけてやり、終わると Mac の通知が出る。" if local else
                         "分かれば music_url。取得は半日ほどかかる。")
                      + "返ってきた内容を利用者に短く伝えて止まる（取得を待たない・見に来ない）。" + rule),
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
@@ -275,7 +291,7 @@ def _build_server(user_of=None, local: bool = False):
     @mcp.tool(
         title="知識ベースを新しくする",
         description="著者（山本慶太朗）の note の新しい記事を確かめ、知識ベースに取り込む準備をする。"
-                    "利用者が「知識ベースを更新して」と頼んだときに使う（取得アプリも週1回、自動で確かめている）。"
+                    "利用者が「UGC Analyzer の知識ベースを更新して」と頼んだときに使う（UGC Analyzer も週1回、自動で確かめている）。"
                     "取り込む記事があれば、そのあと next_task を呼ぶと取り込みの仕事が渡される。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=True),

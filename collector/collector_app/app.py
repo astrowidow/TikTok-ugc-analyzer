@@ -28,6 +28,8 @@ def ai_where() -> str:
 
 
 CONNECT_HINT = "「Claude につなぐ」か「ChatGPT につなぐ」（使っている方）"
+# 新しい分析を頼む言い方（名指しのときだけ始まる。2026-10-05 ユーザー）
+START_PHRASE = "UGC Analyzer で〇〇／△△を分析して"
 # 試験用: Chrome とログインを飛ばす（TikTok に触らずにメニュー・係・通知だけを確かめる）
 TEST_NO_CHROME = bool(os.environ.get("UGC_COLLECTOR_TEST_NO_CHROME"))
 TICK = 5            # 見張りの間隔（秒）
@@ -283,7 +285,7 @@ class Controller:
         where = ai_where()
         if not where:
             return f"準備OK・次はメニューの{CONNECT_HINT}を押してください" + extra
-        return f"準備OK・待機中（{where} で「〇〇を分析して」と言ってください）" + extra
+        return f"準備OK・待機中（{where} で「{START_PHRASE}」と言ってください）" + extra
 
     def _login_flow(self):
         """捨て垢のログインを待つ。ログインは利用者が自分で、取得用の Chrome の画面でする"""
@@ -441,7 +443,7 @@ class Controller:
                 if n:
                     notify.send("知識ベースに新しい記事があります",
                                 f"著者の note の新しい記事 {n} 本。次に {ai_where() or 'Claude'} で「〇〇の分析を続けて」と言ったときに取り込みます"
-                                "（分析が無ければ「知識ベースを更新して」）")
+                                "（分析が無ければ「UGC Analyzer の知識ベースを更新して」）")
                 elif not quiet:
                     notify.send("知識ベースは最新です", "著者の note に新しい記事はありませんでした")
             except Exception as e:
@@ -547,7 +549,7 @@ class CollectorApp(rumps.App):
             self.ai_trial.state = int(bool(config.load_state().get("ai_trial")))
             op.add(self.ai_trial)
             items.append(op)
-        items += [None, rumps.MenuItem(f"UGC Collector {VERSION}"), rumps.MenuItem("終了", callback=self.quit_app)]
+        items += [None, rumps.MenuItem(f"{config.APP_NAME} {VERSION}"), rumps.MenuItem("終了", callback=self.quit_app)]
         self.menu = items
         rumps.Timer(self.refresh, 2).start()
 
@@ -581,7 +583,7 @@ class CollectorApp(rumps.App):
         if config.FROZEN and (system.is_translocated() or not system.in_applications()):
             rumps.alert("先にアプリを「アプリケーション」フォルダに移してください",
                         "ダウンロードした場所のままだと、Claude からこのアプリを呼べません。"
-                        "移したら、アプリケーションフォルダの「UGC Collector」を開き直してください。")
+                        f"移したら、アプリケーションフォルダの「{config.APP_NAME}」を開き直してください。")
             return
         if not claude_link.claude_installed():
             rumps.alert("Claude のアプリが見つかりません",
@@ -602,7 +604,7 @@ class CollectorApp(rumps.App):
 
     def _restart_claude(self):
         if claude_link.restart_claude():
-            notify.send("Claude を開き直しました", "Claude で「〇〇を分析して」と言ってみてください")
+            notify.send("Claude を開き直しました", f"Claude で「{START_PHRASE}」と言ってみてください")
         else:
             notify.send("Claude を閉じられませんでした", "Claude を自分で終了（⌘Q）して、開き直してください")
 
@@ -611,7 +613,7 @@ class CollectorApp(rumps.App):
         if config.FROZEN and (system.is_translocated() or not system.in_applications()):
             rumps.alert("先にアプリを「アプリケーション」フォルダに移してください",
                         "ダウンロードした場所のままだと、ChatGPT からこのアプリを呼べません。"
-                        "移したら、アプリケーションフォルダの「UGC Collector」を開き直してください。")
+                        f"移したら、アプリケーションフォルダの「{config.APP_NAME}」を開き直してください。")
             return
         if not codex_link.chatgpt_installed():
             rumps.alert("ChatGPT のアプリが見つかりません",
@@ -626,14 +628,14 @@ class CollectorApp(rumps.App):
         r = rumps.alert("ChatGPT につなぎました",
                         "ChatGPT を開き直すと使えるようになります。今すぐ開き直しますか？\n"
                         "（話している途中の会話は保存されています）\n\n"
-                        "使うときは、ChatGPT の「Work」で「〇〇を分析して」と言ってください。",
+                        f"使うときは、ChatGPT の「Work」で「{START_PHRASE}」と言ってください。",
                         ok="開き直す", cancel="あとで自分で")
         if r == 1:
             threading.Thread(target=self._restart_chatgpt, daemon=True).start()
 
     def _restart_chatgpt(self):
         if codex_link.restart_chatgpt():
-            notify.send("ChatGPT を開き直しました", "ChatGPT の Work で「〇〇を分析して」と言ってみてください")
+            notify.send("ChatGPT を開き直しました", f"ChatGPT の Work で「{START_PHRASE}」と言ってみてください")
         else:
             notify.send("ChatGPT を閉じられませんでした", "ChatGPT を自分で終了（⌘Q）して、開き直してください")
 

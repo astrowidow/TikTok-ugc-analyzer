@@ -3,7 +3,7 @@
 TikTok には触らない（メニューバーのアプリも起こさない）。note には1回だけ一覧を聞く（--no-network で省く）。
 
   python tests/check_local_mcp.py                     … ソースから（collector/.venv の python で）
-  python tests/check_local_mcp.py --app "/Applications/UGC Collector.app"   … 固めたアプリで
+  python tests/check_local_mcp.py --app "/Applications/UGC Analyzer.app"   … 固めたアプリで
   python tests/check_local_mcp.py --analysis <分析フォルダ>   … W1 の確かめに使う分析（取得済みのもの）を写して使う
 
 確かめること:
@@ -28,7 +28,7 @@ from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 
 ROOT = Path(__file__).resolve().parent.parent
-REAL_HOME = Path.home() / "Library" / "Application Support" / "UGC Collector"
+REAL_HOME = Path.home() / "Library" / "Application Support" / "UGC Analyzer"
 
 
 def text_of(result) -> str:
@@ -80,7 +80,7 @@ async def main():
            "PATH": os.environ.get("PATH", ""),
            "HOME": os.environ.get("HOME", "")}
     if args.app:
-        exe = str(Path(args.app) / "Contents" / "MacOS" / "UGC Collector")
+        exe = str(Path(args.app) / "Contents" / "MacOS" / "UGC Analyzer")
         params = StdioServerParameters(command=exe, args=["--mcp"], env=env)
     else:
         env["PYTHONPATH"] = str(ROOT / "collector")
@@ -105,6 +105,10 @@ async def main():
             ok(tools == ["cancel_analysis", "next_task", "prompts", "read", "restart_analysis", "revise", "settings",
                          "start_analysis", "status", "submit", "update_knowledge"], f"道具 {tools}")
             ok("next_task" in (c.instructions or ""), "instructions が返る")
+            descs = {t.name: t.description or "" for t in (await c.list_tools()).tools}
+            ok("UGC Analyzer で〇〇／△△を分析して" in (c.instructions or "")
+               and "名指しして頼んだときだけ使う" in descs.get("start_analysis", ""),
+               "新しい分析は「UGC Analyzer で〇〇／△△を分析して」と名指ししたときだけ（instructions と start_analysis の説明）")
             sys.path.insert(0, str(ROOT / "collector"))
             from collector_app import codex_link
             ok(sorted(codex_link.TOOLS) == tools,
@@ -193,7 +197,7 @@ async def main():
                    "この Mac の取得の設定（ポート 9250）で待ち行列に入る")
                 ok(meta["title"] == "てすと", f"URL だけで頼むと題名は曲名の部分（{meta['title']}）")
                 r = await c.call_tool("status", {"analysis_id": m_aid.group(1)})
-                ok("取得アプリが動いていません" in text_of(r), "取得アプリが止まっていると status がそう言う")
+                ok("UGC Analyzer が動いていません" in text_of(r), "UGC Analyzer が止まっていると status がそう言う")
                 url2 = "https://www.tiktok.com/music/%E3%81%A6%E3%81%99%E3%81%A8-7000000000000000002"
                 r = await c.call_tool("restart_analysis", {"analysis_id": m_aid.group(1), "music_url": url2})
                 t2 = text_of(r)

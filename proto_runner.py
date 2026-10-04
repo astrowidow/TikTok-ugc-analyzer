@@ -695,7 +695,7 @@ def _acq_view(a: Analysis):
                 "eta_seconds": None}
     if acq.get("status") == "failed":
         if LOCAL is not None:
-            msg = (f"取得が止まりました（{acq.get('error')}）。取得アプリのメニュー「止まった取得を続きから再開」で、"
+            msg = (f"取得が止まりました（{acq.get('error')}）。UGC Analyzer のメニュー「止まった取得を続きから再開」で、"
                    "済んだところの続きから取れます。何度も止まるときは運営に連絡してください。")
         else:
             msg = f"取得が止まりました（{acq.get('error')}）。運営に連絡してください。"
@@ -713,11 +713,11 @@ def _acq_view(a: Analysis):
     if LOCAL is not None:
         app = LOCAL.app_state() or {}
         if not app.get("running"):
-            msg = ("あなたの Mac の取得アプリが動いていません（メニューバーに割れた音符のアイコンが無い）。"
-                   "アプリケーションフォルダの「UGC Collector」を開けば、済んだところの続きから取ります。")
+            msg = ("あなたの Mac の UGC Analyzer が動いていません（メニューバーに割れた音符のアイコンが無い）。"
+                   "アプリケーションフォルダの「UGC Analyzer」を開けば、済んだところの続きから取ります。")
             return {"state": "stopped", "message": msg, "eta_seconds": eta}
         if app.get("login_wanted"):
-            msg = ("取得アプリが TikTok のログインを待っています。取得アプリが開いた Chrome で、捨て垢でログインしてください。"
+            msg = ("UGC Analyzer が TikTok のログインを待っています。UGC Analyzer が開いた Chrome で、捨て垢でログインしてください。"
                    "ログインすれば続きから取ります。")
             return {"state": "login", "message": msg, "eta_seconds": eta}
         if p.get("status") == "running":
@@ -1032,7 +1032,7 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
             body += ("\n外した楽曲ページ（入れたいときは「それも入れて」と言ってください）:\n" +
                      "\n".join(f"  - {_page_line(u, i)} … {why}" for u, i, why in dropped))
         lines = [head, body + warn,
-                 "あなたの Mac の取得アプリが、楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。",
+                 "あなたの Mac の UGC Analyzer が、楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。",
                  (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + when,
                  "そのあいだ Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）。",
                  f"終わると Mac の通知が出ます。そのあと「{title}の分析を続けて」と言ってください。"]
@@ -1522,8 +1522,8 @@ def cancel_analysis(user_id: str, ref: str | None) -> dict:
         m["acquisition"].update({"status": "cancelled", "cancelled_at": _now(), "cancel_reason": "利用者がやめた"})
         _write_json(a.dir / "analysis.json", m)
         LOCAL.request_stop(a.id)
-    return {"text": f"「{a.title}」の取得をやめました（取得アプリが数秒で止めます）。"
-                    f"もう一度「{a.title}の分析をして」と頼めば、楽曲ページ探しから最初にやり直します。", "analysis_id": a.id}
+    return {"text": f"「{a.title}」の取得をやめました（UGC Analyzer が数秒で止めます）。"
+                    f"もう一度「UGC Analyzer で{a.title}を分析して」と頼めば、楽曲ページ探しから最初にやり直します。", "analysis_id": a.id}
 
 
 def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_urls: list | None = None) -> dict:

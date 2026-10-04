@@ -2,7 +2,7 @@
 
 Claude デスクトップが、設定ファイル（claude_link.py が書く）にしたがって次のように起動し、標準入出力で話す:
 
-  /Applications/UGC Collector.app/Contents/MacOS/UGC Collector --mcp
+  /Applications/UGC Analyzer.app/Contents/MacOS/UGC Analyzer --mcp
 
 道具の中身は本線と同じ（mcp_proto.py の道具・proto_runner.py の仕事の列・flow_w1.py の W1）。違いは3つだけ:
   - 利用者はこの Mac の1人で固定（秘密の URL は要らない）
@@ -211,7 +211,7 @@ class LocalHooks:
             return "disabled"
         try:
             if config.FROZEN:
-                bundle = Path(sys.executable).resolve().parents[2]   # …/UGC Collector.app
+                bundle = Path(sys.executable).resolve().parents[2]   # …/UGC Analyzer.app
                 subprocess.Popen(["/usr/bin/open", "-g", str(bundle)], stdin=subprocess.DEVNULL,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:

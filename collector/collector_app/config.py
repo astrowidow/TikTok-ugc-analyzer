@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import VERSION
 
-APP_NAME = "UGC Collector"
+APP_NAME = "UGC Analyzer"   # 利用者に見える呼び方はこれだけ（2026-10-05 ユーザー「表記ゆれやめよう。全て UGC Analyzer に統一」）
 APP_ID = "jp.ugc-analyzer.collector"
 OWNER = "local"   # この Mac の利用者（1人で固定。0.1.0 の分析もこの名前で作ってある）
 

@@ -50,6 +50,9 @@ DEFAULTS = {
     "enrich_sleep": 2.0,
     "collect_scrolls": 150,      # コメント: グリッドでプールを探すスクロールの上限
     "calls_per_min": 1.8, "max_calls_per_min": 2.0, "interval": 15.0,
+    # コメント取得の速さ（acquire/spatest.py 冒頭の 2026-10-05 の説明）。要求の間隔の設定は変えない。
+    # 試験（きゃわぽっぴんどぅー20本）で 80.9分 → 59.6分、混入0・頭打ち0（output/speedtest-20261005）
+    "stop_on_no_more": False, "prescroll": False, "only_open_video": False, "remount_on_stall": False,
     "chrome_port": "9222",
     "blocked_wait_min": 90,      # ブロックを検知したら空ける時間（COMMENT_ACQUISITION_HANDOVER 2-6: 約1.5時間で回復）
     "blocked_retries": 2,
@@ -497,6 +500,8 @@ class Run:
                         "--interval", str(s["interval"]), "--jitter", "0.5", "--deadline-hours", f"{left:.3f}",
                         "--out", str(self.p("raw", "comments.jsonl")), "--log", str(self.p("fetch_log", "comments.log")),
                         "--summary", str(summary)]
+                args += [f"--{k.replace('_', '-')}" for k in ("stop_on_no_more", "prescroll", "only_open_video",
+                                                               "remount_on_stall") if s.get(k)]
                 a = spatest.build_parser().parse_args(args)
                 self.lock("コメント")
                 c = spatest.SpaCollector(a)

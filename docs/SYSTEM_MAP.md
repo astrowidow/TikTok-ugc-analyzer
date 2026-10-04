@@ -12,7 +12,7 @@
 | 場所 | 誰のもの | 動くもの |
 |---|---|---|
 | **[Mac]** その人の Mac | 各自 | **UGC Collector**（メニューバーのアプリ）。①取得（TikTok・取得用の Chrome）②AI の相手（仕事の列・指示書・検査・データ・知識ベース）③レポートの置き場 |
-| **[Claude]** その人の Claude | 各自（Anthropic） | 会話。Mac のアプリの道具を呼ぶ（Claude デスクトップアプリ経由） |
+| **[AI]** その人の Claude か ChatGPT | 各自（Anthropic・OpenAI） | 会話。Mac のアプリの道具を呼ぶ（Claude デスクトップアプリ、または ChatGPT の Mac アプリの Work の画面。2026-10-04〜） |
 
 外とのやりとりは3つだけ（どれも Mac から出ていく。Mac に入ってくる口は無い）:
 
@@ -20,14 +20,15 @@
 |---|---|---|
 | TikTok | 一覧・属性・コメント（その人の捨て垢・その人の回線） | 取得の13時間前後 |
 | note.com | 著者の記事の一覧と本文（知識ベースの更新） | 週1回と「知識ベースを更新して」のとき。数リクエスト |
-| Anthropic | Claude の会話（Claude デスクトップアプリが話す） | 着席のとき |
+| Anthropic・OpenAI | AI の会話（Claude デスクトップアプリ・ChatGPT の Mac アプリが話す） | 着席のとき |
 
 **運営の Windows 機と ngrok は、友達の経路に出てこない。** Windows 機は今のまま置いてある（段1〜3 の本番。触っていない）。
 
 ## 2. Mac の中
 
 ```
-Claude デスクトップアプリ ──（標準入出力）──> UGC Collector --mcp   … Claude の道具（Claude が起こす。2つ同時に起きることがある）
+Claude デスクトップアプリ ──（標準入出力）──> UGC Collector --mcp   … AI の道具（Claude が起こす。2つ同時に起きることがある）
+ChatGPT の Mac アプリ（Work）──（標準入出力）──┘                       （ChatGPT は ~/.codex/config.toml を読んで起こす）
                                                    │ 分析を作る・仕事を渡す・結果を検査して保存
                                                    ▼
                           ~/Library/Application Support/UGC Collector/
@@ -46,6 +47,7 @@ UGC Collector（メニューバー）── 5秒おきに見る ─────�
 | メニューバー | `collector/collector_app/app.py` | 取得の見張り・ログイン・通知・メニュー（指示書の編集・知識ベース・Claude につなぐ） |
 | Claude の道具 | `collector/collector_app/mcp_local.py` | `--mcp` の入口。中身は本線の `mcp_proto.py`（道具9つ）・`proto_runner.py`・`flow_w1.py` |
 | Claude につなぐ | `collector/collector_app/claude_link.py` | Claude の設定ファイルに道具を1行足す（控えを取る） |
+| ChatGPT につなぐ | `collector/collector_app/codex_link.py` | Codex の設定ファイル（`~/.codex/config.toml`）に道具の節と道具ごとの許可を足し（控えを取る）、スキル（`~/.agents/skills/ugc-analyzer/`）を置く。ChatGPT は道具の案内を会話に入れないので、スキルで気づかせる |
 | 取得 | 本線の `acquire/`・`analysis/` | 一覧 → 属性 → プール → コメント（Windows 機と同じ部品） |
 | 指示書 | 本線の `prompt_store.py`・`service_prompts/w1/` | 初期の指示書と、利用者の指示書。「出力の形」の節はいつも初期のもの |
 | 知識ベース | 本線の `kb_update.py` | 新着を見る・取り込みと整理の仕事 |
@@ -65,7 +67,7 @@ UGC Collector（メニューバー）── 5秒おきに見る ─────�
 | 言葉 | 指すもの |
 |---|---|
 | アプリ・分析アプリ・取得アプリ | UGC Collector |
-| 道具 | アプリが Claude に出す9つ（start_analysis・status・next_task・submit・read・revise・settings・prompts・update_knowledge） |
+| 道具 | アプリが AI に出す11（start_analysis・status・next_task・submit・read・revise・settings・prompts・update_knowledge・cancel_analysis・restart_analysis） |
 | 指示書 | AI に渡す作業の指示（11本）。利用者が直せる |
 | 知識ベース | 著者（山本慶太朗）の note 記事と、その蒸留物（用語集・文体ガイド・カード） |
 | 取得用の Chrome | アプリが開く、専用プロファイルの Chrome（捨て垢のログインはここだけ） |

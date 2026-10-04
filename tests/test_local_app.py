@@ -534,3 +534,127 @@ class TestCommunityGuide(unittest.TestCase):
         files = [json.loads(x)["file"] for x in (dst / "community_defs.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertEqual(files, ["a.md", "new.md"])   # アプリの分＋この Mac で足した分
         self.assertEqual(config.sync_shipped_knowledge(src, dst), [])   # 2回目は何もしない
+
+
+class TestCodexLink(unittest.TestCase):
+    """「ChatGPT につなぐ」: Codex の設定ファイル（TOML）に道具の節を足す・置き換える・控え・スキル（2026-10-04）。
+    ChatGPT にも本物の設定ファイルにも触らない（一時フォルダで）"""
+    # 運営の Mac の ChatGPT が書いた設定ファイルの形（ChatGPT 自身の設定・同梱の道具・手で足した節・「常に許可」の記録）
+    EXISTING = (
+        'notify = ["/x/SkyComputerUseClient", "turn-ended"]\n\n[desktop]\nsansFontSize = 14\n\n'
+        '[plugins."browser@openai-bundled"]\nenabled = true\n\n'
+        '[mcp_servers.node_repl]\nargs = []\ncommand = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"\n\n'
+        '[mcp_servers.node_repl.env]\nCODEX_HOME = "/Users/x/.codex"\n\n'
+        '# UGC Collector の道具（試し。2026-10-04）\n[mcp_servers.ugc-analyzer]\n'
+        'command = "/Applications/UGC Collector.app/Contents/MacOS/UGC Collector"\nargs = ["--mcp"]\ntool_timeout_sec = 180\n\n'
+        '[mcp_servers.ugc-analyzer.tools.start_analysis]\napproval_mode = "approve"\n\n'
+        '[mcp_servers."ugc-analyzer".tools.cancel_analysis]\napproval_mode = "approve"\n\n'
+        '[features]\nfoo = true\n')
+
+    def setUp(self):
+        import tomllib
+        self.toml = tomllib
+        self.tmp = tempfile.mkdtemp()
+        os.environ["UGC_CODEX_HOME"] = str(Path(self.tmp) / "codex")
+        os.environ["UGC_CODEX_SKILLS"] = str(Path(self.tmp) / "skills")
+        sys.path.insert(0, str(ROOT / "collector"))
+        from collector_app import codex_link
+        self.cl = importlib.reload(codex_link)
+
+    def tearDown(self):
+        os.environ.pop("UGC_CODEX_HOME", None)
+        os.environ.pop("UGC_CODEX_SKILLS", None)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _cfg(self) -> dict:
+        return self.toml.loads(self.cl.CONFIG.read_text(encoding="utf-8"))
+
+    def test_connect_keeps_others(self):
+        cl = self.cl
+        cl.CONFIG.parent.mkdir(parents=True)
+        cl.CONFIG.write_text(self.EXISTING, encoding="utf-8")
+        os.chmod(cl.CONFIG, 0o600)
+        self.assertEqual(cl.status(), "outdated")   # 前の場所のアプリ（手で足した試しの節）・スキルが無い
+        backup = cl.connect()
+        self.assertEqual(Path(backup).read_text(encoding="utf-8"), self.EXISTING)   # 控えは元のまま
+        d = self._cfg()
+        self.assertEqual(d["desktop"], {"sansFontSize": 14})
+        self.assertEqual(d["features"], {"foo": True})
+        self.assertEqual(d["mcp_servers"]["node_repl"]["env"], {"CODEX_HOME": "/Users/x/.codex"})
+        self.assertTrue(d["plugins"]["browser@openai-bundled"]["enabled"])
+        u = d["mcp_servers"]["ugc-analyzer"]
+        self.assertEqual((u["command"], u["args"]), (cl.entry()["command"], cl.entry()["args"]))
+        self.assertEqual((u["startup_timeout_sec"], u["tool_timeout_sec"]), (60, 300))
+        self.assertEqual(sorted(u["tools"]), sorted(cl.TOOLS))   # 道具ごとの許可（聞かれないように）
+        self.assertTrue(all(v == {"approval_mode": "approve"} for v in u["tools"].values()))
+        text = cl.CONFIG.read_text(encoding="utf-8")
+        self.assertEqual(text.count(cl.MARK), 1)
+        self.assertNotIn("試し。2026-10-04", text.split(cl.MARK)[1])   # 前の節は置き換えた（目印より後ろに残らない）
+        self.assertEqual(cl.CONFIG.stat().st_mode & 0o777, 0o600)
+        self.assertIn("name: ugc-analyzer", (cl.SKILL_DIR / "SKILL.md").read_text(encoding="utf-8"))
+        self.assertTrue((cl.SKILL_DIR / "agents" / "openai.yaml").exists())
+        self.assertEqual(cl.status(), "connected")
+        cl.connect()   # 2回押しても同じ
+        self.assertEqual(cl.CONFIG.read_text(encoding="utf-8"), text)
+
+    def test_new_file_and_states(self):
+        cl = self.cl
+        self.assertEqual(cl.status(), "none")
+        self.assertEqual(cl.connect(), "")   # 元の設定ファイルが無い（ChatGPT をまだ開いていない Mac）
+        self.assertEqual(cl.CONFIG.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(cl.status(), "connected")
+        (cl.SKILL_DIR / "SKILL.md").write_text("古いスキル", encoding="utf-8")
+        self.assertEqual(cl.status(), "outdated")   # アプリを新しくしたら、起動のときに書き直す
+        cl.connect()
+        cl.CONFIG.write_text(cl.CONFIG.read_text(encoding="utf-8").replace(
+            "startup_timeout_sec", "enabled = false\nstartup_timeout_sec"), encoding="utf-8")
+        self.assertEqual(cl.status(), "disabled")   # ChatGPT の設定で切られている（勝手には戻さない）
+        cl.disconnect()
+        self.assertEqual(cl.status(), "none")
+        self.assertFalse(cl.SKILL_DIR.exists())
+
+    def test_broken_file_untouched(self):
+        cl = self.cl
+        cl.CONFIG.parent.mkdir(parents=True)
+        cl.CONFIG.write_text("[desktop\nx = 1\n", encoding="utf-8")
+        self.assertEqual(cl.status(), "none")
+        with self.assertRaises(cl.LinkError):
+            cl.connect()
+        self.assertEqual(cl.CONFIG.read_text(encoding="utf-8"), "[desktop\nx = 1\n")
+        self.assertFalse(cl.SKILL_DIR.exists())
+
+    def test_disconnect_keeps_others(self):
+        cl = self.cl
+        cl.CONFIG.parent.mkdir(parents=True)
+        cl.CONFIG.write_text(self.EXISTING, encoding="utf-8")
+        cl.connect()
+        cl.disconnect()
+        d = self._cfg()
+        self.assertNotIn("ugc-analyzer", d["mcp_servers"])
+        self.assertEqual(d["features"], {"foo": True})
+        self.assertIn("node_repl", d["mcp_servers"])
+
+    def test_frozen_entry(self):
+        cl = self.cl
+        cl.config.FROZEN = True
+        try:
+            block = cl._block()
+            self.assertNotIn(".env]", block)   # アプリにしたときは環境変数を書かない
+            self.assertIn('args = ["--mcp"]', block)
+        finally:
+            cl.config.FROZEN = False
+
+    def test_ai_where(self):
+        os.environ["UGC_COLLECTOR_HOME"] = self.tmp
+        try:
+            from collector_app import app
+            orig = (app.claude_link.status, app.codex_link.status)
+            try:
+                for c, g, want in [("connected", "none", "Claude"), ("none", "connected", "ChatGPT の Work"),
+                                   ("connected", "connected", "Claude か ChatGPT の Work"), ("none", "outdated", "")]:
+                    app.claude_link.status, app.codex_link.status = (lambda c=c: c), (lambda g=g: g)
+                    self.assertEqual(app.ai_where(), want)
+            finally:
+                app.claude_link.status, app.codex_link.status = orig
+        finally:
+            os.environ.pop("UGC_COLLECTOR_HOME", None)

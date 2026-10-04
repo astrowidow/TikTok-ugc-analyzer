@@ -1,7 +1,7 @@
 """メニューバーのアプリ（Rectangle と同じく、メニューバーのアイコンだけ。Dock にも画面にも出ない）。
 
 画面の操作はメインのスレッド、取得の見張り（Chrome・ログイン・係・再開・通知）・知識ベースの新着・指示書の見張りは裏のスレッドで回す。
-分析を頼むのは Claude との会話（Claude が mcp_local.py の道具で分析を作り、ここが5秒おきに見て拾う）。
+分析を頼むのは Claude か ChatGPT との会話（AI が mcp_local.py の道具で分析を作り、ここが5秒おきに見て拾う）。
 """
 import os
 import re
@@ -13,9 +13,21 @@ from pathlib import Path
 
 import rumps
 
-from . import VERSION, chrome, claude_link, config, jobs, notify, system, worker_entry
+from . import VERSION, chrome, claude_link, codex_link, config, jobs, notify, system, worker_entry
 
 MUSIC_URL_RE = re.compile(r"^https://(www\.)?tiktok\.com/music/[^\s/]+-\d+")
+
+
+def ai_where() -> str:
+    """利用者が話しかける先（通知・案内の文。つないだ AI で出し分ける）。どちらもつないでいなければ空"""
+    c = claude_link.status() == "connected"
+    g = codex_link.status() == "connected"
+    if c and g:
+        return "Claude か ChatGPT の Work"
+    return "Claude" if c else "ChatGPT の Work" if g else ""
+
+
+CONNECT_HINT = "「Claude につなぐ」か「ChatGPT につなぐ」（使っている方）"
 # 試験用: Chrome とログインを飛ばす（TikTok に触らずにメニュー・係・通知だけを確かめる）
 TEST_NO_CHROME = bool(os.environ.get("UGC_COLLECTOR_TEST_NO_CHROME"))
 TICK = 5            # 見張りの間隔（秒）
@@ -268,9 +280,10 @@ class Controller:
             self.idle_since = None
 
     def _idle_text(self, extra: str = "") -> str:
-        if claude_link.status() != "connected":
-            return "準備OK・次はメニューの「Claude につなぐ」を押してください" + extra
-        return "準備OK・待機中（Claude で「〇〇を分析して」と言ってください）" + extra
+        where = ai_where()
+        if not where:
+            return f"準備OK・次はメニューの{CONNECT_HINT}を押してください" + extra
+        return f"準備OK・待機中（{where} で「〇〇を分析して」と言ってください）" + extra
 
     def _login_flow(self):
         """捨て垢のログインを待つ。ログインは利用者が自分で、取得用の Chrome の画面でする"""
@@ -293,8 +306,8 @@ class Controller:
             self.login_presented = False
             self.chrome.minimize()
             self.log.info("TikTok のログインを確かめました")
-            if claude_link.status() != "connected":
-                notify.send("ログインできました", "最後に、メニューバーの割れた音符のアイコン →「Claude につなぐ」を押してください")
+            if not ai_where():
+                notify.send("ログインできました", f"最後に、メニューバーの割れた音符のアイコン →{CONNECT_HINT}を押してください")
             else:
                 notify.send("準備OK", "ログインできました。取得用の Chrome は Dock にしまいます。このまま使えます")
             self.status_text = self._idle_text()
@@ -318,7 +331,7 @@ class Controller:
             elif st == "done" and before is not None:
                 c = (((m.get("acquisition") or {}).get("steps") or {}).get("comments") or {}).get("detail") or {}
                 notify.send(f"「{title}」の取得が終わりました",
-                            f"Claude で「{title}の分析を続けて」と言ってください"
+                            f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言ってください"
                             f"（コメント {c.get('videos_ok', '?')}本・{c.get('comments', '?')}件）")
                 self.log.info("取得が終わりました: %s %s", aid, c)
             elif st == "failed" and before is not None:
@@ -415,7 +428,7 @@ class Controller:
             self.kb_text = f"知識ベース: 読めません（{e}）"
 
     def check_knowledge(self, quiet: bool = False):
-        """著者の note の新着を見る（裏で）。新しい記事は、次に Claude で「〇〇の分析を続けて」と言ったときに取り込む"""
+        """著者の note の新着を見る（裏で）。新しい記事は、次に AI に「〇〇の分析を続けて」と言ったときに取り込む"""
         if self.kb_busy:
             return
 
@@ -427,7 +440,7 @@ class Controller:
                 n = len(res["new"])
                 if n:
                     notify.send("知識ベースに新しい記事があります",
-                                f"著者の note の新しい記事 {n} 本。次に Claude で「〇〇の分析を続けて」と言ったときに取り込みます"
+                                f"著者の note の新しい記事 {n} 本。次に {ai_where() or 'Claude'} で「〇〇の分析を続けて」と言ったときに取り込みます"
                                 "（分析が無ければ「知識ベースを更新して」）")
                 elif not quiet:
                     notify.send("知識ベースは最新です", "著者の note に新しい記事はありませんでした")
@@ -475,6 +488,7 @@ class CollectorApp(rumps.App):
         self.ctl = ctl
         self.status_item = rumps.MenuItem("起動中…")
         self.claude_item = rumps.MenuItem("Claude につなぐ", callback=self.connect_claude)
+        self.chatgpt_item = rumps.MenuItem("ChatGPT につなぐ", callback=self.connect_chatgpt)
         self.kb_item = rumps.MenuItem("知識ベース: …")
         self.keep_display = rumps.MenuItem("取得中は画面を消さない", callback=self.toggle_display)
         self.keep_display.state = int(ctl.worker.keep_display_on)
@@ -517,6 +531,7 @@ class CollectorApp(rumps.App):
             rumps.MenuItem("TikTok にログイン", callback=self.login),
             None,
             self.claude_item,
+            self.chatgpt_item,
             rumps.MenuItem("レポートのフォルダを開く", callback=self.open_reports),
             self.prompt_menu,
             kb_menu,
@@ -527,7 +542,8 @@ class CollectorApp(rumps.App):
             op = rumps.MenuItem("運営向け")
             op.add(rumps.MenuItem("曲を取得する（本番の規模・約13時間）…", callback=self.add_full))
             op.add(rumps.MenuItem("ちょいとり（試し・約5分）…", callback=self.add_trial))
-            self.ai_trial = rumps.MenuItem("Claude から頼んだ取得を、ちょいとりの規模にする", callback=self.toggle_ai_trial)
+            self.ai_trial = rumps.MenuItem("AI（Claude・ChatGPT）から頼んだ取得を、ちょいとりの規模にする",
+                                           callback=self.toggle_ai_trial)
             self.ai_trial.state = int(bool(config.load_state().get("ai_trial")))
             op.add(self.ai_trial)
             items.append(op)
@@ -544,7 +560,12 @@ class CollectorApp(rumps.App):
         if self.claude_item.title != title:
             self.claude_item.title = title
         self.claude_item.state = int(st == "connected")
-        kb = "知識ベース: " + (self.ctl.kb_text or "…")
+        gst = codex_link.status()
+        title = "ChatGPT につながっています" if gst == "connected" else "ChatGPT につなぐ"
+        if self.chatgpt_item.title != title:
+            self.chatgpt_item.title = title
+        self.chatgpt_item.state = int(gst == "connected")
+        kb ="知識ベース: " + (self.ctl.kb_text or "…")
         if self.kb_item.title != kb:
             self.kb_item.title = kb
         for r in self.ctl.prompt_rows:
@@ -584,6 +605,37 @@ class CollectorApp(rumps.App):
             notify.send("Claude を開き直しました", "Claude で「〇〇を分析して」と言ってみてください")
         else:
             notify.send("Claude を閉じられませんでした", "Claude を自分で終了（⌘Q）して、開き直してください")
+
+    # --- ChatGPT につなぐ（2026-10-04。ChatGPT の Mac アプリの Work の画面で使う） ---
+    def connect_chatgpt(self, _):
+        if config.FROZEN and (system.is_translocated() or not system.in_applications()):
+            rumps.alert("先にアプリを「アプリケーション」フォルダに移してください",
+                        "ダウンロードした場所のままだと、ChatGPT からこのアプリを呼べません。"
+                        "移したら、アプリケーションフォルダの「UGC Collector」を開き直してください。")
+            return
+        if not codex_link.chatgpt_installed():
+            rumps.alert("ChatGPT のアプリが見つかりません",
+                        "ChatGPT の Mac アプリ（https://openai.com/chatgpt/download/）を入れて、ログインしてから、もう一度押してください。")
+            return
+        try:
+            backup = codex_link.connect()
+        except codex_link.LinkError as e:
+            rumps.alert("ChatGPT につなげませんでした", str(e))
+            return
+        self.ctl.log.info("ChatGPT（Codex）の設定に道具を足し、スキルを置きました（控え: %s）", backup or "元の設定ファイル無し")
+        r = rumps.alert("ChatGPT につなぎました",
+                        "ChatGPT を開き直すと使えるようになります。今すぐ開き直しますか？\n"
+                        "（話している途中の会話は保存されています）\n\n"
+                        "使うときは、ChatGPT の「Work」で「〇〇を分析して」と言ってください。",
+                        ok="開き直す", cancel="あとで自分で")
+        if r == 1:
+            threading.Thread(target=self._restart_chatgpt, daemon=True).start()
+
+    def _restart_chatgpt(self):
+        if codex_link.restart_chatgpt():
+            notify.send("ChatGPT を開き直しました", "ChatGPT の Work で「〇〇を分析して」と言ってみてください")
+        else:
+            notify.send("ChatGPT を閉じられませんでした", "ChatGPT を自分で終了（⌘Q）して、開き直してください")
 
     # --- 指示書（段3） ---
     def _open_prompt_cb(self, name):
@@ -730,7 +782,7 @@ def run():
     if config.FROZEN and not TEST_NO_CHROME:
         if system.is_translocated() or not system.in_applications():
             notify.send("アプリを「アプリケーション」に移してください",
-                        "ダウンロードした場所のままだと、Mac を起動したときに自動で立ち上がらず、Claude からも呼べません")
+                        "ダウンロードした場所のままだと、Mac を起動したときに自動で立ち上がらず、Claude や ChatGPT からも呼べません")
         else:
             if not st.get("first_run_done"):
                 system.set_login_item(True)   # 初回は「ログイン時に起動」を入れておく（メニューで外せる）
@@ -741,6 +793,12 @@ def run():
                     log.info("Claude の設定を、今のアプリの場所に直しました")
                 except claude_link.LinkError as e:
                     log.warning("Claude の設定を直せませんでした: %s", e)
+            if codex_link.status() == "outdated":   # アプリの場所が変わった・スキルが古い（アプリを新しくした）
+                try:
+                    codex_link.connect()
+                    log.info("ChatGPT（Codex）の設定とスキルを、今のアプリに合わせて直しました")
+                except codex_link.LinkError as e:
+                    log.warning("ChatGPT の設定を直せませんでした: %s", e)
     config.save_state(first_run_done=True)
     ctl = Controller(code, log)
     system.watch_sleep(ctl.on_sleep, ctl.on_wake)

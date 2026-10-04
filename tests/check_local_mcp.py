@@ -105,6 +105,10 @@ async def main():
             ok(tools == ["cancel_analysis", "next_task", "prompts", "read", "restart_analysis", "revise", "settings",
                          "start_analysis", "status", "submit", "update_knowledge"], f"道具 {tools}")
             ok("next_task" in (c.instructions or ""), "instructions が返る")
+            sys.path.insert(0, str(ROOT / "collector"))
+            from collector_app import codex_link
+            ok(sorted(codex_link.TOOLS) == tools,
+               "「ChatGPT につなぐ」が許可を書く道具の一覧（codex_link.TOOLS）が、道具の一覧と同じ（書き漏れると、その道具だけ毎回許可を聞かれる）")
 
             print("[2] status と start_analysis")
             r = await c.call_tool("status", {})

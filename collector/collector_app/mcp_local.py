@@ -269,14 +269,25 @@ def main() -> int:
         root.setLevel(logging.INFO)
     log = logging.getLogger("collector-mcp")
     config.seed_data(log)
-    log.info("=== Claude の道具を開きます（%s %s、データ %s）", config.APP_NAME, __import__("collector_app").VERSION,
-             config.DATA_DIR)
+    log.info("=== AI の道具を開きます（%s %s、データ %s、呼び元 %s）", config.APP_NAME, __import__("collector_app").VERSION,
+             config.DATA_DIR, _caller())
     try:
         server = build()
         server.run("stdio")
     except Exception:
-        log.exception("Claude の道具が止まりました")
+        log.exception("AI の道具が止まりました")
         raise
     finally:
-        log.info("=== Claude の道具を閉じました")
+        log.info("=== AI の道具を閉じました")
     return 0
+
+
+def _caller() -> str:
+    """道具を起こしたアプリ（Claude は Claude.app の中の disclaimer、ChatGPT は codex）。記録で見分けるため"""
+    try:
+        r = subprocess.run(["/bin/ps", "-o", "comm=", "-p", str(os.getppid())], capture_output=True, text=True, timeout=5)
+        name = r.stdout.strip()
+        return "ChatGPT" if "/ChatGPT.app/" in name or name.endswith("/codex") else \
+               "Claude" if "/Claude.app/" in name else (Path(name).name or "?")
+    except Exception:
+        return "?"

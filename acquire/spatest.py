@@ -46,9 +46,10 @@ pagetest.py との違いはナビゲーション方式**だけ**。対照実験�
                      （シルエット本番で41本が約75秒ずつ粘り、増えた動画は0本だった）
   --prescroll        次の要求を待っている間に、底の手前（--prescroll-margin px）まで送っておく。
                      待ちが明けてからスクロールを始めると、1ページあたり約8秒遅れていた
-  --only-open-video  開いた動画以外の1ページ目（隣の動画の先読み）を送らない。フックが「失敗」として返すので、
-                     ページはその動画の結果を持たず、開いたときに改めて要求する。シルエット本番で要求の17%が
-                     取らない動画への先読みと、開いたときの取り直しだった。開く瞬間の要求が1回になるので、待ちも need=1
+  --only-open-video  取る予定の無い動画への1ページ目（隣の動画の先読み）を送らない（フックが「失敗」として返す）。
+                     シルエット本番で要求の14%（130回）が取らない動画への先読みだった。隣（グリッドで次）が取らない動画なら
+                     開く瞬間の要求は1回なので、待ちも need=1。取る予定の動画への先読みは止めない
+                     （止めるとページが失敗を覚え、その動画を開いても取り直さない。2026-10-05 の試験で0件になった）
   --remount-on-stall 開き直しを最初からはせず、底で止まって続きがあるのに増えないときだけ開き直す
                      （開き直しは先読みのデータで描かれた欄のためのもの。--only-open-video なら先読みは無い）
 """
@@ -102,14 +103,15 @@ HOOK = r"""
   };
   const inflight = new Map();
   const of = window.fetch;
-  // --only-open-video: 開いた動画（__capOnly）以外の1ページ目は送らず、失敗として返す。
-  // 成功の形で空を返すと、ページが「コメント0件」として持ち、開いたときに要求しないおそれがあるため
+  // --only-open-video: 取る予定の無い動画（__capAllow に無い）の1ページ目は送らず、失敗として返す。
+  // 取る予定の動画への先読みは止めない。止めるとページが失敗を覚え、その動画を開いても取り直さない
+  // （2026-10-05 の試験で、止めた隣の動画を次に開いたら0件のままだった）
   const skip = u => {
-    const only = window.__capOnly;
-    if (!only) return false;
+    const allow = window.__capAllow;
+    if (!allow) return false;
     try { const x = new URL(u, location.origin);
           const aw = x.searchParams.get('aweme_id');
-          return x.pathname.indexOf('/reply') < 0 && !!aw && aw !== String(only)
+          return x.pathname.indexOf('/reply') < 0 && !!aw && !allow.has(aw)
                  && (x.searchParams.get('cursor') || '0') === '0'; }
     catch (e) { return false; }
   };
@@ -117,7 +119,9 @@ HOOK = r"""
     const u = (a[0] && a[0].url) || a[0];
     if (!want(u)) return of.apply(this, a);
     if (skip(u)) {
-      (window.__cap.drops = window.__cap.drops || []).push({url: String(u), at: Math.round(performance.now())});
+      let aw = null;
+      try { aw = new URL(u, location.origin).searchParams.get('aweme_id'); } catch (e) {}
+      (window.__cap.drops = window.__cap.drops || []).push({aweme: aw, at: Math.round(performance.now())});
       return Promise.reject(new TypeError('Failed to fetch'));
     }
     const k = keyOf(u);
@@ -375,6 +379,8 @@ class SpaCollector:
         self.drops = []
         self.noted_hits = 0          # 開いた瞬間に数えた要求の数（ブラウザ側の記録の件数）
         self.trigger_dists = []      # 次のページを呼んだときの底までの距離
+        self.grid_ids = []           # 楽曲ページのグリッドの並び（隣の先読みの見込みに使う）
+        self.allow = set()           # 取る予定の動画（--only-open-video で先読みを止めない動画）
 
     # ------------------------------------------------------------------
     def log(self, m):
@@ -506,6 +512,7 @@ class SpaCollector:
                 self.d.find_element(By.TAG_NAME, "body").send_keys(Keys.END)
                 time.sleep(2.0)
         self.log(f"リンク収集: {len(seen)}件（必要{need}件）")
+        self.grid_ids = [vid_of(h) for h in seen]
         return seen
 
     def find_anchor(self, href):
@@ -580,13 +587,14 @@ class SpaCollector:
         self.harvest()
         drops_before = len(self.drops)
         early_before = self.early
+        req_before = len(self.req_log)
 
         # 動画を開くと「この動画の1ページ目」と「隣の動画の先読み」が
         # ほぼ同時に飛ぶ（実測111ms差）。2本ぶんの枠が空くまで待つ。
-        # --only-open-video なら先読みは送らないので1本ぶん
-        self.pace_wait(need=1 if self.a.only_open_video else 2)
-        if self.a.only_open_video:
-            self.d.execute_script("window.__capOnly = arguments[0];", str(vid))
+        # --only-open-video なら、隣（グリッドで次に並ぶ動画）が取る予定の無い動画のときは先読みを送らないので1本ぶん
+        nb = self.neighbor_of(vid) if self.a.only_open_video else None
+        need = 1 if (self.a.only_open_video and nb is not None and nb not in self.allow) else 2
+        self.pace_wait(need=need)
 
         how, err = self.open_video(href)
         if err:
@@ -692,7 +700,21 @@ class SpaCollector:
             # 2026-10-05 速さの切り替えの記録（送らなかった先読み・待ちの間に呼んでしまった回数・開き直した回数・底の手前の幅）
             "dropped": len(self.drops) - drops_before, "early": self.early - early_before,
             "remounted": self.remounted, "margin": self.margin if self.a.prescroll else None,
+            # 隣の見込み（グリッドで次）と、実際に先読みされた／止めた動画。見込みが外れていないかの確かめ
+            "neighbor_pred": nb, "need": need,
+            "neighbor_seen": sorted({d.get("aweme") for d in self.drops[drops_before:]}
+                                    | {q.get("req_aweme") for q in self.req_log[req_before:]
+                                       if q.get("url_cursor") == "0" and q.get("req_aweme")
+                                       and q.get("req_aweme") != vid and "reply" not in (q.get("path") or "")}),
         }
+
+    def neighbor_of(self, vid):
+        """グリッドで vid の次に並ぶ動画（ページはこれを先読みする）。分からなければ None"""
+        try:
+            i = self.grid_ids.index(str(vid))
+        except ValueError:
+            return None
+        return self.grid_ids[i + 1] if i + 1 < len(self.grid_ids) else None
 
     def remount_panel(self):
         """コメント欄を閉じて開き直す（要求するかもしれないので間隔を空けてから開く）"""
@@ -1355,6 +1377,10 @@ class SpaCollector:
             links = links[:remaining]
         if not self.a.pool and len(links) < self.a.limit:
             self.log(f"注意: リンクが{len(links)}件しか集まらなかった（--collect-scrolls を増やす）")
+        if self.a.only_open_video:
+            # 取る予定の動画への先読みは止めない（フックの skip の説明）
+            self.allow = {v for v in (vid_of(h) for h in links) if v}
+            self.d.execute_script("window.__capAllow = new Set(arguments[0]);", sorted(self.allow))
         self.log(f"開始: {len(links)}動画 / 間隔{self.a.interval}秒 / "
                  f"上位リストが尽きるまで（最低{self.a.min_comments}件・上限{self.a.cap}件）/ "
                  f"サブリソースブロック={not self.a.no_block}")

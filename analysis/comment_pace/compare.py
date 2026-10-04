@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from breakdown import label, load  # noqa: E402
 
-OLD = Path.home() / "Library/Application Support/UGC Analyzer/analyses/a20261004-0837-4e69/fetch_log/comments_summary.json"
+OLD = Path("/Users/belle/workspace/TikTok-ugc-analyzer/output/speedtest-20261005/old_kyawa_p1_summary.json")
 NEW = Path("/Users/belle/workspace/TikTok-ugc-analyzer/output/speedtest-20261005") / (sys.argv[1] if len(sys.argv) > 1 else "comments_summary.json")
 
 

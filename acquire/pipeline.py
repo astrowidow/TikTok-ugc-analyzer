@@ -51,8 +51,8 @@ DEFAULTS = {
     "collect_scrolls": 150,      # コメント: グリッドでプールを探すスクロールの上限
     "calls_per_min": 1.8, "max_calls_per_min": 2.0, "interval": 15.0,
     # コメント取得の速さ（acquire/spatest.py 冒頭の 2026-10-05 の説明）。要求の間隔の設定は変えない。
-    # 試験（きゃわぽっぴんどぅー20本）で 80.9分 → 59.6分、混入0・頭打ち0（output/speedtest-20261005）
-    "stop_on_no_more": False, "prescroll": False, "only_open_video": False, "remount_on_stall": False,
+    # 試験（きゃわぽっぴんどぅー20本、直した版）で 84.5分 → 61.6分、20本とも取得・混入0・頭打ち0（docs/COMMENT_SPEED.md）
+    "stop_on_no_more": True, "prescroll": True, "only_open_video": True, "remount_on_stall": True,
     "chrome_port": "9222",
     "blocked_wait_min": 90,      # ブロックを検知したら空ける時間（COMMENT_ACQUISITION_HANDOVER 2-6: 約1.5時間で回復）
     "blocked_retries": 2,

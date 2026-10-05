@@ -879,9 +879,40 @@ def _clean_urls(urls) -> list:
     return out
 
 
+# 返信欄を開いて返信を取るときの取得の設定。2026-10-05 から既定は取らない（acquire/pipeline.py の DEFAULTS）。
+# 利用者が頼んだ分析だけ、道具の replies で取る（ユーザー「返信とるかどうかはオプションとして選択できるように。Claude から道具で指定できるのが望ましい」）
+REPLIES_ON = {"reply_top": 1, "reply_questions": 1, "reply_author": 1}
+REPLIES_NOTE = "返信も取ります（返信欄を開くので、コメントの取得が2〜3割長くなります）。"
+
+
+def wants_replies(meta: dict) -> bool:
+    """この分析は返信も取る指定か"""
+    s = meta.get("acquisition_settings") or {}
+    return any(int(s.get(k) or 0) > 0 for k in REPLIES_ON)
+
+
+def acquisition_settings_for(replies: bool) -> dict | None:
+    """新しい分析の目録に書く取得の設定（取得アプリの設定に、返信の指定を重ねる）"""
+    s = dict(LOCAL.acquisition_settings() or {}) if LOCAL is not None else {}
+    if replies:
+        s.update(REPLIES_ON)
+    return s or None
+
+
 def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
                    candidate_urls: list | None = None, only_one: bool = False, music_urls: list | None = None,
-                   video_urls: list | None = None) -> dict:
+                   video_urls: list | None = None, replies: bool = False) -> dict:
+    """分析を作って取得の待ち行列に入れる。replies=True なら返信も取る（既定は取らない）"""
+    res = _start_analysis(user_id, song, artist, music_url, video_url, candidate_urls, only_one, music_urls, video_urls,
+                          replies)
+    if replies and not res.get("analysis_id"):   # 楽曲ページ探しの案内（分析はまだ作っていない）
+        res["text"] += "\n（AI へ: 利用者は返信も取るように頼んでいる。start_analysis を呼び直すときも replies=true を付ける）"
+    return res
+
+
+def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
+                    candidate_urls: list | None = None, only_one: bool = False, music_urls: list | None = None,
+                    video_urls: list | None = None, replies: bool = False) -> dict:
     """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係か、利用者の Mac の取得アプリが走らせる）。
     取得アプリの形では、どの楽曲ページで進めるか（題・作者・UGC 数・URL）を返事に出す（2026-10-04 ユーザー
     「止めるのではなく、このページで進めるからね、ってのがプロンプトに出るくらいがいい」）。
@@ -994,8 +1025,7 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
             if len(active) >= MAX_ACTIVE_PER_USER:
                 raise RunnerError(f"取得中・順番待ちの分析が{len(active)}件あります。終わってから次を頼んでください: "
                                   + ", ".join(a.title for a in active))
-            settings = LOCAL.acquisition_settings() if LOCAL is not None else None
-            aid = launch.new_analysis(user_id, song, artist, music_url, settings, music_urls=urls)
+            aid = launch.new_analysis(user_id, song, artist, music_url, acquisition_settings_for(replies), music_urls=urls)
     if LOCAL is not None and created and pages is None:   # どの楽曲ページで進めるかを見せるため、題・作者・UGC 数を読む（読めなくても進める）
         try:
             info = LOCAL.inspect_music(music_url) or {}
@@ -1015,6 +1045,13 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
     eta = p.get("eta_seconds")
     when = f"終わるのは{_clock(eta)}の見込みです（約{_hm(eta)}）。" if eta else ""
     head = f"「{title}」の{'取得を受け付けました' if created else '取得はもう受け付けています'}（分析 ID: {aid}）。"
+    meta_now = _read_json(ANALYSES_DIR / aid / "analysis.json", {}) or {}
+    if wants_replies(meta_now):
+        reply_line = REPLIES_NOTE
+    elif replies and not created:
+        reply_line = "（返信も取る指定は、すでに受け付けている取得には効きません。返信も取るなら「取得をやめて、やり直して」と頼んでください）"
+    else:
+        reply_line = ""
     if LOCAL is not None:
         pg = pages or [(music_url, {})]
         warn = ""
@@ -1032,13 +1069,14 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
             body += ("\n外した楽曲ページ（入れたいときは「それも入れて」と言ってください）:\n" +
                      "\n".join(f"  - {_page_line(u, i)} … {why}" for u, i, why in dropped))
         lines = [head, body + warn,
-                 "あなたの Mac の UGC Analyzer が、楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。",
+                 "あなたの Mac の UGC Analyzer が、楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。"
+                 + reply_line,
                  (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + when,
                  "そのあいだ Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）。",
                  f"終わると Mac の通知が出ます。そのあと「{title}の分析を続けて」と言ってください。"]
     else:
         lines = [head,
-                 "楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。",
+                 "楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。" + reply_line,
                  (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + when,
                  f"そのころに「{title}の分析を続けて」と言ってください。"]
     ai = ("（AI へ: この内容を利用者に短く伝えて、ここで止まる。どの楽曲ページで進めるか（題・作者・UGC 数・URL）は省かずに伝える。"
@@ -1526,7 +1564,8 @@ def cancel_analysis(user_id: str, ref: str | None) -> dict:
                     f"もう一度「UGC Analyzer で{a.title}を分析して」と頼めば、楽曲ページ探しから最初にやり直します。", "analysis_id": a.id}
 
 
-def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_urls: list | None = None) -> dict:
+def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_urls: list | None = None,
+                     replies: bool | None = None) -> dict:
     """取得をやめて、やり直す（取得アプリの形）。music_url・music_urls があればそのページ（複数なら全部合わせて）で、
     無ければ楽曲ページ探しから最初に
     （2026-10-04 ユーザー「〇〇の取得をやめて、このページでやり直して」「止めて初めからもう一度やって、正しい楽曲ページを抽出できるか試したい」）。
@@ -1554,11 +1593,14 @@ def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_u
         LOCAL.request_stop(a.id)   # 取得アプリが、この分析を取っている係を止める
         song = (m.get("song") or {}).get("title") or a.title
         artist = (m.get("song") or {}).get("artist") or ""
+        rep = wants_replies(m) if replies is None else bool(replies)   # 省けば前の分析の指定を引き継ぐ
     if not urls:   # 最初から: 楽曲ページを探し直す（AI が検索して start_analysis を呼ぶ）
         res = _music_search_hint(song, artist, f"「{a.title}」の前の取得（{old}）をやめた。楽曲ページ探しから最初にやり直す。")
+        if rep:
+            res["text"] += "\n（AI へ: この分析は返信も取る指定。start_analysis を呼ぶときは replies=true を付ける）"
         res["cancelled"] = a.id
         return res
-    res = start_analysis(user_id, song, artist, music_urls=urls)   # やり直しは利用者が選んだページで（複数なら全部）
+    res = start_analysis(user_id, song, artist, music_urls=urls, replies=rep)   # やり直しは利用者が選んだページで（複数なら全部）
     res["text"] = (f"「{a.title}」の前の取得（{old}）をやめました。\n" + res["text"])
     res["cancelled"] = a.id
     return res

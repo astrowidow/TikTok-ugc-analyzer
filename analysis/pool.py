@@ -29,6 +29,9 @@ CAP_STANDARD = 40
 CAP_KEY = 120
 # 120件にする理由のうち、本人（artist）以外のもの。本人だけが理由の動画は、選んだあとで40件に下げる（build の末尾）
 KEY_REASONS_BUT_ARTIST = {"origin", "top_hit", "official"}
+# 週ごとに配る動画の再生の下限（2026-10-05）。元の量の版3本のレポートが引用・熟読・名指しした動画に、再生1万未満は両曲とも0本だった
+# （docs/COMMENT_STRATEGY_HANDOVER.md 第9章、analysis/comment_exp/select_study.py）。必ず入れる動画（起点など）には掛けない
+MIN_PLAYS_WEEKLY = 10_000
 
 
 def norm(s: str) -> str:
@@ -143,7 +146,7 @@ def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None):
     random.seed(seed)
     alloc = {w: max(1, round(rem * math.sqrt(len(x)) / wsum)) for w, x in weeks.items()}
     for w, vs in sorted(weeks.items()):
-        cand = [v for v in vs if v["video_id"] not in pool]
+        cand = [v for v in vs if v["video_id"] not in pool and (v.get("plays") or 0) >= MIN_PLAYS_WEEKLY]
         k = alloc[w]
         chosen = []
         # 週の中: 投稿地域ごと・TikTok のカテゴリラベルごとに最大再生を1本ずつ

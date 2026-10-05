@@ -87,7 +87,9 @@ class TestPool(unittest.TestCase):
         with open(TRIAL / "reps.tsv", encoding="utf-8") as f:
             reps = list(csv.DictReader(f, delimiter="\t"))
         seqs = {str(v["seq"]) for v in videos if v["video_id"] in p}
-        self.assertGreaterEqual(sum(1 for r in reps if r["seq"] in seqs), 53)   # 検証版: 代表65本中53
+        # 検証版: 代表65本中53。2026-10-05 に週ごとの動画へ再生1万の下限を入れて51（外れたのは再生699〜1,978の、
+        # 旧方式で界隈×段階の枠を埋めるために選ばれた代表。今の流れの本番レポートは1万未満の動画を使っていない）
+        self.assertGreaterEqual(sum(1 for r in reps if r["seq"] in seqs), 51)
 
     def test_origin_gets_120_and_artist_only_gets_40(self):
         import pool
@@ -114,6 +116,16 @@ class TestPool(unittest.TestCase):
         finally:
             pool.KEY_REASONS_BUT_ARTIST = keep
         self.assertEqual(set(p), set(p_old))
+
+    def test_weekly_picks_skip_weak_videos(self):
+        """2026-10-05: 週ごとに配る動画は再生1万以上だけ（必ず入れる動画には掛けない）"""
+        import pool
+        videos, enriched = pool.load(TRIAL / "videos.jsonl", TRIAL / "enriched.jsonl")
+        p, _ = pool.build(videos, enriched, 12 * 60, cost_std=3.1, cost_key=6.1)
+        plays = {v["video_id"]: v.get("plays") or 0 for v in videos}
+        weekly = [v for v, x in p.items() if all(r.startswith("week:") for r in x["reasons"])]
+        self.assertTrue(weekly)
+        self.assertTrue(all(plays[v] >= pool.MIN_PLAYS_WEEKLY for v in weekly))
 
     def test_replies_not_opened_by_default(self):
         from acquire import pipeline

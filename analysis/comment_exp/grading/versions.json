@@ -86,6 +86,16 @@
     "dir": "{HOME}/analyses/x-kyw-top5",
     "role": "check",
     "note": "物差しの確かめ: どの動画もコメント先頭5件・返信なし（786件。取得の案ではない）"
+   },
+   "ra1": {
+    "dir": "{HOME}/analyses/x-kyw-ra1",
+    "role": "variant",
+    "note": "返信なし＋本人40件（7,492件・159本）。模擬 4.8 → 2.9時間（1ページ目の107本）"
+   },
+   "ra2": {
+    "dir": "{HOME}/analyses/x-kyw-ra2",
+    "role": "variant",
+    "note": "同じ削り方の2回目"
    }
   }
  }

@@ -9,6 +9,7 @@
 - アプリと同じロックを取り、Chrome はアプリのプロファイルでポート 9251 に最小化で起こす（アプリは 9250 しか見ない）。終わったら自分で閉じる
 - 空応答・4xx/5xx・チャレンジ画面を1回でも踏んだら spatest がその場で止める（リトライしない）。止まったらその日は再開しない
 """
+import argparse
 import json
 import logging
 import os
@@ -19,8 +20,16 @@ from pathlib import Path
 REPO = Path("/Users/belle/workspace/TikTok-ugc-analyzer")
 APP = Path.home() / "Library/Application Support/UGC Analyzer"
 SRC = APP / "analyses/a20260930-2342-0035"
-OUT = REPO / "output/pacetest-20261005"
-CPM, MAX_CPM = "2.0", "3.0"
+# 引数なしは 10/5 の長時間の走行（2.0回/分・60秒に3回・プール197本）。短時間の試験は --cpm 2.5 --pool <一部> --out <別の場所>
+ap = argparse.ArgumentParser()
+ap.add_argument("--cpm", default="2.0")
+ap.add_argument("--max-cpm", default="3.0")
+ap.add_argument("--pool", default=str(SRC / "derived/pool.tsv"))
+ap.add_argument("--out", default=str(REPO / "output/pacetest-20261005"))
+ap.add_argument("--hours", default="8")
+cli = ap.parse_args()
+OUT = Path(cli.out)
+CPM, MAX_CPM = cli.cpm, cli.max_cpm
 
 os.environ["UGC_LOCK_DIR"] = str(APP / "locks")
 sys.path.insert(0, str(REPO))
@@ -34,7 +43,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S",
                     handlers=[logging.StreamHandler(), logging.FileHandler(OUT / "run.log", encoding="utf-8")])
 log = logging.getLogger("pacetest")
-OWNER = "pacetest:20261005"
+OWNER = f"pacetest:{OUT.name}"
 
 if not tiktok_lock.try_acquire(OWNER):
     log.info("ロックが取れない（アプリが取得中）: %s", tiktok_lock.holder())
@@ -50,14 +59,14 @@ try:
     log.info("Chrome 準備よし（ログイン済み・%s）。設定 平均%s回/分・60秒に%s回まで", ch.window_state(), CPM, MAX_CPM)
     music_url = json.loads((SRC / "analysis.json").read_text(encoding="utf-8"))["music_url"]
     args = ["--port", "9251", "--music-url", music_url,
-            "--pool", str(SRC / "derived/pool.tsv"),
+            "--pool", cli.pool,
             "--candidates", str(SRC / "derived/llm_input/records.jsonl"),
             "--subs-out", str(OUT / "subs.tsv"),
             "--collect-scrolls", "150",
             "--reply-policy", "targets", "--reply-top", "1", "--reply-questions", "1", "--reply-author", "1",
             "--cap", "40", "--min-comments", "20",
             "--calls-per-min", CPM, "--max-calls-per-min", MAX_CPM,
-            "--interval", "15", "--jitter", "0.5", "--deadline-hours", "8",
+            "--interval", "15", "--jitter", "0.5", "--deadline-hours", cli.hours,
             "--out", str(OUT / "comments.jsonl"), "--log", str(OUT / "comments.log"),
             "--summary", str(OUT / "comments_summary.json"),
             "--stop-on-no-more", "--prescroll", "--only-open-video", "--remount-on-stall"]

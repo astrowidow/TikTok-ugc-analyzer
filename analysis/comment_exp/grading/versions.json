@@ -71,6 +71,21 @@
     "dir": "{APP}/analyses/a20261004-2253-746a",
     "role": "check",
     "note": "ChatGPT（Free・gpt-6-luna）の試し。ユーザーの評価「質が低すぎる」。物差しが鈍くないかの確かめ"
+   },
+   "all1": {
+    "dir": "{HOME}/analyses/x-kyw-all1",
+    "role": "variant",
+    "note": "段2: 返信なし＋本人40件＋標準20件＋週ごと半分（4,905件・125本）"
+   },
+   "all2": {
+    "dir": "{HOME}/analyses/x-kyw-all2",
+    "role": "variant",
+    "note": "同じ削り方の2回目"
+   },
+   "top5": {
+    "dir": "{HOME}/analyses/x-kyw-top5",
+    "role": "check",
+    "note": "物差しの確かめ: どの動画もコメント先頭5件・返信なし（786件。取得の案ではない）"
    }
   }
  }

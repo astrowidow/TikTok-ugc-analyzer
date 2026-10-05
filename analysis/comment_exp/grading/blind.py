@@ -73,6 +73,7 @@ def main():
     ap.add_argument("--only", help="この版だけ（, 区切り）")
     ap.add_argument("--redo", action="store_true", help="束があっても作り直す（grade.json は消える）")
     ap.add_argument("--partial", action="store_true", help="元の版がそろっていなくても作る（道具の試し用）")
+    ap.add_argument("--graders", default=",".join(GRADERS), help="採点者（, 区切り）。シルエットで2人の差が 0.01 以内だったので、節約するときは g1 だけ")
     args = ap.parse_args()
     spec = versions(args.song)
     out = common.EXP / "grading" / args.song
@@ -95,7 +96,7 @@ def main():
         if not (d / "outputs" / "REPORT.md").exists():
             print(f"  {name}: REPORT.md がまだ無い（{d}）")
             continue
-        for g in GRADERS:
+        for g in args.graders.split(","):
             if (name, g) in have and not args.redo:
                 continue
             if (name, g) in have:

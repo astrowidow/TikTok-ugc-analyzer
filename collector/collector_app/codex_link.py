@@ -29,7 +29,7 @@ SKILL_DIR = Path(os.environ.get("UGC_CODEX_SKILLS") or Path.home() / ".agents" /
 SERVER_NAME = "ugc-analyzer"
 CHATGPT_APPS = [Path("/Applications/ChatGPT.app"), Path.home() / "Applications" / "ChatGPT.app"]
 # 道具（mcp_proto.py。tests/check_local_mcp.py で、道具の一覧と同じかを確かめる）
-TOOLS = ("start_analysis", "status", "next_task", "submit", "read", "revise", "deepen", "settings", "prompts",
+TOOLS = ("start_analysis", "status", "next_task", "submit", "read", "revise", "deepen", "recut", "settings", "prompts",
          "update_knowledge", "cancel_analysis", "restart_analysis")
 STARTUP_TIMEOUT_SEC = 60    # 入れた直後の初回は、macOS の検査で起動が遅いことがある
 TOOL_TIMEOUT_SEC = 300      # start_analysis（30〜40秒）と、仕事の合間のサービスの工程（組み立て・Excel 用 ZIP）
@@ -43,7 +43,7 @@ description: UGC Analyzer（この Mac のアプリ。TikTok の楽曲の UGC �
 
 # UGC Analyzer
 
-道具は MCP サーバー `ugc-analyzer`。道具の一覧（ALL_TOOLS など）で `ugc_analyzer` を探す: start_analysis・status・next_task・submit・read・revise・deepen・settings・prompts・update_knowledge・cancel_analysis・restart_analysis。
+道具は MCP サーバー `ugc-analyzer`。道具の一覧（ALL_TOOLS など）で `ugc_analyzer` を探す: start_analysis・status・next_task・submit・read・revise・deepen・recut・settings・prompts・update_knowledge・cancel_analysis・restart_analysis。
 
 - 「UGC Analyzer で〇〇／△△を分析して」→ `start_analysis`（曲名とアーティスト名。30〜40秒かかる）
 - 名指しの無い「〇〇を分析して」→ 道具を使わず、ふつうに答える
@@ -52,6 +52,7 @@ description: UGC Analyzer（この Mac のアプリ。TikTok の楽曲の UGC �
 - 「〇〇の分析を続けて」→ `next_task`（analysis_id に曲名）。返ってきた指示書どおりに作業して `submit` し、また `next_task`。kind が done か wait になるまで、利用者に確認せずに繰り返す。kind が ask_user のときだけ、その内容を利用者に見せて答えを待つ
 - 今後ずっと使う設定・指示書・知識ベースの頼みは、「UGC Analyzer の〜」と名指しがあるか、分析の会話の途中のときだけ
 - 完成したレポートの「△△界隈のところが浅い・もっとコメントを取って掘り下げて」→ `deepen`（界隈と、利用者の言葉そのまま）。Mac がコメントを取り足すので止まる。終わったあと利用者が「〇〇の分析を続けて」と言ったら `next_task` で書き直しを片付ける
+- 完成したレポートの「界隈を分けて・まとめて・切り直して」→ `recut`（利用者の言葉そのまま）。そのまま `next_task` を続ける。コメントが足りなければ kind が wait で止まるので、返ってきた一文を伝える。終わったあと利用者が「〇〇の分析を続けて」と言ったら `next_task` で続ける
 - そのほか（進み具合・取得をやめる・やり直す・レポートの直し）は、道具の説明に従う。道具の説明と返事に書いてある決まりが、ここより優先する
 """
 

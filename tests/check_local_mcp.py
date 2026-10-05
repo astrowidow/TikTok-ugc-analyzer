@@ -102,7 +102,7 @@ async def main():
         async with Client(params, read_timeout_seconds=120) as c:
             print("[1] 初期化・道具・instructions")
             tools = sorted(t.name for t in (await c.list_tools()).tools)
-            ok(tools == ["cancel_analysis", "deepen", "next_task", "prompts", "read", "restart_analysis", "revise", "settings",
+            ok(tools == ["cancel_analysis", "deepen", "next_task", "prompts", "read", "recut", "restart_analysis", "revise", "settings",
                          "start_analysis", "status", "submit", "update_knowledge"], f"道具 {tools}")
             ok("next_task" in (c.instructions or ""), "instructions が返る")
             descs = {t.name: t.description or "" for t in (await c.list_tools()).tools}

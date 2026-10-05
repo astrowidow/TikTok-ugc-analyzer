@@ -671,7 +671,7 @@ def _hm(sec: float) -> str:
 def come_back_line(eta_seconds, work: str, title: str, then: str) -> str:
     """2段の操作（Mac が取る → 利用者が「続けて」）の最初の返事に、AI がそのまま入れる一文（2026-10-06 ユーザー
     「最初の依頼時の AI の返答で、xxx分後に戻ってきて頼んでもらう必要があることを、事情と共にユーザに言おう。簡潔にな」）。
-    使う所: 分析を始める（start_analysis）・界隈の掘り下げ（deepen）・界隈の切り直し（別のセッションで作る予定。取り直しが要るとき）。
+    使う所: 分析を始める（start_analysis）・界隈の掘り下げ（deepen）・界隈の切り直し（recut。取り足しが要るとき）。
     work は「〇〇するのに」の〇〇、then は「続けて」のあとに AI がすること"""
     if eta_seconds:
         when = _clock_fine(eta_seconds) if eta_seconds < 2 * 3600 else _clock(eta_seconds)
@@ -782,7 +782,7 @@ def status(user_id: str, ref: str | None = None) -> dict:
             dv = _deepen_view(a)
             if dv:
                 items.append({"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": dv["state"],
-                              "progress": "界隈の掘り下げの取り足し", "message": dv["message"], "eta_seconds": dv["eta_seconds"]})
+                              "progress": _acq_label(a), "message": dv["message"], "eta_seconds": dv["eta_seconds"]})
                 continue
             st = _load_state(a)
             cur = _current(st)
@@ -1198,6 +1198,10 @@ def next_task(user_id: str, ref: str | None = None) -> dict:
             return _deepen_wait_task(a, dv)
         st = _load_state(a)
         t = _run_services(a, st) if is_w1(a) else _current(st)
+        if is_w1(a):
+            fresh = _recut_queued_now(a)
+            if fresh:
+                return fresh
         if t is None:
             t = st["tasks"][-1]
         rendered = _render(a, t, st)
@@ -1591,6 +1595,8 @@ def deepen(user_id: str, ref: str | None, community: str, instruction: str) -> d
         st = _load_state(a)
         cur = _current(st)
         if cur is not None and cur["kind"] != "done":
+            if _recut_pending(st):
+                raise RunnerError(f"いま界隈の切り直しの途中です。終わってから頼んでください（「{a.title}の分析を続けて」で進みます）")
             if any(t["type"] in DEEPEN_TASKS and t["status"] != "done" for t in st["tasks"]):
                 raise RunnerError(f"いま界隈「{(a.meta.get('deepen') or {}).get('community')}」の掘り下げの途中です。"
                                   f"終わってから頼んでください（「{a.title}の分析を続けて」で進みます）")
@@ -1653,6 +1659,7 @@ def _deepen_view(a: Analysis):
         except ValueError:
             pass
     back = f"終わったら「{a.title}の分析を続けて」と言ってください。"
+    what = "切り直した界隈" if dp.get("kind") == "recut" else f"界隈 `{dp.get('community')}` "
     if LOCAL is not None:
         app = LOCAL.app_state() or {}
         if not app.get("running"):
@@ -1666,11 +1673,11 @@ def _deepen_view(a: Analysis):
                 if m and (m.get("acquisition") or {}).get("status") == "running"]
         if busy:   # 半日の取得の後ろ。会話の中では待たない
             return {"state": "behind", "eta_seconds": None,
-                    "message": f"界隈 `{dp.get('community')}` のコメントの取り足しは、いま取得中の「{busy[0].get('title')}」が"
+                    "message": f"{what}のコメントの取り足しは、いま取得中の「{busy[0].get('title')}」が"
                                f"終わってから始まります（取り足しは約{int(round(float(dp.get('est_min') or 25)))}分）。" + back}
-        msg = f"界隈 `{dp.get('community')}` のコメントの取り足しの開始待ち（約{_hm(est)}）。"
+        msg = f"{what}のコメントの取り足しの開始待ち（約{_hm(est)}）。"
     else:
-        msg = (f"あなたの Mac で界隈 `{dp.get('community')}` のコメントを取り足し中（{done}/{total}本）。"
+        msg = (f"あなたの Mac で{what}のコメントを取り足し中（{done}/{total}本）。"
                f"終わるのは{_clock(est)}の見込み（あと約{_hm(est)}）。")
     return {"state": "deepening", "message": msg + back, "eta_seconds": est}
 
@@ -1697,9 +1704,100 @@ def _deepen_wait_task(a: Analysis, dv: dict) -> dict:
                "途中経過を毎回書かない。")
     else:
         how = "ここで止まって、利用者にこの内容を短く伝える。next_task を繰り返し呼ばない（待つ間に見に来ない）。"
-    text = f"# 待ち: {a.title}（界隈の掘り下げ）\n\n- kind: `wait`\n\n{dv['message']}\n\n{how}\n\n---\n" + REPEAT_RULE
+    what = "界隈の切り直し" if (a.meta.get("deepen") or {}).get("kind") == "recut" else "界隈の掘り下げ"
+    text = f"# 待ち: {a.title}（{what}）\n\n- kind: `wait`\n\n{dv['message']}\n\n{how}\n\n---\n" + REPEAT_RULE
     a.log(event="issue", task_id=f"{a.id}/deepen-wait", kind="wait", chars=len(text))
-    return {"text": text, "task_id": None, "kind": "wait", "analysis_id": a.id, "progress": "界隈の掘り下げの取り足し"}
+    return {"text": text, "task_id": None, "kind": "wait", "analysis_id": a.id, "progress": _acq_label(a)}
+
+
+def _acq_label(a: Analysis) -> str:
+    """完成後の取り足しの進み具合の名前（掘り下げか、切り直しか）"""
+    return "界隈の切り直しの取り足し" if (a.meta.get("deepen") or {}).get("kind") == "recut" else "界隈の掘り下げの取り足し"
+
+
+# ---------------------------------------------------------------------------
+# 完成後の界隈の切り直し（2026-10-06〜。docs/RECUT_COMMUNITY.md）
+# ---------------------------------------------------------------------------
+# 道具 recut → 仕事 recut（AI: 分類軸を直す）→ ラベルの付け直し → recut_check（サービス: 新しい界隈の必ず読みたい動画にコメントがあるか）
+# → 足りていれば止まらずに段階・コメント分析・構成案・執筆・仕上げまで（着席1回）。足りなければ Mac が取り足すので、
+# その場で止まり、何分後に戻って「続けて」と頼むかを伝える（着席2回。2026-10-06 ユーザー「追加プロンプトが必要な場合は、最初にユーザに通知」）
+RECUT_TASKS = ("recut", "recut_check")
+
+
+def _recut_pending(st: dict) -> bool:
+    """切り直しの仕事（分類軸の直し・ラベルの付け直し・確かめ）が残っているか"""
+    return any(t["status"] != "done" and (t["type"] in RECUT_TASKS or (t["type"] == "label" and t["params"].get("recut")))
+               for t in st["tasks"])
+
+
+def recut(user_id: str, ref: str | None, instruction: str) -> dict:
+    """完成したレポートの界隈を、利用者の指示で切り直す。仕事 recut を末尾に足す（ラベルの付け直しから先は、受け付けたときに足す）"""
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise RunnerError("界隈をどう切り直したいかを、利用者の言葉で instruction に入れてください")
+    if len(instruction) > 2000:
+        raise RunnerError("頼みの言葉は2000字までにしてください")
+    with _lock:
+        a = resolve(user_id, ref)
+        if not is_w1(a):
+            raise RunnerError("この分析（試作）は界隈の切り直しに対応していません")
+        acq = a.meta.get("acquisition")
+        if acq and acq.get("status") != "done":
+            raise RunnerError("コメントの取得が終わっていません。取得とレポートが済んでから頼んでください")
+        if _deepen_view(a):
+            raise RunnerError(f"いまコメントの取り足しの途中です。終わってから頼んでください（「{a.title}の分析を続けて」で進みます）")
+        st = _load_state(a)
+        cur = _current(st)
+        if cur is not None and cur["kind"] != "done":
+            if _recut_pending(st):
+                raise RunnerError(f"いま界隈の切り直しの途中です。「{a.title}の分析を続けて」で進みます")
+            if any(t["type"] in DEEPEN_TASKS and t["status"] != "done" for t in st["tasks"]):
+                raise RunnerError(f"いま界隈の掘り下げの途中です。終わってから頼んでください（「{a.title}の分析を続けて」で進みます）")
+            raise RunnerError("レポートがまだできていません。完成してから頼んでください")
+        import flow_w1
+        for t in st["tasks"]:   # 前の完了の知らせを AI が受け取らないまま会話が終わっていたら、済んだことにする
+            if t["kind"] == "done" and t["status"] != "done":
+                t.update({"status": "done", "done_at": _now()})
+        n = flow_w1.recut_last_round(a) + 1
+        st["tasks"].append(flow_w1._task(st, "recut", "ai", "界隈の切り直し（利用者の指示）", {"instruction": instruction, "round": n}))
+        _write_json(a.state_path, st)
+        a.log(event="recut_requested", round=n, chars=len(instruction))
+    return {"text": f"「{a.title}」の界隈を、利用者の指示どおりに切り直します。続けて next_task を呼び、界隈の切り直し → 動画のラベルの付け直しを片付ける。\n"
+                    "（AI へ: 最初に利用者へ「界隈を切り直して、動画のラベルを付け直します。新しい界隈でコメントが足りないときは、"
+                    "付け直したところで一度止まり、何分後に戻ればよいかをお伝えします。足りていれば、そのままレポートの新しい版まで進めます。」"
+                    "とだけ伝えてから進める。利用者に確認は取らない）", "analysis_id": a.id}
+
+
+def _recut_queued_now(a: Analysis):
+    """切り直しの確かめ（サービス）がいま取り足しを積んだなら、Mac に取らせて、最初の返事（何分後に戻るか）を返す。積んでいなければ None"""
+    m = _read_json(a.dir / "analysis.json") or a.meta
+    dp = m.get("deepen") or {}
+    if dp.get("kind") != "recut" or dp.get("status") != "queued" or dp.get("announced"):
+        return None
+    a.meta = m
+    if LOCAL is not None:
+        LOCAL.ensure_app()
+    else:
+        from acquire import launch
+        launch.ensure_worker()
+    dv = _deepen_view(a) or {}
+    import flow_w1
+    n = dp.get("recut_round")
+    rec = flow_w1.recut_record(a, n)
+    eta = dv.get("eta_seconds") if dv.get("state") == "deepening" else None
+    back = come_back_line(eta, "切り直した界隈のコメントを集めるの", a.title, "新しい界隈の分け方でレポートを書き直します。")
+    head = (f"「{a.title}」の界隈を切り直し、動画のラベルを付け直しました（{rec.get('note_to_user', '')}）。"
+            f"新しい界隈のうち、読むべき動画にコメントが無いもの（{flow_w1.recut_short_targets(a, n)}）を、Mac が取り足します（{len(dp.get('targets') or [])}本）。")
+    if dv.get("state") in ("stopped", "login", "behind"):
+        head += dv["message"]
+    text = (f"# 待ち: {a.title}（界隈の切り直し）\n\n- kind: `wait`\n\n{head}\n\n"
+            "（AI へ: ここで止まる。利用者に、どう切り直したかを1〜2文で伝え、返事の最後に下の「」の文を言い換えずにそのまま入れる。"
+            "取得を待たない・next_task を繰り返し呼ばない）\n"
+            f"「{back}」\n\n---\n" + REPEAT_RULE)
+    dp["announced"] = _now()
+    _write_json(a.dir / "analysis.json", m)
+    a.log(event="issue", task_id=f"{a.id}/recut-wait", kind="wait", chars=len(text), targets=len(dp.get("targets") or []))
+    return {"text": text, "task_id": None, "kind": "wait", "analysis_id": a.id, "progress": "界隈の切り直しの取り足し"}
 
 
 def settings(user_id: str, action: str = "get", item: str | None = None, value: str | None = None,

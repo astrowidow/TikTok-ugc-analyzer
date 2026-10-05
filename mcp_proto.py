@@ -53,7 +53,8 @@ INSTRUCTIONS = (
     + runner.REPEAT_RULE
     + "\n分析 ID が分からなければ、曲名をそのまま渡すか、status で一覧を見る。"
     + "\nレポートの完成後に利用者が直しを頼んだら revise（このレポートだけ）。ある界隈の話が浅い・もっとコメントを取って掘り下げて、"
-    "と頼まれたら deepen。今後ずっと続く指示の変更は settings（利用者が頼んだときだけ使う）。"
+    "と頼まれたら deepen。界隈の分け方そのものを変えたい（分ける・まとめる・切り直す）と頼まれたら recut。"
+    "今後ずっと続く指示の変更は settings（利用者が頼んだときだけ使う）。"
 )
 
 
@@ -216,6 +217,7 @@ def _build_server(user_of=None, local: bool = False):
         description="完成したレポートを、利用者の指示どおりに直す（このレポートだけ）。利用者がレポートを読んで"
                     "「3章に音楽面の話を足して」のように頼んだときに使う。instruction は利用者の言葉そのまま。"
                     "受け付けたら next_task で直しの仕事を片付ける。何度でも使える。"
+                    "界隈の分け方そのものを変えたいときは recut。"
                     "「今後ずっと」の指示（文体など）は revise ではなく settings。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
                                     open_world_hint=False),
@@ -264,13 +266,29 @@ def _build_server(user_of=None, local: bool = False):
                     "next_task で、その界隈の分析のやり直し・構成案と関わる章の書き直し・全章の通し読みを片付ける。"
                     "community は界隈の key か、レポートでの呼び名"
                     "（当たらなければ界隈の一覧が返るので、key を選んで呼び直す。利用者には聞かない）。"
-                    "instruction は利用者の言葉そのまま。章の言い回しや足したい考察だけの直しは revise。"
+                    "instruction は利用者の言葉そのまま。章の言い回しや足したい考察だけの直しは revise、界隈の分け方を変えたいときは recut。"
                     "返ってきた内容を利用者に短く伝えて止まる（取り足しを待たない）。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
                                     open_world_hint=True),
     )
     async def deepen(ctx: Context, community: str, instruction: str, analysis_id: str | None = None) -> str:
         return _call(runner.deepen, _user(ctx), analysis_id, community, instruction)["text"]
+
+    @mcp.tool(
+        title="界隈を切り直す",
+        description="完成したレポートの界隈の分け方を、利用者の指示どおりに変えて、レポートを新しい版に書き直す（このレポートだけ）。"
+                    "利用者がレポートを読んで「〇〇界隈を2つに分けて」「△△と□□をまとめて」「動機で切り直して」「界隈の切り直しからやり直して」"
+                    "のように、界隈の分け方そのものを変えたいと頼んだときに使う。instruction は利用者の言葉そのまま。"
+                    "受け付けたら next_task で、界隈の切り直し → 動画のラベルの付け直しを片付ける（利用者に確認は取らない）。"
+                    "新しい界隈で読むべき動画にコメントが無ければ Mac が取り足すので、kind が wait になったところで止まり、"
+                    "返ってきた一文を利用者に伝える（終わったあと利用者が「〇〇の分析を続けて」と言ったら next_task で続ける）。"
+                    "足りていれば止まらずに、新しい版の完成（kind が done）まで next_task を続ける。"
+                    "ある界隈の話が浅いだけなら deepen、章の言い回しや考察の足しは revise。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                    open_world_hint=True),
+    )
+    async def recut(ctx: Context, instruction: str, analysis_id: str | None = None) -> str:
+        return _call(runner.recut, _user(ctx), analysis_id, instruction)["text"]
 
     @mcp.tool(
         title="指示書を見る・直す",

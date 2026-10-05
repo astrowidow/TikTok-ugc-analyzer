@@ -15,6 +15,9 @@ proto_runner.py（接続口の核: 状態・計測・道具）が、analysis.jso
 完成後の直し（revise）は、revise → finish（その章）→ assemble → verify → done を末尾に足す。
 完成後の界隈の掘り下げ（deepen、2026-10-06〜。docs/DEEPEN_COMMUNITY.md）は、取り足しの取得（acquire/deepen.py）のあと、
 dcomments → outline_revise →（書き直し）→ review →（直し・仕上げ）→ assemble → verify → export → done を末尾に足す。
+完成後の界隈の切り直し（recut、2026-10-06〜。docs/RECUT_COMMUNITY.md）は、recut（分類軸を利用者の指示どおりに直す）を末尾に足し、
+受け付けたら label×（顔ぶれが変わりうる界隈の動画だけ）→ recut_check［service: 新しい界隈の必ず読みたい動画にコメントがあるか。
+無ければ取り足しを積む（acquire/recut.py）］→ phases → plan（以降はふつうの流れ）を足す。前の版は outputs/history/recut_r<回>/。
 2026-10-03 に、代表の選定（reps）→ 1本ずつのコメント分析（comments）→ 界隈ごとの統合（synthesis）を、界隈ごとのコメント分析（ccomments）に
 まとめ、執筆の前に参考記事・構成案を足した（ユーザー）。前の形で始めた分析は、前の形のまま最後まで回る（reps・comments・synthesis を残してある）。
 """
@@ -451,10 +454,14 @@ def render(a, t: dict, st: dict) -> dict:
         if used:
             cat.append(pr._catalog_line(", ".join(used), "この回の動画のサムネイルが載っているシート"))
         tax_view = {k: v for k, v in tax.items() if k != "examples"}
+        sett = _settings(a, ["community_policy"], t)
+        if t["params"].get("recut"):
+            sett += ("\n- この分類軸は、完成したレポートを読んだ利用者の指示（「" + recut_record(a, t["params"]["recut"]).get("instruction", "") +
+                     "」）で界隈を切り直したもの。前のラベルにとらわれず、新しい定義のシグナルで付ける\n")
         text = pr._fill(tpl("label.md"), {**base, "batch": t["params"]["batch"], "n_batches": t["params"]["n_batches"],
                                           "n": len(seqs), "seq_list": ", ".join(map(str, seqs)), "entries": entries,
                                           "taxonomy_json": json.dumps(tax_view, ensure_ascii=False, indent=1),
-                                          "settings": _settings(a, ["community_policy"], t)})
+                                          "settings": sett})
 
     elif typ == "phases":
         text = pr._fill(tpl("phases.md"), {**base, **phase_materials(a)})
@@ -568,10 +575,23 @@ def render(a, t: dict, st: dict) -> dict:
         text = pr._fill(tpl("revise.md"), {**base, "instruction": t["params"]["instruction"], "chapters": "\n".join(lines),
                                            "settings": _settings(a, ["style", "focus"], t)})
 
+    elif typ == "recut":
+        chs = chapter_order(a, st)
+        cat += [pr._catalog_line("labeled:<界隈の key>", "その界隈にラベルを付けた動画（説明文・タグ・bio・サムネの場所・今のラベル。再生の多い順）"),
+                pr._catalog_line("sheet:NN, xsheet:NN", "サムネイルの一覧画像（各動画の「サムネイル」欄にある名前）"),
+                pr._catalog_line("synthesis", "今の版の界隈ごとのコメント分析"), pr._catalog_line("pathway", "今の版の拡散経路の下書き"),
+                pr._catalog_line("chapter:<id>", "今の版の章"), pr._catalog_line("kb:community", "界隈の名付け方の手引き（名前の付け方と粒度）")]
+        text = pr._fill(tpl("recut.md"), {**base, "instruction": t["params"]["instruction"], "overview": recut_overview(a),
+                                           "taxonomy_json": json.dumps(pr._taxonomy(a), ensure_ascii=False, indent=1),
+                                           "chapters": "\n".join(f"- `{c_}`: {first_line(a.outputs('chapters', f'{c_}.md'))}" for c_ in chs),
+                                           "settings": _settings(a, ["community_policy"], t)})
+
     elif typ == "done":
         mat = done_materials(a)
         if t["params"].get("deepen"):
             mat["summary"] = deepen_summary(a, t["params"]["deepen"]) + "\n\n" + mat["summary"]
+        if t["params"].get("recut"):
+            mat["summary"] = recut_summary(a, t["params"]["recut"]) + "\n\n" + mat["summary"]
         text = pr._fill(tpl("done.md"), {**base, **mat})
 
     else:
@@ -970,6 +990,233 @@ def deepen_summary(a, n) -> str:
     return "\n".join(lines)
 
 
+# --- 完成後の界隈の切り直し（2026-10-06〜。docs/RECUT_COMMUNITY.md） ---
+# 道具 recut が仕事 recut（AI: 分類軸を利用者の指示どおりに直す）を末尾に足す。受け付けたら前の版を outputs/history/recut_r<回>/ に写し、
+# label×（顔ぶれが変わりうる界隈の動画だけ）→ recut_check［service］→ phases → plan を足す。plan から先はふつうの流れ
+# （界隈ごとのコメント分析 → 構成案 → 執筆 → 仕上げ → 完了）。参考記事の章立ては界隈に依らないので使い回す
+RECUT_CLEAR_DIRS = ("labels", "synthesis", "chapters", "note_chapters")
+RECUT_CLEAR_FILES = ("labels.tsv", "phases.json", "pathway.md", "outline.json", "outline.md", "REPORT.md", "NOTE_BODY.md",
+                     "EDITOR_NOTES.md", "note_meta.json", "verify.json")
+
+
+def recut_record_path(a, n) -> Path:
+    return a.outputs("recut", f"r{n}.json")
+
+
+def recut_record(a, n) -> dict:
+    return pr._read_json(recut_record_path(a, n), {}) or {}
+
+
+def recut_last_round(a) -> int:
+    """済んだ（分類軸を受け付けた）切り直しの回。無ければ 0"""
+    d = a.outputs("recut")
+    ns = [int(m.group(1)) for p in d.glob("r*.json") if (m := re.fullmatch(r"r(\d+)", p.stem))] if d.exists() else []
+    return max(ns, default=0)
+
+
+def recut_prev_dir(a, n) -> Path:
+    """n 回目の切り直しの前の版の写し"""
+    return a.outputs("history", f"recut_r{n}")
+
+
+def _labels_at(p: Path) -> dict:
+    if not p.exists():
+        return {}
+    with open(p, encoding="utf-8") as f:
+        return {int(r["seq"]): r for r in csv.DictReader(f, delimiter="\t")}
+
+
+def recut_overview(a) -> str:
+    """今の界隈ごとの本数・コメントのある動画・初出・再生上位（切り直しの指示書の材料）"""
+    tax = pr._taxonomy(a) or {}
+    recs, labs, ok = records(a), labels(a), fetched(a)
+    by_c = collections.defaultdict(list)
+    for s, l in labs.items():
+        if s in recs:
+            by_c[l["community"]].append(recs[s])
+    lines = []
+    for k, v in tax.get("community", {}).items():
+        if k.startswith("_"):
+            continue
+        rs = by_c.get(k, [])
+        top = sorted(rs, key=lambda r: -r["plays"])[:3]
+        lines.append(f"- `{k}`: {pr._first_sentence(v)} — ラベル {len(rs)}本（コメントのある動画 "
+                     f"{sum(1 for r in rs if str(r['video_id']) in ok)}本）、初出 {min((r['date'] for r in rs), default='—')}。"
+                     "再生上位: " + ("、".join(vline(r) for r in top) or "なし"))
+    return "\n".join(lines)
+
+
+def accept_recut(a, t, raw, st) -> list:
+    """切り直した分類軸を受け付け、前の版を写してから、ラベルの付け直し・確かめ・段階・以降の準備を足す"""
+    obj, err = pr._parse_json(raw)
+    if err:
+        return [err + '（{"taxonomy": {...}, "keep": {...}, "note_to_user": "..."} の形）']
+    if not isinstance(obj, dict) or not isinstance(obj.get("taxonomy"), dict):
+        return ['{"taxonomy": {...}, "keep": {...}, "note_to_user": "..."} の形にしてください（taxonomy は分類軸の全体）']
+    tax, old = obj["taxonomy"], pr._taxonomy(a) or {}
+    old_labs = labels(a)
+    errs = pr.check_taxonomy(tax, need_region=False)
+    if not errs:
+        errs += check_examples(tax, set(old_labs), strict=False)
+    keep = obj.get("keep") or {}
+    if not isinstance(keep, dict):
+        errs.append("keep は {前の界隈の key: 新しい界隈の key} の形にしてください（無ければ {}）")
+        keep = {}
+    old_c = {k for k in old.get("community", {}) if not k.startswith("_") and k != "unknown"}
+    new_c = ({k for k in tax["community"] if not k.startswith("_") and k != "unknown"}
+             if isinstance(tax.get("community"), dict) else set())
+    bad = [k for k in keep if k not in old_c]
+    if bad:
+        errs.append(f"keep の左（前の界隈）に無い key: {bad[:5]}（前の界隈: {sorted(old_c)}）")
+    bad = [v for v in keep.values() if v not in new_c]
+    if bad:
+        errs.append(f"keep の右（新しい界隈）に無い key: {bad[:5]}")
+    # 1対1で残す界隈は、定義を変えていないこと（分けた・定義を変えた界隈は付け直す）。2つ以上をまとめるときは定義が変わってよい
+    for k, v in keep.items():
+        if k in old_c and v in new_c and list(keep.values()).count(v) == 1 and tax["community"][v] != old["community"][k]:
+            errs.append(f"keep の `{k}` → `{v}` は定義が変わっています。分けた・定義を変えた界隈は keep に入れない（動画を付け直す）。"
+                        "key を付け替えるだけなら、定義は前のまま写す")
+    if not str(obj.get("note_to_user") or "").strip():
+        errs.append("note_to_user（どう切り直したか。1〜2文）を入れてください")
+    if not errs and json.dumps(tax, sort_keys=True, ensure_ascii=False) == json.dumps(old, sort_keys=True, ensure_ascii=False):
+        errs.append("分類軸が前と同じです。利用者の指示どおりに界隈を直してください")
+    if errs:
+        return errs[:20]
+    n = t["params"]["round"]
+    # format・motive・tier を変えたら、前のラベルは使えない（全部付け直す）
+    same_other = all(json.dumps(tax.get(ax), sort_keys=True) == json.dumps(old.get(ax), sort_keys=True)
+                     for ax in ("format", "motive", "tier"))
+    if not same_other:
+        keep = {}
+    if "examples" not in tax and old.get("examples"):   # 代表例は残した界隈の分だけ引き継ぐ（まとめた界隈は合わせる）
+        ex = {}
+        for k, v in old["examples"].items():
+            if k in keep:
+                ex.setdefault(keep[k], []).extend(x for x in v if x not in ex.get(keep[k], []))
+        tax["examples"] = ex
+    # 前の版を写してから、作り直すものを片付ける（参考記事・直しの記録・Excel 用 ZIP は残す）
+    prev = recut_prev_dir(a, n)
+    if prev.exists():
+        shutil.rmtree(prev)
+    top = a.outputs()
+    shutil.copytree(top, prev, ignore=lambda d, names: [x for x in names if Path(d) == top and x in ("history", "prompts", "_zip")])
+    for dd in RECUT_CLEAR_DIRS:
+        shutil.rmtree(a.outputs(dd), ignore_errors=True)
+    for f in RECUT_CLEAR_FILES:
+        a.outputs(f).unlink(missing_ok=True)
+    pr._write_json(a.outputs("taxonomy.json"), tax)
+    # 残した界隈（keep）の動画は前のラベルのまま（key だけ付け替える）。ほかは付け直す
+    kept = {s: {**r, "community": keep[r["community"]]} for s, r in old_labs.items() if r.get("community") in keep}
+    head = ["seq", "community", "format", "motive", "tier", "conf", "reason"]
+    pr._write_text(a.outputs("labels", "batch_00.tsv"),
+                   "\t".join(head) + "\n" + "".join("\t".join(str(r.get(h, "")) for h in head) + "\n" for _, r in sorted(kept.items())))
+    merge_labels(a)
+    relabel = sorted((set(label_seqs(a)) | set(old_labs)) - set(kept))
+    c = cfg(a)
+    batches = [relabel[i:i + c["label_batch"]] for i in range(0, len(relabel), c["label_batch"])]
+    new = [_task(st, "label", "ai", f"ラベルの付け直し（{i}/{len(batches)}）", {"batch": i, "n_batches": len(batches), "seqs": b, "recut": n})
+           for i, b in enumerate(batches, 1)]
+    new += [_task(st, "recut_check", "service", "切り直した界隈のコメントが足りるかの確かめ（サービス）", {"round": n}),
+            _task(st, "phases", "ai", "段階の区切りと拡散経路の下書き（切り直した界隈で）", {"recut": n}),
+            _task(st, "plan", "service", "以降の仕事の準備（サービス）", {"recut": n})]
+    insert_after(st, t, new)
+    pr._write_json(recut_record_path(a, n), {
+        "round": n, "instruction": t["params"]["instruction"], "note_to_user": str(obj["note_to_user"]).strip(), "keep": keep,
+        "old_communities": sorted(old_c), "new_communities": sorted(new_c), "kept_labels": len(kept), "relabel": len(relabel),
+        "other_axes_changed": not same_other, "at": pr._now()})
+    return []
+
+
+def service_recut_check(a, t, st) -> dict:
+    """切り直した界隈ごとに、必ず読みたい動画（acquire/recut.py の RULE）にコメントがあるか。無ければ取り足しを積む
+    （積んだら next_task は待ちを返して止まる。取り終わって利用者が「続けて」と言うと、段階から先へ進む）"""
+    from acquire import recut as rc
+    n = t["params"]["round"]
+    rec = recut_record(a, n)
+
+    def groups(labs):
+        g = collections.defaultdict(set)
+        for s, l in labs.items():
+            if l.get("community") != "unknown":
+                g[l["community"]].add(s)
+        return g
+
+    og, ng = groups(_labels_at(recut_prev_dir(a, n) / "labels.tsv")), groups(labels(a))
+    keep = rec.get("keep") or {}
+
+    def before(k):   # key を付け替えた・そのまままとめた界隈は、元の界隈の顔ぶれと比べる
+        olds = [o for o, v in keep.items() if v == k]
+        return set().union(*(og.get(o, set()) for o in olds)) if olds else og.get(k)
+
+    changed = sorted(k for k in ng if ng[k] != before(k))
+    pl = rc.plan(a.dir, None if rc.RULE["scope"] == "all" else changed)
+    rec.update({"changed": changed, "removed": sorted(k for k in og if k not in ng), "scope": rc.RULE["scope"],
+                "check": {k: {"labeled": v["labeled"], "with_comments": v["with_comments"], "have": len(v["have"]),
+                              "need": v["need"], "unreachable": v["unreachable"]} for k, v in pl["communities"].items()},
+                "n_targets": len(pl["targets"]), "est_min": pl["est_min"], "checked_at": pr._now()})
+    if pl["targets"]:
+        rec["acq_round"] = rc.request(a.dir, rec.get("instruction", ""), pl, n)["round"]
+    pr._write_json(recut_record_path(a, n), rec)
+    return {"changed": len(changed), "targets": len(pl["targets"]), "est_min": pl["est_min"]}
+
+
+def recut_short_targets(a, n) -> str:
+    """取り足す界隈と本数（待ちの返事・完了の知らせに使う）"""
+    rec = recut_record(a, n)
+    return "、".join(f"`{k}` {len(v['need'])}本" for k, v in (rec.get("check") or {}).items() if v.get("need"))
+
+
+def recut_fetched_note(a, n) -> str:
+    rec = recut_record(a, n)
+    if not rec.get("acq_round"):
+        return "要らなかった（切り直した界隈の、読むべき動画にはコメントがあった）"
+    job = deepen_job(a, rec["acq_round"])
+    res = job.get("result") or {}
+    if job.get("status") == "failed" and not res:
+        return f"取得が止まり、取り足せなかった（{job.get('error') or '理由不明'}）。手元のコメントで書いた"
+    s = f"{res.get('videos_new', 0)}本・コメント {res.get('comments_added', 0)}件（予定 {len(job.get('targets') or [])}本: {recut_short_targets(a, n)}）"
+    if res.get("unreachable"):
+        s += f"。楽曲ページの一覧で見つからなかった動画 {res['unreachable']}本は取れていない"
+    if res.get("blocked") or res.get("error"):
+        s += "。取得は途中で止まった（取れた分だけ使った）"
+    return s
+
+
+def recut_summary(a, n) -> str:
+    """完了の知らせの頭: どう切り直し、何を取り足したか（返答の 1 に使う）"""
+    rec = recut_record(a, n)
+    tax = pr._taxonomy(a) or {}
+    names = [f"{pr._first_sentence(v, 40)}（`{k}`）" for k, v in tax.get("community", {}).items()
+             if not k.startswith("_") and k != "unknown"]
+    lines = ["#### 今回の直し（界隈の切り直し）",
+             f"- 利用者の頼み: {rec.get('instruction', '')}",
+             f"- 切り直し: {rec.get('note_to_user', '')}",
+             f"- 新しい界隈（{len(names)}個）: " + "、".join(names),
+             "- 顔ぶれが変わった界隈: " + ("、".join(f"`{k}`" for k in rec.get("changed") or []) or "なし") +
+             ("（なくなった界隈: " + "、".join(f"`{k}`" for k in rec["removed"]) + "）" if rec.get("removed") else ""),
+             f"- コメントの取り足し: {recut_fetched_note(a, n)}",
+             "- 返答の 1 では、拡散の流れに加えて、界隈の分け方を変えて何が見えるようになったかを1〜3文で伝える。前の版は残してある"]
+    return "\n".join(lines)
+
+
+def recut_write_note(a, n, ch) -> str:
+    """切り直しのあとの執筆に添える: 利用者の頼み・前の版の章の読み方・前の版で利用者が頼んだ直し"""
+    rec = recut_record(a, n)
+    revs = []
+    d = a.outputs("revisions")
+    for p in sorted(d.glob("[0-9][0-9][0-9].json")) if d.exists() else []:
+        r = pr._read_json(p, {}) or {}
+        if r.get("instruction"):
+            revs.append(f"- 「{str(r['instruction'])[:300]}」（前の版の `{r.get('chapter')}` を直した）")
+    s = ("#### 界隈の切り直し（この版を書く理由）\n"
+         f"- 利用者の頼み: {rec.get('instruction', '')}\n- 切り直し: {rec.get('note_to_user', '')}\n"
+         f"- 前の版の同じ章は read の `prev:{ch}` で読める（あれば）。界隈の分け方が古いので、構成・界隈の話・界隈の名前は写さない。"
+         "前の版にしかない利用者の考察や、界隈に関わらない事実の書き方を活かすときだけ使う")
+    if revs:
+        s += "\n- 前の版で利用者が頼んだ直し（新しい版でも当てはまるものは活かす）:\n" + "\n".join(revs)
+    return s
+
+
 # --- 構成案（2026-10-03〜） ---
 def common_materials(a, base) -> str:
     """執筆・構成案の材料の頭: 曲全体の UGC 数を先に。集めた本数は「記事に書かない手掛かり」として"""
@@ -1200,6 +1447,11 @@ def write_prompt(a, t, base, st):
         heading, length = heading_of(a, ch), "1,000〜2,000字"
     else:
         raise pr.RunnerError(f"知らない章です: {ch}")
+    if t["params"].get("recut"):     # 界隈の切り直しのあとの書き直し（前の版の利用者の考察を落とさない）
+        n_rc = t["params"]["recut"]
+        materials += "\n\n" + recut_write_note(a, n_rc, ch)
+        if (recut_prev_dir(a, n_rc) / "chapters" / f"{ch}.md").exists():
+            cat.append(pr._catalog_line(f"prev:{ch}", "前の版（界隈を切り直す前）のこの章"))
     if t["params"].get("rewrite"):   # 界隈の掘り下げの書き直し（前の原稿を生かす）
         k = t["params"].get("community")
         kb = ("この章は書き終えてある。文体・言い回しは前の原稿に合わせる。用語集（`kb:glossary`）と文体ガイド（`kb:style`）は、"
@@ -1541,6 +1793,9 @@ def accept(a, t: dict, raw: str, st: dict) -> list:
     if typ == "outline_revise":
         return accept_outline_revise(a, t, raw, st)
 
+    if typ == "recut":
+        return accept_recut(a, t, raw, st)
+
     if typ == "review":
         return accept_review(a, t, raw, st)
 
@@ -1879,6 +2134,8 @@ def run_service(a, t: dict, st: dict) -> dict:
         return service_reps(a, t, st)
     if typ == "plan":
         return service_plan(a, t, st)
+    if typ == "recut_check":
+        return service_recut_check(a, t, st)
     if typ == "assemble":
         return service_assemble(a, st)
     if typ == "verify":
@@ -1995,17 +2252,20 @@ def service_plan(a, t: dict, st: dict) -> dict:
                    {"mode": "community", "comment_videos": sum(len(v) for v in by_c.values()), "communities": len(by_c),
                     "cells_without_comments": [{"community": cl[0], "phase": cl[1], "labeled": n} for cl, n in missing]})
     comms = sorted(by_c, key=lambda k: recs[by_c[k][0]]["date"])
+    rc = t["params"].get("recut")    # 界隈の切り直しのあと（参考記事の章立ては界隈に依らないので、前の版のものを使い回す）
+    reuse_refs = bool(rc) and refs_ready(a)
     new = []
     for i, k in enumerate(comms, 1):
         new.append(_task(st, "ccomments", "ai", f"コメント分析（界隈ごと {i}/{len(comms)}: {k}）", {"community": k, "i": i, "n": len(comms)}))
-    new.append(_task(st, "ref_select", "ai", "参考にする過去記事を選ぶ"))
-    for i in range(1, c["n_refs"] + 1):
-        new.append(_task(st, "ref_digest", "ai", f"参考記事の章立てと論理（{i}/{c['n_refs']}）", {"i": i, "n": c["n_refs"], "file": None}))
+    if not reuse_refs:
+        new.append(_task(st, "ref_select", "ai", "参考にする過去記事を選ぶ"))
+        for i in range(1, c["n_refs"] + 1):
+            new.append(_task(st, "ref_digest", "ai", f"参考記事の章立てと論理（{i}/{c['n_refs']}）", {"i": i, "n": c["n_refs"], "file": None}))
     new.append(_task(st, "outline", "ai", "構成案（記事全体の主張と、章ごとの主張・根拠）"))
     chs = [f"path_{p['id']}" for p in ph] + ["branch", "music", "result", "intro"]
     for i, ch in enumerate(chs, 1):
         new.append(_task(st, "write", "ai", f"執筆（{i}/{len(chs)}: {CHAPTER_TITLES.get(ch) or '拡大経路 ' + ch[5:]}）",
-                         {"chapter": ch, "i": i, "n": len(chs), "first": i == 1}))
+                         {"chapter": ch, "i": i, "n": len(chs), "first": i == 1, **({"recut": rc} if rc else {})}))
     new.append(_task(st, "assemble", "service", "レポートの組み立て（サービス）"))
     order = ["intro"] + [f"path_{p['id']}" for p in ph] + REPORT_ORDER_FIXED
     for i, ch in enumerate(order, 1):
@@ -2015,10 +2275,17 @@ def service_plan(a, t: dict, st: dict) -> dict:
     new.append(_task(st, "assemble", "service", "note 用原稿の組み立て（サービス）"))
     new.append(_task(st, "verify", "service", "検算（サービス）"))
     new.append(_task(st, "export", "service", "Excel 用のデータ（サービス）"))
-    new.append(_task(st, "done", "done", "完了"))
+    new.append(_task(st, "done", "done", "完了（界隈の切り直し）" if rc else "完了", {"recut": rc} if rc else {}))
     insert_after(st, t, new)
     return {"communities": len(comms), "comment_videos": sum(len(v) for v in by_c.values()), "refs": c["n_refs"],
-            "cells_without_comments": len(missing), "same_song_excluded": len(same_song_files(a))}
+            "cells_without_comments": len(missing), "same_song_excluded": len(same_song_files(a)), "reuse_refs": reuse_refs}
+
+
+def refs_ready(a) -> bool:
+    """参考記事の選択と章立ての抜き出しが揃っているか"""
+    n = cfg(a)["n_refs"]
+    return a.outputs("references", "selected.json").exists() and all(
+        a.outputs("references", f"{i:02d}.md").exists() for i in range(1, n + 1))
 
 
 def appendix(a) -> str:
@@ -2053,6 +2320,11 @@ def appendix(a) -> str:
              "起点の動画を含むことがある）は扱えていない"]
     if miss:
         lines.append("- コメントが取れず根拠が薄い界隈×段階: " + "、".join(f"{m['community']}×{m['phase']}（{m['labeled']}本）" for m in miss[:15]))
+    n_rc = recut_last_round(a)
+    if n_rc:
+        rec = recut_record(a, n_rc)
+        lines.append(f"- 界隈の分け方: 初めの版のあと、利用者の指示で切り直した（{n_rc}回。最後は {str(rec.get('at', ''))[:10]}）。"
+                     "切り直した界隈で、読むべき動画にコメントが無かったものは取り足した")
     return "\n".join(lines) + "\n"
 
 
@@ -2256,6 +2528,22 @@ def units_of(a, name: str, st: dict):
         if not d.exists():
             raise pr.RunnerError("界隈ごとの統合はまだありません")
         return [f.read_text(encoding="utf-8") + "\n" for f in sorted(d.glob("*.md"))]
+    if name.startswith("labeled:"):   # 界隈の切り直し: その界隈にラベルを付けた動画（再生の多い順）
+        k = name.split(":", 1)[1]
+        recs, labs, sheets = records(a), labels(a), sheet_index(a)
+        ss = sorted((s for s, l in labs.items() if l["community"] == k and s in recs), key=lambda s: (-recs[s]["plays"], s))
+        if not ss:
+            have = sorted({l["community"] for l in labs.values()})
+            raise pr.RunnerError(f"界隈 `{k}` にラベルの付いた動画はありません（今の界隈: {', '.join(have)}）")
+        return [f"（界隈 `{k}` にラベルを付けた動画 {len(ss)}本。再生の多い順。各動画の最後の行が今のラベル）\n\n"] + [
+            entry(a, recs[s], sheets).rstrip() + f"\n- 今のラベル: format={labs[s].get('format')} motive={labs[s].get('motive')} "
+            f"tier={labs[s].get('tier')} conf={labs[s].get('conf')}（{labs[s].get('reason')}）\n\n" for s in ss]
+    if name.startswith("prev:"):      # 界隈の切り直し: 前の版（切り直す前）の章
+        n_rc = recut_last_round(a)
+        p = recut_prev_dir(a, n_rc) / "chapters" / f"{name.split(':', 1)[1]}.md"
+        if n_rc < 1 or not p.exists():
+            raise pr.RunnerError(f"{name} はありません（前の版にこの章は無い）")
+        return _md_units(p)
     if name.startswith("ccomments:"):
         return community_digest(a, name.split(":", 1)[1]) or ["（この界隈にはコメントを読める動画が無い）"]
     if name.startswith("dcomments:"):   # 界隈の掘り下げ: 1本あたりの件数を増やし、今回取り足した動画に印

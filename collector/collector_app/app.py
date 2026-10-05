@@ -409,23 +409,29 @@ class Controller:
         if st == before or before is None and st in ("done", "failed"):   # 起動したときにもう済んでいたものは知らせない
             return
         title = m.get("title") or m["analysis_id"]
+        recut = dp.get("kind") == "recut"   # 界隈の切り直しの取り足し（acquire/recut.py）。取り方は掘り下げと同じ
+        what = "界隈の切り直し" if recut else "界隈の掘り下げ"
         if st == "queued" and before is None:
             notify.send(f"「{title}」のコメントを取り足します",
-                        f"界隈 {dp.get('community')}・約{int(round(float(dp.get('est_min') or 0)))}分。Mac を開いたままにしておいてください")
+                        f"{'切り直した界隈' if recut else '界隈 ' + str(dp.get('community'))}・約{int(round(float(dp.get('est_min') or 0)))}分。"
+                        "Mac を開いたままにしておいてください")
         elif st == "done" and ((dp.get("result") or {}).get("error") or (dp.get("result") or {}).get("blocked")):
             notify.send(f"「{title}」の取り足しが途中で止まりました",
                         f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言うと、取れた分をレポートに活かします")
-            self.log.warning("界隈の掘り下げの取り足しが途中で止まりました: %s %s", m["analysis_id"], dp.get("result"))
+            self.log.warning("%sの取り足しが途中で止まりました: %s %s", what, m["analysis_id"], dp.get("result"))
         elif st == "done":
             r = dp.get("result") or {}
             notify.send(f"「{title}」の取り足しが終わりました",
-                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言うと、レポートに活かします"
-                        f"（新しく{r.get('videos_new', 0)}本・続き{r.get('videos_more', 0)}本、コメント{r.get('comments_added', 0)}件）")
-            self.log.info("界隈の掘り下げの取り足しが終わりました: %s %s", m["analysis_id"], r)
+                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言うと、"
+                        + (f"新しい界隈の分け方でレポートを書き直します（{r.get('videos_new', 0)}本、コメント{r.get('comments_added', 0)}件）"
+                           if recut else
+                           f"レポートに活かします（新しく{r.get('videos_new', 0)}本・続き{r.get('videos_more', 0)}本、コメント{r.get('comments_added', 0)}件）"))
+            self.log.info("%sの取り足しが終わりました: %s %s", what, m["analysis_id"], r)
         elif st == "failed":
             notify.send(f"「{title}」の取り足しが止まりました",
-                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言えば、手元のコメントで掘り下げを進めます")
-            self.log.warning("界隈の掘り下げの取り足しが止まりました: %s %s", m["analysis_id"], dp.get("error"))
+                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言えば、手元のコメントで"
+                        + ("レポートを書き直します" if recut else "掘り下げを進めます"))
+            self.log.warning("%sの取り足しが止まりました: %s %s", what, m["analysis_id"], dp.get("error"))
 
     def _keep_chrome(self):
         """コメントの段で取得用の Chrome が閉じられたら、すぐ最小化で開き直す（2026-10-02 ユーザー）。

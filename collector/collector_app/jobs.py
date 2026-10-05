@@ -212,11 +212,12 @@ def deepening(m: dict) -> bool:
 def describe_deepen(m: dict) -> str:
     dp = m.get("deepen") or {}
     title = m.get("title") or m.get("analysis_id")
+    recut = dp.get("kind") == "recut"   # 界隈の切り直しの取り足し（acquire/recut.py）
     if dp.get("status") == "queued":
-        return f"順番待ち: {title}（界隈の掘り下げ）"
+        return f"順番待ち: {title}（{'界隈の切り直し' if recut else '界隈の掘り下げ'}）"
     d = config.ANALYSES_DIR / m["analysis_id"] / "raw" / "deepen" / f"r{dp.get('round')}.jsonl"
     done = sum(1 for _ in open(d, encoding="utf-8")) if d.exists() else 0
-    return f"取り足し中: {title}（界隈 {dp.get('community')}）{done}/{len(dp.get('targets') or [])}本"
+    return f"取り足し中: {title}（{'切り直した界隈' if recut else '界隈 ' + str(dp.get('community'))}）{done}/{len(dp.get('targets') or [])}本"
 
 
 MAX_RETRIES = 3

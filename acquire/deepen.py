@@ -209,9 +209,11 @@ class Run:
     def run(self) -> str:
         job = self.job()
         n = job["round"]
+        kind = job.get("kind") or "deepen"   # recut＝界隈の切り直しの取り足し（acquire/recut.py）。取り方は同じ
+        what = "界隈の切り直し" if kind == "recut" else "界隈の掘り下げ"
         self.set(status="running", pid=os.getpid(), started_at=job.get("started_at") or pipeline.now())
         log = self.base.log
-        log(f"=== 界隈の掘り下げ（{n}回目・{job['community']}）の取得を始めます: 新しく{job['plan'].get('n_new')}本・"
+        log(f"=== {what}（{n}回目・{job['community']}）の取得を始めます: 新しく{job['plan'].get('n_new')}本・"
             f"続き{job['plan'].get('n_more')}本（見込み{job.get('est_min')}分）")
         out = self.p("raw", "deepen", f"r{n}.jsonl")
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -228,14 +230,15 @@ class Run:
             self.base.unlock()
         # 止まっても、取れた分は足す（待って取り直すことはしない。短い仕事なので）
         try:
-            res = merge(self.dir, n, job["community"])
+            res = merge(self.dir, n, job["community"], kind,
+                        {str(x["video_id"]): x["community"] for x in job.get("targets") or [] if x.get("community")})
         except Exception as e:
             log(f"!! 取った行を原本に足せませんでした: {type(e).__name__}: {e}\n{traceback.format_exc()}")
             self.set(status="failed", error=f"原本に足せなかった（{type(e).__name__}）", failed_at=pipeline.now())
             return "failed"
         res.update({"blocked": blocked, "error": error})
         self.set(status="done", finished_at=pipeline.now(), result=res)
-        log(f"=== 界隈の掘り下げの取得が終わりました: {json.dumps(res, ensure_ascii=False)}")
+        log(f"=== {what}の取得が終わりました: {json.dumps(res, ensure_ascii=False)}")
         return "done"
 
     def _fetch(self, job: dict, out: Path) -> bool:
@@ -308,9 +311,10 @@ def write_pool(path: Path, targets: list, community: str, n: int) -> None:
 # ---------------------------------------------------------------------------
 # 原本に足す
 # ---------------------------------------------------------------------------
-def merge(d: Path, n: int, community: str) -> dict:
+def merge(d: Path, n: int, community: str, kind: str = "deepen", by_video: dict | None = None) -> dict:
     """r<n>.jsonl の ok の行を raw/comments.jsonl に足し、derived/comments を作り直す。
-    続きを取った動画は前のコメントと cid で合わせ、増えなければ足さない（取り直しで減っても前の分は失わない）"""
+    続きを取った動画は前のコメントと cid で合わせ、増えなければ足さない（取り直しで減っても前の分は失わない）。
+    kind は印の頭（deepen＝掘り下げ・recut＝切り直し）、by_video は動画ごとの界隈（切り直しは動画ごとに界隈が違う）"""
     d = Path(d)
     src = d / "raw" / "deepen" / f"r{n}.jsonl"
     got = _ok_rows(src)
@@ -318,7 +322,7 @@ def merge(d: Path, n: int, community: str) -> dict:
     add, n_new, n_more, added = [], 0, 0, 0
     for vid, r in got.items():
         r = dict(r)
-        r.update({"pool_reason": f"deepen:r{n}:{community}", "deepen_round": n})
+        r.update({"pool_reason": f"{kind}:r{n}:{(by_video or {}).get(vid) or community}", "deepen_round": n})
         o = old.get(vid)
         if o:
             have = {str(c.get("cid")) for c in r.get("comments") or []}
@@ -369,8 +373,9 @@ def prep(d: Path) -> str:
     have = {r["video_id"] for r in rows}
     for r in _jsonl(d / "raw" / "comments.jsonl"):
         reason = str(r.get("pool_reason") or "")
-        if reason.startswith("deepen:") and str(r["video_id"]) not in have:
-            rows.append({"video_id": str(r["video_id"]), "reasons": f"界隈の掘り下げで取り足した（{reason.split(':')[2]}）",
+        if reason.startswith(("deepen:", "recut:")) and str(r["video_id"]) not in have:
+            what = "界隈の切り直し" if reason.startswith("recut:") else "界隈の掘り下げ"
+            rows.append({"video_id": str(r["video_id"]), "reasons": f"{what}で取り足した（{reason.split(':')[2]}）",
                          "priority": "3"})
             have.add(str(r["video_id"]))
     with open(pool_all, "w", encoding="utf-8", newline="\n") as f:

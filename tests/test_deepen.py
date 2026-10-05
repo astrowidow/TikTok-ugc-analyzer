@@ -190,6 +190,18 @@ class TestPlanAndMerge(unittest.TestCase):
         self.assertEqual([(r["seq"], r["cap"], r["priority"]) for r in rows], [("5", "40", "1"), ("3", "40", "1"), ("0", "120", "2")])
 
 
+class TestComeBack(unittest.TestCase):
+    def test_come_back_line(self):
+        s = pr.come_back_line(25 * 60, "この界隈のコメントを取り足すの", "シルエット", "取り足した分でレポートを書き直します。")
+        self.assertRegex(s, r"^この界隈のコメントを取り足すのに約25分かかります（(明日（\d+/\d+）の)?\d+時(\d\d分)?ごろに終わる見込み）。")
+        self.assertIn("その間 AI は待てないため、Mac に通知が出たら「シルエットの分析を続けて」と頼んでください。", s)
+        long = pr.come_back_line(12 * 3600, "TikTok から動画とコメントを集めるの", "シルエット", "そこからレポートを書きます。")
+        self.assertIn("集めるのに約12時間かかります（", long)
+        self.assertEqual([pr._span(x) for x in (23.8 * 60, 61 * 60, 85 * 60, 12.4 * 3600, 12.6 * 3600)],
+                         ["25分", "1時間", "1時間25分", "12時間半", "12時間半"])
+        self.assertIn("時間がかかります", pr.come_back_line(None, "集めるの", "x", ""))
+
+
 class TestFlow(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -232,8 +244,11 @@ class TestFlow(unittest.TestCase):
     def test_end_to_end(self):
         r = pr.deepen("u1", AID, "屋外で踊る人", "なぜバズったのかが弱い")
         self.assertIn("新しく2本・続きを1本", r["text"])
-        self.assertIn("止まる（取得を待たない", r["text"])                  # 2段: 取り足しのあと利用者が「続けて」
-        self.assertIn("「テスト曲の分析を続けて」と言えば、取り足したコメントをレポートに活かす", r["text"])
+        self.assertIn("止まる。取得を待たない", r["text"])                  # 2段: 取り足しのあと利用者が「続けて」
+        # 最初の返事に、何分後に戻って頼むかを事情と共に（come_back_line。言い換えずに入れる）
+        self.assertRegex(r["text"], r"「この界隈のコメントを取り足すのに約\d+分かかります（.+ごろに終わる見込み）。"
+                                    r"その間 AI は待てないため、Mac に通知が出たら「テスト曲の分析を続けて」と頼んでください。"
+                                    r"取り足した分でレポートを書き直します。」")
         self.assertEqual(pr.LOCAL.ensured, 1)
         # 取り足しの間に「続けて」と言われたら、待ち（止まって伝える）
         w = pr.next_task("u1", AID)

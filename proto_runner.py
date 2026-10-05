@@ -668,6 +668,38 @@ def _hm(sec: float) -> str:
     return f"{h}時間{m}分" if h else f"{max(m, 1)}分"
 
 
+def come_back_line(eta_seconds, work: str, title: str, then: str) -> str:
+    """2段の操作（Mac が取る → 利用者が「続けて」）の最初の返事に、AI がそのまま入れる一文（2026-10-06 ユーザー
+    「最初の依頼時の AI の返答で、xxx分後に戻ってきて頼んでもらう必要があることを、事情と共にユーザに言おう。簡潔にな」）。
+    使う所: 分析を始める（start_analysis）・界隈の掘り下げ（deepen）・界隈の切り直し（別のセッションで作る予定。取り直しが要るとき）。
+    work は「〇〇するのに」の〇〇、then は「続けて」のあとに AI がすること"""
+    if eta_seconds:
+        when = _clock_fine(eta_seconds) if eta_seconds < 2 * 3600 else _clock(eta_seconds)
+        span = f"{work}に約{_span(eta_seconds)}かかります（{when}に終わる見込み）。"
+    else:
+        span = f"{work}に時間がかかります。"
+    return f"{span}その間 AI は待てないため、Mac に通知が出たら「{title}の分析を続けて」と頼んでください。{then}"
+
+
+def _span(sec: float) -> str:
+    """一文に入れる長さ: 2時間以上は30分単位（「12時間」「12時間半」）、それより短いと5分単位（「25分」「1時間25分」）"""
+    sec = max(0, int(sec))
+    if sec >= 2 * 3600:
+        half = round(sec / 1800)
+        return f"{half // 2}時間" + ("半" if half % 2 else "")
+    m = max(5, int(round(sec / 300)) * 5)
+    return f"{m // 60}時間{m % 60}分" if m >= 60 and m % 60 else f"{m // 60}時間" if m >= 60 else f"{m}分"
+
+
+def _clock_fine(eta_seconds: float, now: datetime.datetime | None = None) -> str:
+    """2時間より短い見込みの時刻を「1時40分ごろ」の形で（5分単位に切り上げ）"""
+    now = now or datetime.datetime.now().astimezone()
+    t = now + datetime.timedelta(seconds=max(0, int(eta_seconds or 0)))
+    t += datetime.timedelta(minutes=(-t.minute) % 5)
+    day = "" if t.date() == now.date() else f"明日（{t.month}/{t.day}）の"
+    return f"{day}{t.hour}時{t.minute:02d}分ごろ" if t.minute else f"{day}{t.hour}時ごろ"
+
+
 def _clock(eta_seconds: float, now: datetime.datetime | None = None) -> str:
     """終わる見込みの時刻を「今日の23時ごろ」「明日（10/4）の6時半ごろ」の形で"""
     now = now or datetime.datetime.now().astimezone()
@@ -1061,7 +1093,6 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
     p = launch.progress(aid)
     title = song
     eta = p.get("eta_seconds")
-    when = f"終わるのは{_clock(eta)}の見込みです（約{_hm(eta)}）。" if eta else ""
     head = f"「{title}」の{'取得を受け付けました' if created else '取得はもう受け付けています'}（分析 ID: {aid}）。"
     meta_now = _read_json(ANALYSES_DIR / aid / "analysis.json", {}) or {}
     mp = min_plays_of(meta_now)
@@ -1093,20 +1124,20 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
         lines = [head, body + warn,
                  "あなたの Mac の UGC Analyzer が、楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。"
                  + reply_line,
-                 (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + when,
-                 "そのあいだ Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）。",
-                 f"終わると Mac の通知が出ます。そのあと「{title}の分析を続けて」と言ってください。"]
+                 (f"前に{p['ahead']}件あります。" if p.get("ahead") else ""),
+                 "そのあいだ Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）。"]
     else:
         lines = [head,
                  "楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。" + reply_line,
-                 (f"前に{p['ahead']}件あります。" if p.get("ahead") else "") + when,
-                 f"そのころに「{title}の分析を続けて」と言ってください。"]
+                 (f"前に{p['ahead']}件あります。" if p.get("ahead") else "")]
+    back = come_back_line(eta, "TikTok から動画とコメントを集めるの", title,
+                          "そこからレポートを書きます（途中で1回、界隈の分け方を確認します）。")
     ai = ("（AI へ: この内容を利用者に短く伝えて、ここで止まる。どの楽曲ページで進めるか（題・作者・UGC 数・URL）は省かずに伝える。"
-          "取得を待たない・見に来ない。")
+          "返事の最後に、下の「」の文を言い換えずにそのまま入れる。取得を待たない・見に来ない。")
     if dropped:
         ai += ("外した楽曲ページも伝える。利用者が「それも入れて」と言ったら、restart_analysis に、上で進める楽曲ページと足すページの URL を"
                "全部 music_urls に入れて呼ぶ。")
-    lines += ["", ai + "）"]
+    lines += [f"「{back}」", "", ai + "）"]
     return {"text": "\n".join(l for l in lines if l is not None), "analysis_id": aid, "created": created,
             "worker": kick, "eta_seconds": eta}
 
@@ -1588,8 +1619,7 @@ def deepen(user_id: str, ref: str | None, community: str, instruction: str) -> d
         from acquire import launch
         launch.ensure_worker()
     eta = pl["est_min"] * 60
-    head += (f"コメントを取り足します: 新しく{pl['n_new']}本・続きを{pl['n_more']}本（約{int(round(pl['est_min']))}分、"
-             f"{_clock(eta)}ごろ終わる見込み）。")
+    head += f"コメントを取り足します: 新しく{pl['n_new']}本・続きを{pl['n_more']}本。"
     if pl["left_new"] or pl["left_more"]:
         head += f"時間の都合で取らない動画もあります（新しく{pl['left_new']}本・続き{pl['left_more']}本）。"
     if DEEPEN_WAIT_IN_CHAT:
@@ -1597,9 +1627,10 @@ def deepen(user_id: str, ref: str | None, community: str, instruction: str) -> d
                 f"{DEEPEN_WAIT_S}秒待って様子を返す）。会話が途中で止まっても、取得が終わると Mac の通知が出るので、"
                 f"利用者が「{a.title}の分析を続けて」と言えば再開できる。")
     else:
-        tail = (f"利用者にこの内容を短く伝えて止まる（取得を待たない・見に来ない）。取り足しが終わると Mac の通知が出るので、"
-                f"利用者が「{a.title}の分析を続けて」と言えば、取り足したコメントをレポートに活かす（その界隈の分析のやり直し・"
-                "構成案と章の書き直し・全章の通し読み）。そう利用者に伝える。")
+        back = come_back_line(eta, "この界隈のコメントを取り足すの", a.title, "取り足した分でレポートを書き直します。")
+        tail = ("（AI へ: この内容を利用者に短く伝えて止まる。取得を待たない・見に来ない。返事の最後に、下の「」の文を言い換えずにそのまま入れる。"
+                "「続けて」と言われたら next_task で、その界隈の分析のやり直し・構成案と章の書き直し・全章の通し読みを片付ける）\n"
+                f"「{back}」")
     return {"text": head + "\n" + tail, "analysis_id": a.id}
 
 

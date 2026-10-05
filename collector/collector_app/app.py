@@ -343,7 +343,7 @@ class Controller:
                 self.chrome.navigate(chrome.LOGIN_URL)
                 self.chrome.show()
                 notify.send("TikTok にログインしてください",
-                            "開いた Chrome で、捨て垢（ふだん使っていないアカウント）でログインしてください")
+                            "開いた Chrome で、分析専用のサブアカウント（ふだんとは別のアカウント）でログインしてください")
                 self.login_presented = True
             self.login_wanted = True
         if self.chrome.logged_in():
@@ -359,7 +359,7 @@ class Controller:
             # AI のアプリが入っていれば、メニューのアプリがすぐ自動でつないで、開き直すかを聞く（CollectorApp._autolink）
             self.status_text = self._idle_text()
             return
-        self.status_text = "TikTok のログイン待ち（取得用の Chrome で、捨て垢でログイン）"
+        self.status_text = "TikTok のログイン待ち（取得用の Chrome で、サブアカウントでログイン）"
 
     def _check_transitions(self):
         """分析の状態が変わったら知らせる。止まったものは続きから取り直す"""

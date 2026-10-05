@@ -749,7 +749,7 @@ def _acq_view(a: Analysis):
                    "アプリケーションフォルダの「UGC Analyzer」を開けば、済んだところの続きから取ります。")
             return {"state": "stopped", "message": msg, "eta_seconds": eta}
         if app.get("login_wanted"):
-            msg = ("UGC Analyzer が TikTok のログインを待っています。UGC Analyzer が開いた Chrome で、捨て垢でログインしてください。"
+            msg = ("UGC Analyzer が TikTok のログインを待っています。UGC Analyzer が開いた Chrome で、分析専用のサブアカウントでログインしてください。"
                    "ログインすれば続きから取ります。")
             return {"state": "login", "message": msg, "eta_seconds": eta}
         if p.get("status") == "running":
@@ -1713,7 +1713,7 @@ def _deepen_view(a: Analysis):
                     "message": "あなたの Mac の UGC Analyzer が動いていません。アプリケーションフォルダの「UGC Analyzer」を開けば、取り足しを始めます。"}
         if app.get("login_wanted"):
             return {"state": "login", "eta_seconds": est,
-                    "message": "UGC Analyzer が TikTok のログインを待っています。UGC Analyzer が開いた Chrome で、捨て垢でログインしてください。"}
+                    "message": "UGC Analyzer が TikTok のログインを待っています。UGC Analyzer が開いた Chrome で、分析専用のサブアカウントでログインしてください。"}
     if dp.get("status") == "queued":
         busy = [m for m in (_read_json(d / "analysis.json") for d in ANALYSES_DIR.iterdir() if d.is_dir())
                 if m and (m.get("acquisition") or {}).get("status") == "running"]

@@ -153,8 +153,9 @@ class TestPlanAndMerge(unittest.TestCase):
     def test_plan_fits_budget(self):
         pl = deepen.plan(self.d, "dancer")
         self.assertEqual((pl["n_new"], pl["n_more"]), (2, 1))
-        self.assertAlmostEqual(pl["est_min"], 3.0 + 1.6 * 2 + 3.2)
-        small = deepen.plan(self.d, "dancer", minutes=5)                # 準備3分＋1本1.6分しか入らない
+        E = deepen.EST
+        self.assertAlmostEqual(pl["est_min"], round(E["page_min"] + E["new_min"] * 2 + E["more_min"], 1))
+        small = deepen.plan(self.d, "dancer", minutes=E["page_min"] + E["new_min"] + 0.5)   # 準備＋1本しか入らない
         self.assertEqual((small["n_new"], small["n_more"], small["left_new"], small["left_more"]), (1, 0, 1, 1))
         self.assertEqual(small["targets"][0]["seq"], 5)
 

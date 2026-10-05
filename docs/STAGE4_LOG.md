@@ -657,6 +657,15 @@ Claude デスクトップを開き直し（2回）／運営向けメニューの
   起動のログに「UGC Analyzer 0.5.6 を起動」、置き場の code/0.5.6-474d860c07df に写った（acquire/recut.py を含む）
 - 友達に配る .dmg: `collector/dist/UGC-Analyzer-0.5.6.dmg`（友達はまだ誰も入れていない）。Claude デスクトップは開き直すと 0.5.6 の道具（recut など）になる
 
+### 入れ替えの道具と auto モードの決まり（2026-10-06）
+
+- ユーザー「なんで止まったの？自動でできるようにして」「develop への取り込みは、ほかのセッションと話して問題なさそうならいける、がいい。いつでも OK ではない」
+- 入れ替えの手順を `collector/install.sh` にまとめた: 取得中・順番待ちの分析（本線の取得・取り足し）と TikTok のロックがあれば止まる → 今の .app を `output/app-backup/` に控える →
+  メニューバーのアプリだけ止める（--mcp は止めない）→ 新しい .app を写して起動を確かめる。`--dry-run` で確かめだけ。これからの入れ替えはこれを使う
+- auto モードの判定役への決まり（`~/.claude/settings.json` の `autoMode.allow`）: develop への取り込みは「ほかのセッションに知らせて問題なしと分かり、試験が通った」ときだけ。
+  install.sh での入れ替えは、ユーザー了承済みのいつもの作業（本番への配備ではない）。プロジェクトの `.claude/settings.local.json` に install.sh・git add・git commit を名指しで許可
+- auto モードでは、AI が自分の許可の設定を書き換えることはできない（Self-Modification で止まる）。設定を変えるときは、入力欄の下のモードを Manual にしてから
+
 ---
 
 ## 本番に入れたファイルと控え

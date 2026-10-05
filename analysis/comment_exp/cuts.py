@@ -90,12 +90,14 @@ def half_weekly_keep(adir: Path, seed: int = 7) -> tuple:
     return keep, weekly_all
 
 
-def apply(rows: list, cuts: list, adir: Path) -> list:
-    """削った行の写しを返す（元の rows は変えない）"""
+def apply(rows: list, cuts: list, adir: Path, keep: set | None = None) -> list:
+    """削った行の写しを返す（元の rows は変えない）。keep があれば、その動画の行だけ残す（取る動画を絞った場合の再現）"""
     bad = [c for c in cuts if c not in CUTS]
     if bad:
         raise ValueError(f"知らない削り方: {bad}（{CUTS}）")
     out = copy.deepcopy(rows)
+    if keep is not None:
+        out = [r for r in out if str(r.get("video_id")) in keep]
     if "half_weekly" in cuts:
         keep, weekly = half_weekly_keep(adir)
         out = [r for r in out if str(r.get("video_id")) not in weekly or str(r.get("video_id")) in keep]

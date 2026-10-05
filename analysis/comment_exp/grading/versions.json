@@ -34,6 +34,11 @@
     "dir": "{HOME}/analyses/x-sil-top5",
     "role": "check",
     "note": "物差しの確かめ: どの動画もコメント先頭5件・返信なし（取得の案ではない）"
+   },
+   "ct1": {
+    "dir": "{HOME}/analyses/x-sil-ct1",
+    "role": "variant",
+    "note": "返信なし＋本人40件＋取る動画を「必ず取る59本＋属性クラスタ12個ごとの再生上位3本」の95本に絞る（今のプールの中から）"
    }
   }
  },
@@ -96,6 +101,11 @@
     "dir": "{HOME}/analyses/x-kyw-ra2",
     "role": "variant",
     "note": "同じ削り方の2回目"
+   },
+   "ct1": {
+    "dir": "{HOME}/analyses/x-kyw-ct1",
+    "role": "variant",
+    "note": "返信なし＋本人40件＋取る動画を「必ず取る97本＋属性クラスタ12個ごとの再生上位3本」の127本に絞る（今のプールの中から）"
    }
   }
  }

@@ -57,6 +57,7 @@ def main():
     ap.add_argument("--src-dir", help="元の分析フォルダ（省くと本物の置き場の analyses/<src>）")
     ap.add_argument("--cut", default="", help="削り方（, 区切り）: " + ",".join(cuts.CUTS))
     ap.add_argument("--pin-refs", action="store_true", help="参考記事を元の版と同じにして済ませる")
+    ap.add_argument("--keep-videos", help="この一覧（1行1 video_id）の動画のコメントだけ残す（select_study.py keep で作る）")
     ap.add_argument("--title", help="題（省くと「元の題〔新しい ID〕」）")
     ap.add_argument("--force", action="store_true", help="同じ ID の写しがあれば消して作り直す")
     args = ap.parse_args()
@@ -131,7 +132,8 @@ def main():
     # --- コメントを削る ---
     rows = cuts.load(src)
     before = cuts.stats(rows)
-    rows2 = cuts.apply(rows, cut_list, src) if cut_list else rows
+    keep = set(Path(args.keep_videos).read_text(encoding="utf-8").split()) if args.keep_videos else None
+    rows2 = cuts.apply(rows, cut_list, src, keep) if (cut_list or keep is not None) else rows
     after = cuts.stats(rows2)
     with open(dst / "raw" / "comments.jsonl", "w", encoding="utf-8") as f:
         for r in rows2:
@@ -144,9 +146,10 @@ def main():
     meta["owner"] = common.USER
     meta.pop("download_key", None)
     det = (((meta.get("acquisition") or {}).get("steps") or {}).get("comments") or {}).get("detail")
-    if isinstance(det, dict) and cut_list:
+    if isinstance(det, dict) and (cut_list or keep is not None):
         det.update({"videos_ok": after["videos_ok"], "comments": after["comments"], "replies": after["replies_opened"]})
     meta["experiment"] = {"source": old, "source_dir": str(src), "cuts": cut_list, "pin_refs": args.pin_refs,
+                          "keep_videos": args.keep_videos,
                           "forked_at": now(), "comments_before": before, "comments_after": after,
                           "source_comments_md5": md5(src / "raw" / "comments.jsonl")}
     (dst / "analysis.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")

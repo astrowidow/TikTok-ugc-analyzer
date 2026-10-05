@@ -414,12 +414,12 @@ class Controller:
                         f"界隈 {dp.get('community')}・約{int(round(float(dp.get('est_min') or 0)))}分。Mac を開いたままにしておいてください")
         elif st == "done" and ((dp.get("result") or {}).get("error") or (dp.get("result") or {}).get("blocked")):
             notify.send(f"「{title}」の取り足しが途中で止まりました",
-                        f"取れた分で掘り下げを進めます。{ai_where() or 'Claude'} の会話が止まっていたら「{title}の分析を続けて」と言ってください")
+                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言うと、取れた分をレポートに活かします")
             self.log.warning("界隈の掘り下げの取り足しが途中で止まりました: %s %s", m["analysis_id"], dp.get("result"))
         elif st == "done":
             r = dp.get("result") or {}
             notify.send(f"「{title}」の取り足しが終わりました",
-                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言ってください"
+                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言うと、レポートに活かします"
                         f"（新しく{r.get('videos_new', 0)}本・続き{r.get('videos_more', 0)}本、コメント{r.get('comments_added', 0)}件）")
             self.log.info("界隈の掘り下げの取り足しが終わりました: %s %s", m["analysis_id"], r)
         elif st == "failed":

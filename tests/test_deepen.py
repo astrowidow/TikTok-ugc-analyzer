@@ -232,12 +232,13 @@ class TestFlow(unittest.TestCase):
     def test_end_to_end(self):
         r = pr.deepen("u1", AID, "屋外で踊る人", "なぜバズったのかが弱い")
         self.assertIn("新しく2本・続きを1本", r["text"])
-        self.assertIn("この会話で取得の終わりを待つ", r["text"])
+        self.assertIn("止まる（取得を待たない", r["text"])                  # 2段: 取り足しのあと利用者が「続けて」
+        self.assertIn("「テスト曲の分析を続けて」と言えば、取り足したコメントをレポートに活かす", r["text"])
         self.assertEqual(pr.LOCAL.ensured, 1)
-        # 取り足しの間は待ち（この会話で待つ）
+        # 取り足しの間に「続けて」と言われたら、待ち（止まって伝える）
         w = pr.next_task("u1", AID)
         self.assertEqual(w["kind"], "wait")
-        self.assertIn("すぐにもう一度 next_task", w["text"])
+        self.assertIn("繰り返し呼ばない", w["text"])
         self.assertIn("界隈の掘り下げの取り足し", pr.status("u1", AID)["text"] + pr.status("u1", AID)["analyses"][0]["progress"])
         with self.assertRaises(pr.RunnerError):                         # 途中で2つ目は受けない
             pr.deepen("u1", AID, "student", "こっちも")
@@ -319,6 +320,19 @@ class TestFlow(unittest.TestCase):
         ver = json.loads((self.d / "outputs" / "verify.json").read_text(encoding="utf-8"))
         self.assertEqual(ver["errors"], [])
         self.assertEqual(pr.status("u1", AID)["analyses"][0]["state"], "done")
+
+    def test_wait_in_chat_switch(self):
+        # 切り替え（DEEPEN_WAIT_IN_CHAT）を入れると、会話の中で待つ形になる（2026-10-06 の判断では切）
+        saved = pr.DEEPEN_WAIT_IN_CHAT
+        pr.DEEPEN_WAIT_IN_CHAT = True
+        try:
+            r = pr.deepen("u1", AID, "dancer", "浅い")
+            self.assertIn("この会話で取得の終わりを待つ", r["text"])
+            w = pr.next_task("u1", AID)
+            self.assertEqual(w["kind"], "wait")
+            self.assertIn("すぐにもう一度 next_task", w["text"])
+        finally:
+            pr.DEEPEN_WAIT_IN_CHAT = saved
 
     def test_behind_long_acquisition_stops(self):
         # 別の曲の半日の取得が走っていたら、会話の中では待たない（止まって「続けて」を待つ）

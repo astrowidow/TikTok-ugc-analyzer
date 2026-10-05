@@ -592,6 +592,8 @@ def render(a, t: dict, st: dict) -> dict:
             mat["summary"] = deepen_summary(a, t["params"]["deepen"]) + "\n\n" + mat["summary"]
         if t["params"].get("recut"):
             mat["summary"] = recut_summary(a, t["params"]["recut"]) + "\n\n" + mat["summary"]
+        if not t["params"].get("deepen") and not t["params"].get("recut") and confirm_skipped_summary(a):
+            mat["summary"] = confirm_skipped_summary(a) + "\n\n" + mat["summary"]
         text = pr._fill(tpl("done.md"), {**base, **mat})
 
     else:
@@ -1180,6 +1182,19 @@ def recut_fetched_note(a, n) -> str:
     if res.get("blocked") or res.get("error"):
         s += "。取得は途中で止まった（取れた分だけ使った）"
     return s
+
+
+def confirm_skipped_summary(a) -> str:
+    """利用者が界隈の確認を省いたとき（proto_runner._auto_confirm）、完了の知らせで使った界隈を伝える。止めずに、何で進めたかは伝える"""
+    c = pr._read_json(a.outputs("confirm_answer.json"), {}) or {}
+    if not c.get("auto"):
+        return ""
+    tax = pr._taxonomy(a) or {}
+    names = [pr._first_sentence(v, 40).rstrip("。") for k, v in tax.get("community", {}).items() if not k.startswith("_") and k != "unknown"]
+    return "\n".join(["#### 界隈の確認を省いた（利用者の頼み）",
+                      f"- 使った界隈（{len(names)}個）: " + "、".join(names),
+                      "- 返答の 1 のあとに、界隈の確認を省いて AI の案のまま書いたことと、使った界隈の名前を1行で伝え、"
+                      f"「分け方を変えたいときは『{a.title}のレポートの〇〇界隈を2つに分けて』のように言えば、界隈の切り直しで書き直せます」と添える"])
 
 
 def recut_summary(a, n) -> str:
@@ -2354,9 +2369,39 @@ def service_assemble(a, st: dict) -> dict:
 
 # 「seq N … 〇〇万再生」の照合。カンマ入りの数字（1,420万）を読み、ほかの動画（seq M）をまたいで数字を拾わない
 # （2026-10-06: 掘り下げの試験で、元の版から同じ誤報3件が「数字の一部は運営が確認中」として利用者に出ていた）
-PLAY_RE = re.compile(r"seq\s*(\d+)(?:(?!seq\s*\d)[^。\n]){0,60}?(\d[\d,]*(?:\.\d+)?)\s*(万|億)?\s*(?:回)?再生")
+PLAY_RE = re.compile(r"seq\s*(\d+)(?:(?!seq\s*\d)[^。\n]){0,60}?(?<![\d,.万億])(\d[\d,]*(?:\.\d+)?)\s*(万|億)?\s*(?:回)?再生")
 # 「seq N、@投稿者、日付、再生 4,100,000」の形（執筆の指示どおりの書き方。前はこちらを照合していなかった。本番2曲の写しで 75・88 件、ずれ0）
 PLAY_RE_PRE = re.compile(r"seq\s*(\d+)(?:(?!seq\s*\d)[^。\n]){0,60}?再生\s*(\d[\d,]*(?:\.\d+)?)\s*(万|億)?")
+# 数字のすぐあとに動画の「（seq M …）」が続くなら、その数字は M のもの（書き方「30.9万回再生（seq 28 …）」）。前の seq N の数字として照合しない
+# （2026-10-06: きゃわの事例で、正しい本文から4〜6件の誤報が出て、完了の知らせに「数字の一部は運営が確認中」と出ていた）
+FOLLOW_SEQ = re.compile(r"[^。、\n（(]{0,12}[（(]\s*seq\s*(\d+)")   # 数字と（seq M）の間は読点なし・12字まで（「〜まで伸びています（seq 39」）
+PLAY_RE_POST = re.compile(r"(?<![\d,.万億])(\d[\d,]*(?:\.\d+)?)\s*(万|億)?\s*(?:回)?再生" + FOLLOW_SEQ.pattern)   # 「23万6,600回」の末尾だけは拾わない
+
+
+def play_claims(text: str) -> list:
+    """本文が書いた動画の再生数を (seq, 数字の文字, 万・億, 抜き出し) で返す。3つの書き方:
+    「seq N … 〇〇回再生」・「seq N、…、再生 数字」・「〇〇回再生（seq N …）」"""
+    out = {}
+    for m in PLAY_RE.finditer(text):
+        f = FOLLOW_SEQ.match(text, m.end())
+        if f and int(f.group(1)) != int(m.group(1)):
+            continue   # 数字は、あとに続く動画のもの（PLAY_RE_POST で照合する）
+        if "再生" in text[m.end(1):m.start(2)]:
+            continue   # seq N の再生数は（ ）の中で言い終えている。あとの数字は別の話（「〜と、100万回再生を超える投稿が続く」）
+        out[m.start(2)] = (int(m.group(1)), m.group(2), m.group(3), m.group(0))
+    for m in PLAY_RE_PRE.finditer(text):
+        out[m.start(2)] = (int(m.group(1)), m.group(2), m.group(3), m.group(0))
+    for m in PLAY_RE_POST.finditer(text):
+        out[m.start(1)] = (int(m.group(3)), m.group(1), m.group(2), m.group(0))
+    return [out[k] for k in sorted(out)]
+
+
+def play_mismatch(num: str, unit_word, real: int) -> bool:
+    """本文の数字が実データとずれているか。6% か、書いた桁の丸めの幅（「2万」なら±5千、「30.9万」なら±500）の大きいほうまでは一致とみなす"""
+    digits = num.replace(",", "")
+    unit = 10000 if unit_word == "万" else 100000000 if unit_word == "億" else 1
+    step = 10 ** -len(digits.split(".")[1]) if "." in digits else 1
+    return abs(float(digits) * unit - real) > max(0.06 * real, step * unit / 2)
 
 
 def service_verify(a, st: dict) -> dict:
@@ -2372,14 +2417,12 @@ def service_verify(a, st: dict) -> dict:
     for c_ in sorted(cids):
         if c_ not in known:
             errors.append(f"入力に無い cid: {c_}")
-    for m in [*PLAY_RE.finditer(rep), *PLAY_RE_PRE.finditer(rep)]:
-        s = int(m.group(1))
+    for s, num, unit, snip in play_claims(rep):
         if s not in recs:
             continue
-        val = float(m.group(2).replace(",", "")) * (10000 if m.group(3) == "万" else 100000000 if m.group(3) == "億" else 1)
         real = recs[s]["plays"]
-        if real and abs(val - real) / real > 0.06:
-            warnings.append(f"seq {s} の再生数: 本文 {m.group(0)[-20:]} ／ データ {real:,}")
+        if real and play_mismatch(num, unit, real):
+            warnings.append(f"seq {s} の再生数: 本文 {snip[-24:]} ／ データ {real:,}")
     note = a.outputs("NOTE_BODY.md").read_text(encoding="utf-8") if a.outputs("NOTE_BODY.md").exists() else ""
     if note:
         allowed = {url_of(v) for v in videos(a).values() if url_of(v)}

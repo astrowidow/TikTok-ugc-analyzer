@@ -200,6 +200,21 @@ class TestVerifyPlays(unittest.TestCase):
         self.assertEqual(found("動画（seq 14）や開封（seq 23、1,150万再生）"), [(23, "1,150", "万")])   # seq 14 の数字にしない
         self.assertEqual(found("seq 0、@a、2025-07-20、再生 4,100,000）"), [(0, "4,100,000", None)])
 
+    def test_claims_and_mismatch(self):
+        """「〇〇回再生（seq M …）」は M の数字。（ ）の中で言い終えたあとの数字は別の話。丸めた数字は丸めの幅まで一致（2026-10-06 きゃわの事例の誤報）"""
+        plays = {20: 2600000, 28: 308800, 39: 1600000, 707: 1300000}
+
+        def bad(text):
+            return [(s, num) for s, num, u, _ in flow_w1.play_claims(text) if s in plays and flow_w1.play_mismatch(num, u, plays[s])]
+        ok = ["（seq 20（@a、再生 2,600,000））、5/28の公式の投稿も160万回再生まで伸びています（seq 39（@b、再生 1,600,000））",
+              "ネイルチェンジ（seq 707（@y、再生 1,300,000））と、100万回再生を超える美容系の投稿が続きます",
+              "2人並び（seq 28、@c、再生 30万）", "2人並びが30.9万回再生（seq 28（@c、再生 308,800））"]
+        for t in ok:
+            self.assertEqual(bad(t), [], t)
+        self.assertEqual(bad("2人並びが50万回再生（seq 28（@c、再生 308,800））"), [(28, "50")])
+        self.assertEqual(bad("seq 28 の2人並びは50万回再生まで伸びた。"), [(28, "50")])
+        self.assertEqual(bad("2人並びが30.9万回再生（seq 28（@c、再生 500,000））"), [(28, "500,000")])
+
 
 class TestComeBack(unittest.TestCase):
     def test_come_back_line(self):

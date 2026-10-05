@@ -934,6 +934,10 @@ def min_plays_of(meta: dict):
     return int(v) if v is not None else None
 
 
+CONFIRM_ONCE = "（途中で1回、界隈の分け方を確認します）"
+CONFIRM_SKIPPED = "（界隈の分け方の確認は省いて、最後まで書きます）"
+
+
 def acquisition_settings_for(replies: bool, min_plays: int | None = None) -> dict | None:
     """新しい分析の目録に書く取得の設定（取得アプリの設定に、返信・再生の下限の指定を重ねる）"""
     s = dict(LOCAL.acquisition_settings() or {}) if LOCAL is not None else {}
@@ -946,12 +950,19 @@ def acquisition_settings_for(replies: bool, min_plays: int | None = None) -> dic
 
 def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
                    candidate_urls: list | None = None, only_one: bool = False, music_urls: list | None = None,
-                   video_urls: list | None = None, replies: bool = False, min_plays: int | None = None) -> dict:
+                   video_urls: list | None = None, replies: bool = False, min_plays: int | None = None,
+                   skip_confirm: bool = False) -> dict:
     """分析を作って取得の待ち行列に入れる。replies=True なら返信も取る（既定は取らない）。
-    min_plays は週ごとに選ぶ動画の再生の下限（省けば acquire/pipeline.py の既定 min_plays_weekly）"""
+    min_plays は週ごとに選ぶ動画の再生の下限（省けば acquire/pipeline.py の既定 min_plays_weekly）。
+    skip_confirm=True なら、取得のあとの界隈の確認を省いて最後まで書く"""
     res = _start_analysis(user_id, song, artist, music_url, video_url, candidate_urls, only_one, music_urls, video_urls,
                           replies, min_plays)
+    if skip_confirm and res.get("analysis_id"):
+        _set_options(ANALYSES_DIR / res["analysis_id"], skip_confirm=True, skip_confirm_at=_now())
+        res["text"] = res["text"].replace(CONFIRM_ONCE, CONFIRM_SKIPPED)
     if not res.get("analysis_id"):   # 楽曲ページ探しの案内（分析はまだ作っていない）
+        if skip_confirm:
+            res["text"] += "\n（AI へ: 利用者は界隈の確認を省くように頼んでいる。start_analysis を呼び直すときも skip_confirm=true を付ける）"
         if replies:
             res["text"] += "\n（AI へ: 利用者は返信も取るように頼んでいる。start_analysis を呼び直すときも replies=true を付ける）"
         if min_plays is not None:
@@ -1131,7 +1142,7 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
                  "楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。" + reply_line,
                  (f"前に{p['ahead']}件あります。" if p.get("ahead") else "")]
     back = come_back_line(eta, "TikTok から動画とコメントを集めるの", title,
-                          "そこからレポートを書きます（途中で1回、界隈の分け方を確認します）。")
+                          "そこからレポートを書きます" + CONFIRM_ONCE + "。")
     ai = ("（AI へ: この内容を利用者に短く伝えて、ここで止まる。どの楽曲ページで進めるか（題・作者・UGC 数・URL）は省かずに伝える。"
           "返事の最後に、下の「」の文を言い換えずにそのまま入れる。取得を待たない・見に来ない。")
     if dropped:
@@ -1177,7 +1188,38 @@ def _kb_task_text(kb, t: dict) -> dict:
     return {"text": text, "task_id": t["task_id"], "kind": "ai", "analysis_id": None, "progress": "知識ベース"}
 
 
-def next_task(user_id: str, ref: str | None = None) -> dict:
+SKIP_CONFIRM_ANSWER = "（界隈の確認を省く: 利用者の頼み）"
+
+
+def _options(d: Path) -> dict:
+    """分析ごとの、会話で頼まれた選択（界隈の確認を省く など）。analysis.json は取得の係も書くので別のファイルに持つ"""
+    return _read_json(d / "state" / "options.json", {}) or {}
+
+
+def _set_options(d: Path, **kv) -> None:
+    _write_json(d / "state" / "options.json", {**_options(d), **kv})
+
+
+def _auto_confirm(a: Analysis, st: dict, t: dict):
+    """利用者が「界隈の確認はいらない」と頼んだ分析では、界隈の確認（ask_user）で止まらず、案のまま受け取って先へ進める。
+    使った界隈は完了の知らせで伝える（2026-10-06 ユーザー「界隈の確認はいらないのでそのまま最後まで書いて、のオプションも欲しい」）"""
+    import flow_w1
+    errs = flow_w1.accept(a, t, json.dumps({"user_answer": SKIP_CONFIRM_ANSWER}, ensure_ascii=False), st)
+    if errs:   # 案のままでは通らない（まれ）。ふだんどおり利用者に見せる
+        a.log(event="auto_confirm_failed", task_id=t["task_id"], reasons=errs[:5])
+        return t
+    c = _read_json(a.outputs("confirm_answer.json"), {}) or {}
+    _write_json(a.outputs("confirm_answer.json"), {**c, "auto": True})
+    now = _now()
+    t["status"] = "done"
+    t["done_at"] = now
+    t["first_issued_at"] = t["first_issued_at"] or now
+    _write_json(a.state_path, st)
+    a.log(event="auto_confirm", task_id=t["task_id"])
+    return _run_services(a, st)
+
+
+def next_task(user_id: str, ref: str | None = None, skip_confirm: bool = False) -> dict:
     _await_deepen(user_id, ref)
     with _lock:
         kb = _kb()
@@ -1190,6 +1232,8 @@ def next_task(user_id: str, ref: str | None = None) -> dict:
             if a0 is None or _kb_ok_now(a0):
                 return _kb_task_text(kb, kt)
         a = resolve(user_id, ref)
+        if skip_confirm and not _options(a.dir).get("skip_confirm"):
+            _set_options(a.dir, skip_confirm=True, skip_confirm_at=_now())
         av = _acq_view(a)
         if av:
             return _wait_task(a, av["message"] + "\n取得が終わったら、利用者が「" + a.title + "の分析を続けて」と言えば再開する。")
@@ -1202,6 +1246,8 @@ def next_task(user_id: str, ref: str | None = None) -> dict:
             fresh = _recut_queued_now(a)
             if fresh:
                 return fresh
+        if is_w1(a) and t is not None and t["type"] == "confirm" and _options(a.dir).get("skip_confirm"):
+            t = _auto_confirm(a, st, t)
         if t is None:
             t = st["tasks"][-1]
         rendered = _render(a, t, st)
@@ -1903,15 +1949,18 @@ def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_u
         artist = (m.get("song") or {}).get("artist") or ""
         rep = wants_replies(m) if replies is None else bool(replies)   # 省けば前の分析の指定を引き継ぐ
         mp = min_plays_of(m) if min_plays is None else int(min_plays)
+        skip = bool(_options(a.dir).get("skip_confirm"))   # 界隈の確認を省く頼みも引き継ぐ
     if not urls:   # 最初から: 楽曲ページを探し直す（AI が検索して start_analysis を呼ぶ）
         res = _music_search_hint(song, artist, f"「{a.title}」の前の取得（{old}）をやめた。楽曲ページ探しから最初にやり直す。")
         if rep:
             res["text"] += "\n（AI へ: この分析は返信も取る指定。start_analysis を呼ぶときは replies=true を付ける）"
         if mp is not None:
             res["text"] += f"\n（AI へ: この分析は再生の下限の指定あり。start_analysis を呼ぶときは min_plays={mp} を付ける）"
+        if skip:
+            res["text"] += "\n（AI へ: この分析は界隈の確認を省く指定。start_analysis を呼ぶときは skip_confirm=true を付ける）"
         res["cancelled"] = a.id
         return res
-    res = start_analysis(user_id, song, artist, music_urls=urls, replies=rep, min_plays=mp)   # やり直しは利用者が選んだページで（複数なら全部）
+    res = start_analysis(user_id, song, artist, music_urls=urls, replies=rep, min_plays=mp, skip_confirm=skip)   # やり直しは利用者が選んだページで（複数なら全部）
     res["text"] = (f"「{a.title}」の前の取得（{old}）をやめました。\n" + res["text"])
     res["cancelled"] = a.id
     return res

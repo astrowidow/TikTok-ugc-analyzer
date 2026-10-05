@@ -675,6 +675,24 @@ Claude デスクトップを開き直し（2回）／運営向けメニューの
 - 入れ替え: `collector/install.sh`（取得中なし・TikTok のロックなし）。0.5.6 の控えは `output/app-backup/`。起動のログに「UGC Analyzer 0.5.7 を起動」、置き場の code/0.5.7-474d860c07df に写った
 - 友達に配る .dmg: `collector/dist/UGC-Analyzer-0.5.7.dmg`（友達はまだ誰も入れていない）
 
+### 0.5.8: 界隈の確認を省く選択肢・検算の誤報・掘り下げの見込み（2026-10-06 08:47、0c）
+
+きゃわを0から回した事例（`output/case_kyawa_20261006/`、ページ https://claude.ai/artifact/PhDfG1qMWM2z9bMHHN2iu6 ）で見つかったことを直した。ユーザー「アプリ更新してくれ」
+
+- **界隈の確認を省く**（ユーザー「『分析を続けて。界隈の確認はいらないのでそのまま最後まで書いてください』のオプションも欲しい」）:
+  `start_analysis`・`next_task` に `skip_confirm`（既定 false）。付けると分析フォルダの `state/options.json` に印を残し、界隈の確認（ask_user）に来たら案のまま受け取って先へ進む（`proto_runner._auto_confirm`）。
+  分析を始めたときの返事の一文は「（界隈の分け方の確認は省いて、最後まで書きます）」に。取得のやり直しでも引き継ぐ。完了の知らせに使った界隈の一覧と「切り直しで直せる」の一文（`flow_w1.confirm_skipped_summary`）。
+  AI が印を付け忘れたときの保険として、confirm.md に「もう『確認はいらない』と言われていたら、見せずに next_task を skip_confirm=true で呼び直す」。道具の説明・instructions・ChatGPT のスキルにも1行。
+  前は、言っても界隈の案を見せて止まる（指示書が「見せて答えを待つ」）か、AI の読み方しだいだった
+- **検算の誤報**: 本文が「30.9万回再生（seq 28 …）」と数字を先に書くと、前の seq の数字として照合していた。完了の知らせに「数字の一部は運営が確認中です」と出ていた（本文は正しい）。
+  数字のすぐあとに（seq M …）が続くなら M の数字として照合（`PLAY_RE_POST`）、（ ）の中で言い終えたあとの数字は照合しない、丸めた数字は丸めの幅まで一致（`play_claims`・`play_mismatch`）。
+  本番5本のレポートで誤報 6・6・4・15・2件 → 0件、照合できた数字は 93→140 などに増えた。わざと間違えた数字は拾う（試験 `TestVerifyPlays.test_claims_and_mismatch`）
+- **掘り下げ・切り直しの取り足しの見込み**: `deepen.EST` の page_min 6→1.5分・new_min 1.3→1.0分（実測: 掘り下げ 23.7分 → 7分、切り直し 14.2分 → 1分）。掘り下げの25分の枠を使い切るようになる
+- 単体試験 113本（新しく `tests/test_skip_confirm.py`）・`check_local_mcp --no-network`・作り直しの自己点検2つ、全部 OK。本物の分析の写しで、確認を省く道（印なしは ask_user、付ければラベルの仕事へ）を確かめた
+- 入れ替え: `collector/install.sh`（取得中なし・TikTok のロックなし）。0.5.7 の控えは `output/app-backup/`。起動のログに「UGC Analyzer 0.5.8 を起動」（08:47）。
+  直後から d9 が 0.5.8 で全機能の通し試験を始める（0c に確かめてから）
+- 友達に配る .dmg: `collector/dist/UGC-Analyzer-0.5.8.dmg`
+
 ---
 
 ## 本番に入れたファイルと控え

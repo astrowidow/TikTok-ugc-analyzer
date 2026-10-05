@@ -55,6 +55,8 @@ INSTRUCTIONS = (
     + "\nレポートの完成後に利用者が直しを頼んだら revise（このレポートだけ）。ある界隈の話が浅い・もっとコメントを取って掘り下げて、"
     "と頼まれたら deepen。界隈の分け方そのものを変えたい（分ける・まとめる・切り直す）と頼まれたら recut。"
     "今後ずっと続く指示の変更は settings（利用者が頼んだときだけ使う）。"
+    "\n利用者が「界隈の確認はいらない」「確認なしで最後まで書いて」と頼んだら、そのとき呼ぶ start_analysis か next_task に skip_confirm=true を付ける"
+    "（界隈の案で止まらず、案のまま最後まで書く。使った界隈は完了の知らせで伝わる）。"
 )
 
 
@@ -165,6 +167,7 @@ def _build_server(user_of=None, local: bool = False):
                      "（取るとコメントの取得が2〜3割長くなる）。"
                      "min_plays は、週ごとに選ぶ動画の再生の下限（既定10万。起点・大型ヒット・本人・公式などは再生に関わらず取る）。"
                      "利用者が「再生〇万以上の動画だけで」「小さい動画も見て」などと頼んだときだけ数で指定する。"
+                     "skip_confirm は、利用者が「界隈の確認はいらない」「確認なしで最後まで書いて」と頼んだときだけ true（取得のあと、界隈の案で止まらずに最後まで書く）。"
                      + "返ってきた内容を利用者に短く伝えて止まる（取得を待たない・見に来ない）。" + rule),
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=True),
@@ -173,9 +176,10 @@ def _build_server(user_of=None, local: bool = False):
                              video_url: str | None = None, candidate_urls: list[str] | None = None,
                              only_one: bool = False, music_urls: list[str] | None = None,
                              video_urls: list[str] | None = None, replies: bool = False,
-                             min_plays: int | None = None) -> str:
+                             min_plays: int | None = None, skip_confirm: bool = False) -> str:
         return _call(runner.start_analysis, _user(ctx), song, artist, music_url or "", video_url or "",
-                     candidate_urls or [], only_one, music_urls or [], video_urls or [], bool(replies), min_plays)["text"]
+                     candidate_urls or [], only_one, music_urls or [], video_urls or [], bool(replies), min_plays,
+                     bool(skip_confirm))["text"]
 
     @mcp.tool(
         title="分析の状態",
@@ -192,12 +196,13 @@ def _build_server(user_of=None, local: bool = False):
         description="分析の次の仕事を1つ受け取る（task_id・kind・指示書・入力・出力の形）。"
                     "analysis_id は分析 ID か曲名（省略するとその利用者の分析）。"
                     "kind: ai=指示書どおりにやって submit／ask_user=内容を利用者に見せて答えを submit／"
-                    "wait=取得中なので止まる／done=完了なので止まる。" + rule,
+                    "wait=取得中なので止まる／done=完了なので止まる。"
+                    "skip_confirm=true は、利用者が「界隈の確認はいらない」「確認なしで最後まで書いて」と頼んだとき（界隈の確認で止まらず、案のまま進める）。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=False),
     )
-    async def next_task(ctx: Context, analysis_id: str | None = None) -> str:
-        return _call(runner.next_task, _user(ctx), analysis_id)["text"]
+    async def next_task(ctx: Context, analysis_id: str | None = None, skip_confirm: bool = False) -> str:
+        return _call(runner.next_task, _user(ctx), analysis_id, bool(skip_confirm))["text"]
 
     @mcp.tool(
         title="結果を返す",

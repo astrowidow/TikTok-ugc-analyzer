@@ -27,11 +27,13 @@ sys.path.insert(0, str(BASE_DIR))
 from acquire import pipeline, worker  # noqa: E402
 
 TASK_NAME = "tiktok-acq"
-# 見込み（シルエット規模）。一覧5分・属性 1本3.3秒・派生2分・コメントはプールの本数×3分（上限12時間）
+# 見込み（シルエット規模）。一覧5分・属性 1本3.3秒・派生2分・コメントはコメントを取る本数×1本の見込み（pipeline.minutes_per_comment_video）
 LIST_SECONDS = 300
 ENRICH_SECONDS_PER_VIDEO = 3.3
 DERIVE_SECONDS = 120
 TYPICAL_VIDEOS = 900
+# プールが決まる前の、コメントを取る本数の見込み（"page"＝必ず入れる動画だけ。シルエット59本・きゃわ97本、2026-10-06）
+TYPICAL_COMMENT_VIDEOS = 80
 
 
 def new_analysis(owner: str, song: str, artist: str = "", music_url: str = "", settings: dict | None = None,
@@ -105,10 +107,14 @@ def _remaining_seconds(m: dict) -> int:
     steps = acq.get("steps") or {}
     s = {**pipeline.DEFAULTS, **(m.get("acquisition_settings") or {})}
     n_links = ((steps.get("list") or {}).get("detail") or {}).get("links") or TYPICAL_VIDEOS
-    budget = int(s.get("pool_budget") or 0) or int(float(s["comment_hours"]) * 60 / float(s["min_per_video"]))
-    n_pool = ((steps.get("pool") or {}).get("detail") or {}).get("n_pool") or budget
+    if s.get("comment_plan", "page") == "page":
+        guess = TYPICAL_COMMENT_VIDEOS
+    else:
+        guess = int(s.get("pool_budget") or 0) or int(float(s["comment_hours"]) * 60 / float(s["min_per_video"]))
+    n_pool = ((steps.get("pool") or {}).get("detail") or {}).get("n_pool") or guess
+    per = pipeline.minutes_per_comment_video(s)
     est = {"resolve": 60, "list": LIST_SECONDS, "enrich": n_links * ENRICH_SECONDS_PER_VIDEO, "derive": DERIVE_SECONDS,
-           "pool": 10, "comments": n_pool * float(s["min_per_video"]) * 60 + 600,
+           "pool": 10, "comments": n_pool * per * 60 + 600,
            "comments_md": 30, "notify": 5}
     total = 0.0
     for step in pipeline.STEPS:
@@ -121,7 +127,7 @@ def _remaining_seconds(m: dict) -> int:
             # 走行中なら取れた本数から残りを見る
             done_n = pipeline.comments_ok(pipeline.ANALYSES_DIR / m["analysis_id"])
             if done_n:
-                e = min(e, max(0, n_pool - done_n) * float(s["min_per_video"]) * 60 + 300)
+                e = min(e, max(0, n_pool - done_n) * per * 60 + 300)
         elif st.get("status") == "running" and st.get("started_at"):
             try:
                 el = (datetime.datetime.now().astimezone() - datetime.datetime.fromisoformat(st["started_at"])).total_seconds()

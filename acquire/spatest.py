@@ -1211,7 +1211,11 @@ class SpaCollector:
         """
         rows = list(csv.DictReader(open(self.a.pool, encoding="utf-8"), delimiter="\t"))
         info = {}
+        label_only = set()
         for r in rows:
+            if str(r.get("cap") or "").strip() == "0":   # cap 0 はコメントを取らない動画（ラベルを付けるだけ。analysis/pool.py の page）
+                label_only.add(r["video_id"])
+                continue
             info[r["video_id"]] = r
             self.caps[r["video_id"]] = int(r.get("cap") or self.a.cap)
             self.why[r["video_id"]] = r.get("reasons")
@@ -1244,7 +1248,7 @@ class SpaCollector:
                 by_id[v] = h
         found = [v for v in want if v in pos]
         missing = [v for v in want if v not in pos]
-        used = set(info) | set(done)
+        used = set(info) | set(done) | label_only   # 差し替え先はプールの外から（前と同じ）
         subs = []
         for v in sorted(missing, key=lambda v: (info[v].get("priority") or "2", -int(info[v].get("plays") or 0))):
             wk = info[v].get("week")

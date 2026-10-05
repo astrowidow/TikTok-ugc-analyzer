@@ -45,6 +45,12 @@ DEFAULTS = {
     # 返信を各1件にして 3.1分・6.1分の見込み（docs/IMPLEMENTATION_LOG.md D20）。
     # 2026-10-05 に返信を開くのをやめ、本人だけの動画を40件にしたが、見込みは変えない（本数を今のままにして、浮いた分は時間の短縮に回す）
     "min_per_video": 3.1, "min_per_key_video": 6.1,
+    # コメントの取り方（analysis/pool.py の --comment-plan）。2026-10-06 ユーザー採用: "page"＝必ず入れる動画（起点・大型ヒット・認証・本人・公式など）は
+    # 1本1ページ（最大20件）、週ごとに配った動画はコメントを取らない（ラベルを付ける動画としては残す）。"full"＝前の取り方（120件・40件、週ごとも取る）。
+    # 選ぶ動画の本数は上の min_per_* の見込みで今までどおり配る（ラベルを付ける動画を変えないため）
+    "comment_plan": "page",
+    # "page" の動画1本の見込み（分）。毎分3回の実走（docs/COMMENT_SPEED.md 第5章）の要求1回 約17秒＋動画の間の待ち 約20秒から（推測。実走で直す）
+    "min_per_page_video": 0.7,
     # 返信欄を開くコメント（返信数の多い順・質問形・投稿者本人）。2026-10-05 から開かない（0）。
     # 開いて取った返信は本番レポート2本で引用0件、開かない写しで回し直してもレポートの点は元の版のぶれの内側（docs/COMMENT_STRATEGY_HANDOVER.md 第9章）。
     # 本体と一緒に届く返信（reply_comment）は今までどおり残る
@@ -449,11 +455,11 @@ class Run:
         s = self.settings()
         out = self.p("derived", "pool.tsv")
         if out.exists():  # 再開: プールは一度決めたら変えない（取得済みと食い違わないように）
-            n = sum(1 for _ in open(out, encoding="utf-8")) - 1
-            return {"n_pool": n, "resumed": True}
+            return {"n_pool": len(comment_rows(out)), "resumed": True}
         args = ["analysis/pool.py", self.p("derived", "videos.jsonl"), self.p("raw", "enriched.jsonl"), out,
                 "--hours", s["comment_hours"], "--min-per-video", s["min_per_video"],
-                "--min-per-key-video", s["min_per_key_video"], "--min-plays-weekly", int(s["min_plays_weekly"])]
+                "--min-per-key-video", s["min_per_key_video"], "--min-plays-weekly", int(s["min_plays_weekly"]),
+                "--comment-plan", s["comment_plan"]]
         if int(s["pool_budget"] or 0):
             args += ["--budget", int(s["pool_budget"])]
         return json.loads(self._script(*args).splitlines()[-1])
@@ -469,6 +475,8 @@ class Run:
         lines = [ln for ln in pool.read_text(encoding="utf-8").splitlines() if ln.strip()]
         head, body = lines[0], lines[1:]
         vi = head.split("\t").index("video_id")
+        ci = head.split("\t").index("cap")
+        body = [r for r in body if int(r.split("\t")[ci] or 0) > 0]   # コメントを取らない動画（cap 0）では楽曲ページを開かない
         out = []
         for k, url in enumerate(urls, 1):
             mine = [r for r in body if src.get(r.split("\t")[vi], 1) == k]
@@ -492,7 +500,7 @@ class Run:
         pages = self.comment_pages()
         for k, (url, pool, summary, subs) in enumerate(pages, 1):
             if len(pages) > 1:
-                self.log(f"    楽曲ページ {k}/{len(pages)} のグリッドから取ります（プール {sum(1 for _ in open(pool, encoding='utf-8')) - 1}本、{url}）")
+                self.log(f"    楽曲ページ {k}/{len(pages)} のグリッドから取ります（コメントを取る動画 {len(comment_rows(pool))}本、{url}）")
             while True:
                 left = (deadline - spent) if deadline else 0.0      # 0 は spatest で「打ち切らない」
                 if deadline and left <= 0.02:
@@ -505,7 +513,7 @@ class Run:
                         "--resume", "--collect-scrolls", str(s["collect_scrolls"]),
                         "--reply-policy", "targets", "--reply-top", str(s["reply_top"]),
                         "--reply-questions", str(s["reply_questions"]), "--reply-author", str(s["reply_author"]),
-                        "--cap", "40", "--min-comments", "20",
+                        "--cap", "40", "--min-comments", "20", "--subs-cap", str(subs_cap(s)),
                         "--calls-per-min", str(s["calls_per_min"]), "--max-calls-per-min", str(s["max_calls_per_min"]),
                         "--interval", str(s["interval"]), "--jitter", "0.5", "--deadline-hours", f"{left:.3f}",
                         "--out", str(self.p("raw", "comments.jsonl")), "--log", str(self.p("fetch_log", "comments.log")),
@@ -572,9 +580,9 @@ class Run:
         # 20件で頭打ち（2-9）の疑い: 上位リストが20件以上あったのに20件で止まったもの。
         # 上位リストが20件未満なら、最低件数（--min-comments 20）で正しく止まっただけ（2026-10-01 の写しで1本、上位17件で誤報になった）
         capped20 = sum(1 for r in ok if len(r.get("comments") or []) == 20 and r.get("has_more")
-                       and (r.get("top_list") or 0) >= 20)
+                       and (r.get("top_list") or 0) >= 20 and int(r.get("cap") or 40) > 20)   # 上限20件（1本1ページ）で止めたものは除く
         summs = [read_json(p, {}) or {} for p in summary_files(self.dir)]   # 楽曲ページごとの要約を合わせる
-        n_pool = sum(1 for _ in open(self.p("derived", "pool.tsv"), encoding="utf-8")) - 1
+        n_pool = len(comment_rows(self.p("derived", "pool.tsv")))
         res = {"videos_ok": len(ok), "pool": n_pool,
                "comments": sum(len(r.get("comments") or []) for r in ok),
                "replies": sum(len(r.get("reply_comments") or []) for r in ok),
@@ -637,6 +645,22 @@ def release_time(urls: list):
 def summary_files(d: Path) -> list:
     """コメント取得の要約（1ページ目は comments_summary.json、2ページ目からは comments_summary_p2.json …）"""
     return sorted((d / "fetch_log").glob("comments_summary*.json"))
+
+
+def comment_rows(pool: Path) -> list:
+    """プールの表のうち、コメントを取る動画の行（cap が1以上。cap 0 はラベルを付けるだけの動画）"""
+    with open(pool, encoding="utf-8") as f:
+        return [r for r in csv.DictReader(f, delimiter="\t") if int(r.get("cap") or 0) > 0]
+
+
+def subs_cap(s: dict) -> int:
+    """グリッドで見つからない動画の代わりに取る動画の上限（"page" なら1ページ）"""
+    return 20 if s.get("comment_plan", "page") == "page" else 40
+
+
+def minutes_per_comment_video(s: dict) -> float:
+    """コメントを取る動画1本の見込み（分）。見込み時間（acquire/launch.py）に使う"""
+    return float(s["min_per_page_video"]) if s.get("comment_plan", "page") == "page" else float(s["min_per_video"])
 
 
 def comments_ok(d: Path) -> int:

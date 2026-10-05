@@ -13,9 +13,12 @@ analysis/pool_verify.py（2026-09-30 の検証）を本番の規則に直した�
 3.1分・6.1分で配る（acquire/pipeline.py の DEFAULTS。docs/IMPLEMENTATION_LOG.md D20）。
 はみ出た分は取得の12時間打ち切りで落ちるが、取得は「必ず入れる動画（priority=1）を先に」取るので、落ちるのは週ごとに配った動画だけ。
 
+2026-10-06 から（既定 --comment-plan page）: 選び方は上のまま、コメントの上限だけを付け替える。必ず入れる動画は1本1ページ（最大20件）、
+週ごとに配った動画は0件（コメントを取らない。ラベルを付ける動画としてプールに残す）。前の取り方は --comment-plan full。
+
   python analysis/pool.py <videos.jsonl> <enriched.jsonl> <出力 pool.tsv> [--hours 12] [--min-per-video 3]
 
-出力 pool.tsv の列: video_id seq date week plays username cap priority reasons（理由は , 区切り。priority 1＝必ず入れる）
+出力 pool.tsv の列: video_id seq date week plays username cap priority reasons（理由は , 区切り。priority 1＝必ず入れる。cap 0＝コメントを取らない）
 """
 import argparse
 import collections
@@ -27,6 +30,9 @@ import unicodedata
 
 CAP_STANDARD = 40
 CAP_KEY = 120
+# 1本1ページ（TikTok は1回の要求で約20件返す）。2026-10-06 ユーザー採用「必ず入れる動画は各1ページ、週ごとの動画はコメントを取らない」
+CAP_PAGE = 20
+COMMENT_PLANS = ("page", "full")
 # 120件にする理由のうち、本人（artist）以外のもの。本人だけが理由の動画は、選んだあとで40件に下げる（build の末尾）
 KEY_REASONS_BUT_ARTIST = {"origin", "top_hit", "official"}
 # 週ごとに配る動画の再生の下限（必ず入れる動画（起点・大型ヒット・本人・公式など）には掛けない）。
@@ -98,9 +104,12 @@ def campaign_tags(alive, enriched, artists, titles) -> set:
     return tags
 
 
-def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None, min_plays_weekly=None):
+def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None, min_plays_weekly=None, plan="page"):
     """プールを決める。返り値 {video_id: {"cap": int, "reasons": [..]}} と説明。
-    budget_units と cost_* は同じ単位（本数なら 1、時間なら分）。cost_key は120件の動画1本の重さ（既定は cost_std）"""
+    budget_units と cost_* は同じ単位（本数なら 1、時間なら分）。cost_key は120件の動画1本の重さ（既定は cost_std）。
+    plan: "page"＝必ず入れる動画は各1ページ・週ごとの動画は0件（既定）、"full"＝120件・40件で週ごとも取る（2026-10-05 までの取り方）"""
+    if plan not in COMMENT_PLANS:
+        raise ValueError(f"plan は {COMMENT_PLANS} のどれか: {plan}")
     cost_key = cost_std if cost_key is None else cost_key
     floor = MIN_PLAYS_WEEKLY if min_plays_weekly is None else min_plays_weekly
     alive = [v for v in videos if (enriched.get(v["video_id"]) or {}).get("author")]
@@ -180,10 +189,21 @@ def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None, m
             p["cap"] = CAP_STANDARD
             n_artist_capped += 1
 
+    # 2026-10-06 ユーザー採用（docs/COMMENT_STRATEGY_HANDOVER.md 第9章）: 必ず入れる動画は1本1ページ、週ごとに配った動画はコメントを取らない。
+    # シルエットで「必ず入れる動画だけ・1本1ページ」に削った写しは、記事を正解にした大局・対の比較・主張の再現のどれでも元の版の幅に入り、
+    # 週ごとの動画のコメントを足しても良くならなかった（コメント0件だと理由づけが落ちる）。
+    # 選ぶ動画は上のまま（週ごとの動画もラベルを付ける動画としてプールに残す。flow_w1.label_seqs）。上限だけを付け替える
+    if plan == "page":
+        for p in pool.values():
+            p["cap"] = CAP_PAGE if any(not r.startswith("week:") for r in p["reasons"]) else 0
+
     explain = {"song": info, "artist_accounts": sorted(a for a in artists if a),
                "campaign_tags": sorted(ctags), "alive": len(alive), "videos": len(videos),
                "budget_units": budget_units, "units_used": round(units_used, 1),
-               "n_pool": len(pool), "n_cap_key": sum(1 for p in pool.values() if p["cap"] >= CAP_KEY),
+               # n_pool はコメントを取る本数（進み具合の「〇/〇本」と見込み時間に使う）。n_rows はラベルを付ける動画も含めた行数
+               "n_pool": sum(1 for p in pool.values() if p["cap"] > 0), "n_rows": len(pool),
+               "n_no_comments": sum(1 for p in pool.values() if p["cap"] == 0), "comment_plan": plan,
+               "n_cap_key": sum(1 for p in pool.values() if p["cap"] >= CAP_KEY),
                "n_artist_capped": n_artist_capped, "min_plays_weekly": floor}
     return pool, explain
 
@@ -211,13 +231,16 @@ def main():
     ap.add_argument("--budget", type=int, default=0, help="本数で直接指定（時間より優先）")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--min-plays-weekly", type=int, default=None, help=f"週ごとに配る動画の再生の下限（既定 {MIN_PLAYS_WEEKLY:,}）")
+    ap.add_argument("--comment-plan", choices=COMMENT_PLANS, default="page",
+                    help="page: 必ず入れる動画は各1ページ・週ごとの動画はコメントを取らない（既定）。full: 120件・40件で週ごとも取る")
     a = ap.parse_args()
     videos, enriched = load(a.videos, a.enriched)
     if a.budget:   # 本数で直接
-        pool, explain = build(videos, enriched, a.budget, seed=a.seed, min_plays_weekly=a.min_plays_weekly)
+        pool, explain = build(videos, enriched, a.budget, seed=a.seed, min_plays_weekly=a.min_plays_weekly, plan=a.comment_plan)
     else:          # 時間（分）で
         pool, explain = build(videos, enriched, a.hours * 60, seed=a.seed, cost_std=a.min_per_video,
-                              cost_key=a.min_per_key_video or a.min_per_video, min_plays_weekly=a.min_plays_weekly)
+                              cost_key=a.min_per_key_video or a.min_per_video, min_plays_weekly=a.min_plays_weekly,
+                              plan=a.comment_plan)
     write(pool, videos, a.out)
     print(json.dumps(explain, ensure_ascii=False))
 

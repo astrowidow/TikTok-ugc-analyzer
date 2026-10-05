@@ -98,6 +98,8 @@ def main() -> int:
         src = self.link_sources()   # 楽曲ページが複数なら、ページを順に回して選ぶ（どのページからも取れるか試せるように）
         groups = {}
         for r in body:
+            if int(r.split("\t")[ci] or 0) <= 0:   # コメントを取らない動画（週ごとの動画。analysis/pool.py の page）からは選ばない
+                continue
             groups.setdefault(src.get(r.split("\t")[vi], 1), []).append(r)
         picked = []
         while len(picked) < n and any(groups.values()):

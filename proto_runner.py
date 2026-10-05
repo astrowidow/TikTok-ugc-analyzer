@@ -747,6 +747,11 @@ def status(user_id: str, ref: str | None = None) -> dict:
                 items.append({"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": av["state"],
                               "progress": "取得の段", "message": av["message"], "eta_seconds": av["eta_seconds"]})
                 continue
+            dv = _deepen_view(a)
+            if dv:
+                items.append({"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": dv["state"],
+                              "progress": "界隈の掘り下げの取り足し", "message": dv["message"], "eta_seconds": dv["eta_seconds"]})
+                continue
             st = _load_state(a)
             cur = _current(st)
             if cur is None or cur["kind"] == "done":
@@ -1129,7 +1134,7 @@ def _kb():
 def _kb_ok_now(a) -> bool:
     """この分析の今の段で、知識ベースの仕事をはさんでよいか。
     取得中（利用者は「まだ」を聞きたい）と、界隈の確認の前（利用者が答えを待っている）にははさまない"""
-    if _acq_view(a):
+    if _acq_view(a) or _deepen_view(a):
         return False
     st = _load_state(a)
     return not any(t["kind"] == "ask_user" and t["status"] != "done" for t in st["tasks"])
@@ -1142,6 +1147,7 @@ def _kb_task_text(kb, t: dict) -> dict:
 
 
 def next_task(user_id: str, ref: str | None = None) -> dict:
+    _await_deepen(user_id, ref)
     with _lock:
         kb = _kb()
         kt = kb.next_task() if kb else None
@@ -1156,6 +1162,9 @@ def next_task(user_id: str, ref: str | None = None) -> dict:
         av = _acq_view(a)
         if av:
             return _wait_task(a, av["message"] + "\n取得が終わったら、利用者が「" + a.title + "の分析を続けて」と言えば再開する。")
+        dv = _deepen_view(a)
+        if dv:
+            return _deepen_wait_task(a, dv)
         st = _load_state(a)
         t = _run_services(a, st) if is_w1(a) else _current(st)
         if t is None:
@@ -1507,6 +1516,157 @@ def revise(user_id: str, ref: str | None, instruction: str) -> dict:
         a.log(event="revise_requested", chars=len(instruction))
         return {"text": f"「{a.title}」の直しを受け付けました。続けて next_task を呼んで、直しの仕事を片付けてください。",
                 "analysis_id": a.id}
+
+
+# ---------------------------------------------------------------------------
+# 完成後の界隈の掘り下げ（2026-10-06〜。docs/DEEPEN_COMMUNITY.md）
+# ---------------------------------------------------------------------------
+# 取り足しの取得を、依頼した会話の中で待つか（Q4 の B。2026-10-06）。Claude デスクトップは道具1回が約60秒で打ち切りだが、
+# 1回の返答で呼べる回数は本番の記録で163回・165回まで止まらずに続いた（「約20回まで」の報告は当たらない）ので、50秒ずつ繰り返して待つ。
+# False なら今までの取得と同じく、止まって「続けて」を待つ（A）。B でも会話が止まれば、通知を見て「続けて」で再開できる
+DEEPEN_WAIT_IN_CHAT = True
+DEEPEN_WAIT_S = 50      # B のとき、next_task が1回で待つ長さ（Claude デスクトップは道具1回が約60秒で打ち切り）
+DEEPEN_TASKS = ("dcomments", "outline_revise", "review")
+
+
+def _match_community(tax: dict, text: str) -> str:
+    """界隈の key か、レポートでの呼び名（「屋外ダンス界隈」など）から key を当てる。当たらなければ一覧を返す"""
+    comm = {k: v for k, v in tax["community"].items() if not k.startswith("_") and k != "unknown"}
+    q = (text or "").strip().strip("「」`'\"")
+    if q in comm:
+        return q
+    for k in comm:
+        if k.lower() == q.lower():
+            return k
+    qn = re.sub(r"(の人たち|の人|界隈|勢|層)$", "", q).strip()
+    hits = [k for k, v in comm.items() if qn and (qn.lower() in k.lower() or qn in str(v))] if len(qn) >= 2 else []
+    if len(hits) == 1:
+        return hits[0]
+    listing = "\n".join(f"- `{k}`: {_first_sentence(str(v))}" for k, v in comm.items())
+    raise RunnerError(f"「{q}」に当たる界隈が{'複数あります' if hits else '見つかりません'}。レポートの本文の呼び名と下の説明を見比べ、"
+                      f"key を community に入れて deepen を呼び直してください（利用者には聞かない）:\n{listing}")
+
+
+def deepen(user_id: str, ref: str | None, community: str, instruction: str) -> dict:
+    """完成したレポートの、ある界隈の掘り下げ。取る動画を決めて取得の待ち行列に入れ、AI の仕事を末尾に足す"""
+    instruction = (instruction or "").strip() or "この界隈をもっと掘り下げて"
+    if len(instruction) > 2000:
+        raise RunnerError("頼みの言葉は2000字までにしてください")
+    with _lock:
+        a = resolve(user_id, ref)
+        if not is_w1(a):
+            raise RunnerError("この分析（試作）は掘り下げに対応していません")
+        st = _load_state(a)
+        cur = _current(st)
+        if cur is not None and cur["kind"] != "done":
+            if any(t["type"] in DEEPEN_TASKS and t["status"] != "done" for t in st["tasks"]):
+                raise RunnerError(f"いま界隈「{(a.meta.get('deepen') or {}).get('community')}」の掘り下げの途中です。"
+                                  f"終わってから頼んでください（「{a.title}の分析を続けて」で進みます）")
+            raise RunnerError("レポートがまだできていません。完成してから頼んでください")
+        tax = _taxonomy(a)
+        k = _match_community(tax, community)
+        from acquire import deepen as dp
+        import flow_w1
+        pl = dp.plan(a.dir, k)
+        job = dp.request(a.dir, k, instruction, pl)
+        for t in st["tasks"]:   # 前の完了の知らせを AI が受け取らないまま会話が終わっていたら、済んだことにする
+            if t["kind"] == "done" and t["status"] != "done":
+                t.update({"status": "done", "done_at": _now()})
+        st["tasks"] += flow_w1.deepen_tasks(st, job)
+        _write_json(a.state_path, st)
+        a.log(event="deepen_requested", community=k, round=job["round"], n_new=pl["n_new"], n_more=pl["n_more"],
+              est_min=pl["est_min"], chars=len(instruction))
+    name = _first_sentence(str(tax["community"].get(k, k)), 40)
+    head = f"「{a.title}」の界隈 `{k}`（{name}）を掘り下げます。"
+    if job["status"] != "queued":
+        return {"text": head + "取り足せる動画（コメントの無い動画・続きのある動画）が無いので、手元のコメントを前回より深く読み直して直します。"
+                       "利用者にそう短く伝え、続けて next_task を呼んで、仕事を片付けてください。", "analysis_id": a.id}
+    if LOCAL is not None:
+        LOCAL.ensure_app()
+    else:
+        from acquire import launch
+        launch.ensure_worker()
+    eta = pl["est_min"] * 60
+    head += (f"コメントを取り足します: 新しく{pl['n_new']}本・続きを{pl['n_more']}本（約{int(round(pl['est_min']))}分、"
+             f"{_clock(eta)}ごろ終わる見込み）。")
+    if pl["left_new"] or pl["left_more"]:
+        head += f"時間の都合で取らない動画もあります（新しく{pl['left_new']}本・続き{pl['left_more']}本）。"
+    if DEEPEN_WAIT_IN_CHAT:
+        tail = ("利用者にこの内容を短く伝えてから、続けて next_task を呼ぶ（この会話で取得の終わりを待つ。next_task は最大"
+                f"{DEEPEN_WAIT_S}秒待って様子を返す）。会話が途中で止まっても、取得が終わると Mac の通知が出るので、"
+                f"利用者が「{a.title}の分析を続けて」と言えば再開できる。")
+    else:
+        tail = (f"利用者にこの内容を短く伝えて止まる（取得を待たない・見に来ない）。終わると Mac の通知が出るので、"
+                f"利用者が「{a.title}の分析を続けて」と言えば、取り足したコメントで掘り下げてレポートを直す。")
+    return {"text": head + "\n" + tail, "analysis_id": a.id}
+
+
+def _deepen_view(a: Analysis):
+    """掘り下げの取り足しの様子。取得中でなければ None（止まった・済んだ・無い → AI の仕事へ進む）"""
+    dp = a.meta.get("deepen") or {}
+    if dp.get("status") not in ("queued", "running"):
+        return None
+    n = dp.get("round")
+    done = 0
+    p = a.dir / "raw" / "deepen" / f"r{n}.jsonl"
+    if p.exists():
+        done = len({json.loads(l)["video_id"] for l in open(p, encoding="utf-8") if l.strip()})
+    total = len(dp.get("targets") or [])
+    est = float(dp.get("est_min") or 25) * 60
+    if dp.get("status") == "running" and dp.get("started_at"):
+        try:
+            el = (datetime.datetime.now().astimezone() - datetime.datetime.fromisoformat(dp["started_at"])).total_seconds()
+            est = max(60.0, est - el)
+        except ValueError:
+            pass
+    back = f"終わったら「{a.title}の分析を続けて」と言ってください。"
+    if LOCAL is not None:
+        app = LOCAL.app_state() or {}
+        if not app.get("running"):
+            return {"state": "stopped", "eta_seconds": est,
+                    "message": "あなたの Mac の UGC Analyzer が動いていません。アプリケーションフォルダの「UGC Analyzer」を開けば、取り足しを始めます。"}
+        if app.get("login_wanted"):
+            return {"state": "login", "eta_seconds": est,
+                    "message": "UGC Analyzer が TikTok のログインを待っています。UGC Analyzer が開いた Chrome で、捨て垢でログインしてください。"}
+    if dp.get("status") == "queued":
+        busy = [m for m in (_read_json(d / "analysis.json") for d in ANALYSES_DIR.iterdir() if d.is_dir())
+                if m and (m.get("acquisition") or {}).get("status") == "running"]
+        if busy:   # 半日の取得の後ろ。会話の中では待たない
+            return {"state": "behind", "eta_seconds": None,
+                    "message": f"界隈 `{dp.get('community')}` のコメントの取り足しは、いま取得中の「{busy[0].get('title')}」が"
+                               f"終わってから始まります（取り足しは約{int(round(float(dp.get('est_min') or 25)))}分）。" + back}
+        msg = f"界隈 `{dp.get('community')}` のコメントの取り足しの開始待ち（約{_hm(est)}）。"
+    else:
+        msg = (f"あなたの Mac で界隈 `{dp.get('community')}` のコメントを取り足し中（{done}/{total}本）。"
+               f"終わるのは{_clock(est)}の見込み（あと約{_hm(est)}）。")
+    return {"state": "deepening", "message": msg + back, "eta_seconds": est}
+
+
+def _await_deepen(user_id: str, ref: str | None) -> None:
+    """B（会話の中で待つ）のとき: 取り足しが終わるまで最大 DEEPEN_WAIT_S 秒待つ（ロックの外で。ほかの道具を止めない）"""
+    if not DEEPEN_WAIT_IN_CHAT:
+        return
+    t0 = time.time()
+    while time.time() - t0 < DEEPEN_WAIT_S:
+        try:
+            a = resolve(user_id, ref)
+        except RunnerError:
+            return
+        dv = _deepen_view(a)
+        if dv is None or dv["state"] != "deepening":
+            return
+        time.sleep(5)
+
+
+def _deepen_wait_task(a: Analysis, dv: dict) -> dict:
+    if DEEPEN_WAIT_IN_CHAT and dv["state"] == "deepening":
+        how = ("この会話で待つ: 利用者に何も聞かず、すぐにもう一度 next_task を呼ぶ（取り足しが終わると、そのまま次の仕事が渡される）。"
+               "途中経過を毎回書かない。")
+    else:
+        how = "ここで止まって、利用者にこの内容を短く伝える。next_task を繰り返し呼ばない（待つ間に見に来ない）。"
+    text = f"# 待ち: {a.title}（界隈の掘り下げ）\n\n- kind: `wait`\n\n{dv['message']}\n\n{how}\n\n---\n" + REPEAT_RULE
+    a.log(event="issue", task_id=f"{a.id}/deepen-wait", kind="wait", chars=len(text))
+    return {"text": text, "task_id": None, "kind": "wait", "analysis_id": a.id, "progress": "界隈の掘り下げの取り足し"}
 
 
 def settings(user_id: str, action: str = "get", item: str | None = None, value: str | None = None,

@@ -204,6 +204,21 @@ def describe(m: dict) -> str:
     return f"取得中: {title} — {label}{extra}"
 
 
+def deepening(m: dict) -> bool:
+    """完成後の界隈の掘り下げの取り足しが、順番待ち・取得中か（acquire/deepen.py）"""
+    return ((m.get("deepen") or {}).get("status")) in ("queued", "running")
+
+
+def describe_deepen(m: dict) -> str:
+    dp = m.get("deepen") or {}
+    title = m.get("title") or m.get("analysis_id")
+    if dp.get("status") == "queued":
+        return f"順番待ち: {title}（界隈の掘り下げ）"
+    d = config.ANALYSES_DIR / m["analysis_id"] / "raw" / "deepen" / f"r{dp.get('round')}.jsonl"
+    done = sum(1 for _ in open(d, encoding="utf-8")) if d.exists() else 0
+    return f"取り足し中: {title}（界隈 {dp.get('community')}）{done}/{len(dp.get('targets') or [])}本"
+
+
 MAX_RETRIES = 3
 
 

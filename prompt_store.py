@@ -37,6 +37,10 @@ TITLES = {
     "finish.md": "note 用の仕上げ（章ごと）",
     "finish_title.md": "note の題名と見出し",
     "revise.md": "レポートの直し",
+    # 完成後の界隈の掘り下げ（2026-10-06〜。docs/DEEPEN_COMMUNITY.md）
+    "deepen_comments.md": "界隈の掘り下げ: コメント分析のやり直し",
+    "outline_revise.md": "界隈の掘り下げ: 構成案の直し",
+    "review.md": "界隈の掘り下げ: 全章の通し読み",
     "done.md": "完了の知らせ",
     # 2026-10-03 より前に始めた分析だけが使う（動画1本ずつのコメント分析 → 界隈ごとのまとめ）
     "comments.md": "（前の形）コメント分析（動画1本ずつ）",

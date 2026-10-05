@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
 import tiktok_lock  # noqa: E402
-from acquire import pipeline  # noqa: E402
+from acquire import deepen, pipeline  # noqa: E402
 
 GUARD = tiktok_lock.LOCK_DIR / "acq_worker.json"
 LOG_FILE = BASE_DIR / "logs" / "acq-worker.log"
@@ -46,7 +46,8 @@ def claim() -> bool:
 
 
 def queue() -> list:
-    """待っている分析（受け付け順）。途中で止まったものも含める"""
+    """待っている分析（受け付け順）。途中で止まったものも含める。
+    完成後の界隈の掘り下げの取り足し（acquire/deepen.py、20分前後）は、受け付け順より先に並べる（半日の取得の後ろで待たせない）"""
     items = []
     if not pipeline.ANALYSES_DIR.exists():
         return items
@@ -55,8 +56,18 @@ def queue() -> list:
         acq = (m or {}).get("acquisition") or {}
         st = acq.get("status")
         if st == "queued" or (st == "running" and not tiktok_lock.pid_alive(acq.get("pid") or -1)):
-            items.append((acq.get("queued_at") or "", d.name))
-    return [name for _, name in sorted(items)]
+            items.append((1, acq.get("queued_at") or "", d.name))
+        elif m and deepen.queued(m):
+            items.append((0, (m.get("deepen") or {}).get("queued_at") or "", d.name))
+    return [name for _, _, name in sorted(items)]
+
+
+def run_one(aid: str) -> str:
+    """待ち行列の1つを片付ける: 取得が残っていれば取得、そうでなければ界隈の掘り下げの取り足し"""
+    m = pipeline.read_json(pipeline.ANALYSES_DIR / aid / "analysis.json", {}) or {}
+    if (m.get("acquisition") or {}).get("status") not in ("done", "cancelled", "failed") or not deepen.queued(m):
+        return pipeline.Run(aid).run()
+    return deepen.Run(aid).run()
 
 
 def main() -> int:
@@ -77,7 +88,7 @@ def main() -> int:
             aid = q[0]
             log.info("取得を始めます: %s（待ち %d件）", aid, len(q) - 1)
             try:
-                res = pipeline.Run(aid).run()
+                res = run_one(aid)
             except Exception:
                 log.error("取得が例外で止まりました: %s\n%s", aid, traceback.format_exc())
                 res = "failed"

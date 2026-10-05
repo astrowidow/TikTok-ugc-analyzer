@@ -67,7 +67,7 @@ UGC Analyzer（メニューバー）── 5秒おきに見る ─────�
 | 言葉 | 指すもの |
 |---|---|
 | UGC Analyzer | 友達の Mac に入れるアプリ（メニューバー）と、それが AI に出す道具。利用者に見せる呼び方はこれだけ（2026-10-05 に UGC Collector・取得アプリ・分析アプリから統一。中の部品の名前 collector_app・UGC_COLLECTOR_HOME などはそのまま） |
-| 道具 | アプリが AI に出す11（start_analysis・status・next_task・submit・read・revise・settings・prompts・update_knowledge・cancel_analysis・restart_analysis） |
+| 道具 | アプリが AI に出す12（start_analysis・status・next_task・submit・read・revise・deepen・settings・prompts・update_knowledge・cancel_analysis・restart_analysis）。deepen は完成後の界隈の掘り下げ（2026-10-06〜、`docs/DEEPEN_COMMUNITY.md`） |
 | 指示書 | AI に渡す作業の指示（11本）。利用者が直せる |
 | 知識ベース | 著者（山本慶太朗）の note 記事と、その蒸留物（用語集・文体ガイド・カード） |
 | 取得用の Chrome | アプリが開く、専用プロファイルの Chrome（捨て垢のログインはここだけ） |

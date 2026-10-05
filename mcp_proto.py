@@ -52,8 +52,8 @@ INSTRUCTIONS = (
     + USE_RULE + "\n"
     + runner.REPEAT_RULE
     + "\n分析 ID が分からなければ、曲名をそのまま渡すか、status で一覧を見る。"
-    + "\nレポートの完成後に利用者が直しを頼んだら revise（このレポートだけ）。今後ずっと続く指示の変更は settings"
-    "（利用者が頼んだときだけ使う）。"
+    + "\nレポートの完成後に利用者が直しを頼んだら revise（このレポートだけ）。ある界隈の話が浅い・もっとコメントを取って掘り下げて、"
+    "と頼まれたら deepen。今後ずっと続く指示の変更は settings（利用者が頼んだときだけ使う）。"
 )
 
 
@@ -191,7 +191,8 @@ def _build_server(user_of=None, local: bool = False):
         description="分析の次の仕事を1つ受け取る（task_id・kind・指示書・入力・出力の形）。"
                     "analysis_id は分析 ID か曲名（省略するとその利用者の分析）。"
                     "kind: ai=指示書どおりにやって submit／ask_user=内容を利用者に見せて答えを submit／"
-                    "wait=取得中なので止まる／done=完了なので止まる。" + rule,
+                    "wait=取得中なので止まる（界隈の掘り下げの取り足しで、指示書に「この会話で待つ」とあるときだけ、すぐにもう一度 next_task）／"
+                    "done=完了なので止まる。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=False),
     )
@@ -255,6 +256,21 @@ def _build_server(user_of=None, local: bool = False):
 
     if not local:
         return mcp
+
+    @mcp.tool(
+        title="界隈を掘り下げる",
+        description="完成したレポートの、ある界隈の話を掘り下げる（このレポートだけ）。利用者がレポートを読んで"
+                    "「△△界隈のところが浅い」「なぜバズったのかが弱い」「もっとコメントを取って掘り下げて」のように頼んだときに使う。"
+                    "その界隈のコメントを Mac が取り足し（25分ほどまで）、その界隈の分析をやり直して、構成案と関わる章を書き直し、"
+                    "全章を通して読んで整合を取る。community は界隈の key か、レポートでの呼び名"
+                    "（当たらなければ界隈の一覧が返るので、key を選んで呼び直す。利用者には聞かない）。"
+                    "instruction は利用者の言葉そのまま。章の言い回しや足したい考察だけの直しは revise。"
+                    "返ってきた内容を利用者に短く伝え、返事の指示に従う（取得を待つか、止まるか）。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                    open_world_hint=True),
+    )
+    async def deepen(ctx: Context, community: str, instruction: str, analysis_id: str | None = None) -> str:
+        return _call(runner.deepen, _user(ctx), analysis_id, community, instruction)["text"]
 
     @mcp.tool(
         title="指示書を見る・直す",

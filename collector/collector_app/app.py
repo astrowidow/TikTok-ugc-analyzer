@@ -117,6 +117,7 @@ class Controller:
         self.chrome_relaunch_noted = False
         self.idle_since = None
         self.known = {}                # 分析 ID → 前に見た状態（変わったら通知）
+        self.known_deepen = {}         # (分析 ID, 回) → 前に見た掘り下げの取り足しの状態
         self.next_kb = time.time() + 60
         self.kb_busy = False
         self.kb_text = ""
@@ -134,6 +135,7 @@ class Controller:
     def start(self):
         for m in jobs.analyses():
             self.known[m["analysis_id"]] = (m.get("acquisition") or {}).get("status")
+            self.known_deepen[(m["analysis_id"], (m.get("deepen") or {}).get("round"))] = (m.get("deepen") or {}).get("status")
         self._watch_prompts(first=True)
         self._kb_refresh_text()
         threading.Thread(target=self._loop, name="collector", daemon=True).start()
@@ -176,7 +178,8 @@ class Controller:
         if self.worker.running() or self.pending_retry:
             return True
         try:
-            return any((m.get("acquisition") or {}).get("status") in ("queued", "running") for m in jobs.analyses())
+            return any((m.get("acquisition") or {}).get("status") in ("queued", "running") or jobs.deepening(m)
+                       for m in jobs.analyses())
         except Exception:
             return False
 
@@ -283,8 +286,9 @@ class Controller:
         if self.worker.running():
             self.idle_since = None
             cur = next((m for m in jobs.analyses() if (m.get("acquisition") or {}).get("status") == "running"), None)
-            self.status_text = jobs.describe(cur) if cur else "取得の準備中…"
-            if cur and (cur.get("acquisition") or {}).get("step") == "comments":
+            dcur = None if cur else next((m for m in jobs.analyses() if (m.get("deepen") or {}).get("status") == "running"), None)
+            self.status_text = jobs.describe(cur) if cur else jobs.describe_deepen(dcur) if dcur else "取得の準備中…"
+            if (cur and (cur.get("acquisition") or {}).get("step") == "comments") or dcur:
                 self._keep_chrome()
                 self._render_watch()
             return
@@ -360,6 +364,7 @@ class Controller:
     def _check_transitions(self):
         """分析の状態が変わったら知らせる。止まったものは続きから取り直す"""
         for m in jobs.analyses():
+            self._check_deepen(m)
             aid = m["analysis_id"]
             st = (m.get("acquisition") or {}).get("status")
             before = self.known.get(aid)
@@ -393,6 +398,34 @@ class Controller:
                 else:
                     notify.send(f"「{title}」の取得が止まりました",
                                 f"{err[:80]}。メニューの「止まった取得を続きから再開」で続きから取れます")
+
+    def _check_deepen(self, m: dict):
+        """完成後の界隈の掘り下げの取り足し（acquire/deepen.py）が終わったら知らせる"""
+        dp = m.get("deepen") or {}
+        key = (m["analysis_id"], dp.get("round"))
+        st = dp.get("status")
+        before = self.known_deepen.get(key)
+        self.known_deepen[key] = st
+        if st == before or before is None and st in ("done", "failed"):   # 起動したときにもう済んでいたものは知らせない
+            return
+        title = m.get("title") or m["analysis_id"]
+        if st == "queued" and before is None:
+            notify.send(f"「{title}」のコメントを取り足します",
+                        f"界隈 {dp.get('community')}・約{int(round(float(dp.get('est_min') or 0)))}分。Mac を開いたままにしておいてください")
+        elif st == "done" and ((dp.get("result") or {}).get("error") or (dp.get("result") or {}).get("blocked")):
+            notify.send(f"「{title}」の取り足しが途中で止まりました",
+                        f"取れた分で掘り下げを進めます。{ai_where() or 'Claude'} の会話が止まっていたら「{title}の分析を続けて」と言ってください")
+            self.log.warning("界隈の掘り下げの取り足しが途中で止まりました: %s %s", m["analysis_id"], dp.get("result"))
+        elif st == "done":
+            r = dp.get("result") or {}
+            notify.send(f"「{title}」の取り足しが終わりました",
+                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言ってください"
+                        f"（新しく{r.get('videos_new', 0)}本・続き{r.get('videos_more', 0)}本、コメント{r.get('comments_added', 0)}件）")
+            self.log.info("界隈の掘り下げの取り足しが終わりました: %s %s", m["analysis_id"], r)
+        elif st == "failed":
+            notify.send(f"「{title}」の取り足しが止まりました",
+                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言えば、手元のコメントで掘り下げを進めます")
+            self.log.warning("界隈の掘り下げの取り足しが止まりました: %s %s", m["analysis_id"], dp.get("error"))
 
     def _keep_chrome(self):
         """コメントの段で取得用の Chrome が閉じられたら、すぐ最小化で開き直す（2026-10-02 ユーザー）。

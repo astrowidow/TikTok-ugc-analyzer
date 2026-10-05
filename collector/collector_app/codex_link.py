@@ -29,7 +29,7 @@ SKILL_DIR = Path(os.environ.get("UGC_CODEX_SKILLS") or Path.home() / ".agents" /
 SERVER_NAME = "ugc-analyzer"
 CHATGPT_APPS = [Path("/Applications/ChatGPT.app"), Path.home() / "Applications" / "ChatGPT.app"]
 # 道具（mcp_proto.py。tests/check_local_mcp.py で、道具の一覧と同じかを確かめる）
-TOOLS = ("start_analysis", "status", "next_task", "submit", "read", "revise", "settings", "prompts",
+TOOLS = ("start_analysis", "status", "next_task", "submit", "read", "revise", "deepen", "settings", "prompts",
          "update_knowledge", "cancel_analysis", "restart_analysis")
 STARTUP_TIMEOUT_SEC = 60    # 入れた直後の初回は、macOS の検査で起動が遅いことがある
 TOOL_TIMEOUT_SEC = 300      # start_analysis（30〜40秒）と、仕事の合間のサービスの工程（組み立て・Excel 用 ZIP）
@@ -43,14 +43,15 @@ description: UGC Analyzer（この Mac のアプリ。TikTok の楽曲の UGC �
 
 # UGC Analyzer
 
-道具は MCP サーバー `ugc-analyzer`。道具の一覧（ALL_TOOLS など）で `ugc_analyzer` を探す: start_analysis・status・next_task・submit・read・revise・settings・prompts・update_knowledge・cancel_analysis・restart_analysis。
+道具は MCP サーバー `ugc-analyzer`。道具の一覧（ALL_TOOLS など）で `ugc_analyzer` を探す: start_analysis・status・next_task・submit・read・revise・deepen・settings・prompts・update_knowledge・cancel_analysis・restart_analysis。
 
 - 「UGC Analyzer で〇〇／△△を分析して」→ `start_analysis`（曲名とアーティスト名。30〜40秒かかる）
 - 名指しの無い「〇〇を分析して」→ 道具を使わず、ふつうに答える
 - すでにある分析の頼み（「〇〇の分析を続けて」など）→ 分析があるか分からなければ、まず `status`（読むだけ）で、その曲の分析がこの Mac にあるかを確かめる。無ければ道具を使わず、ふつうに答える
 - 分析の状態（集めたデータ・進み具合・成果物）はアプリが持っている。「続けて」は会話の続きではない。会話の履歴や前のスレッド、ウェブを探さない
-- 「〇〇の分析を続けて」→ `next_task`（analysis_id に曲名）。返ってきた指示書どおりに作業して `submit` し、また `next_task`。kind が done か wait になるまで、利用者に確認せずに繰り返す。kind が ask_user のときだけ、その内容を利用者に見せて答えを待つ
+- 「〇〇の分析を続けて」→ `next_task`（analysis_id に曲名）。返ってきた指示書どおりに作業して `submit` し、また `next_task`。kind が done か wait になるまで、利用者に確認せずに繰り返す。kind が ask_user のときだけ、その内容を利用者に見せて答えを待つ。wait でも、指示書に「この会話で待つ」とあれば（界隈の掘り下げの取り足し）、すぐにもう一度 `next_task`
 - 今後ずっと使う設定・指示書・知識ベースの頼みは、「UGC Analyzer の〜」と名指しがあるか、分析の会話の途中のときだけ
+- 完成したレポートの「△△界隈のところが浅い・もっとコメントを取って掘り下げて」→ `deepen`（界隈と、利用者の言葉そのまま）
 - そのほか（進み具合・取得をやめる・やり直す・レポートの直し）は、道具の説明に従う。道具の説明と返事に書いてある決まりが、ここより優先する
 """
 

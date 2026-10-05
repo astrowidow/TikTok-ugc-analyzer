@@ -21,10 +21,16 @@ import common  # noqa: E402
 from blind import strip_appendix, vdir, versions  # noqa: E402
 
 SCORE = {"A がはっきり良い": 2, "A がやや良い": 1, "同じくらい": 0, "B がやや良い": -1, "B がはっきり良い": -2}
+# --macro: 大局の物差し（PAIRWISE_MACRO.md。流れ・理由づけ・核・示唆だけを比べる。2026-10-05 ユーザー
+# 「レポートの価値は大きなバズの流れをとらえて理由を言語化すること。網羅に重きを置きたいわけではない」）
+MACRO = "--macro" in sys.argv
+if MACRO:
+    sys.argv.remove("--macro")
+SUFFIX = "_macro" if MACRO else ""
 
 
 def key_path(song: str) -> Path:
-    p = common.EXP / "keys" / f"{song}_pairs.json"
+    p = common.EXP / "keys" / f"{song}_pairs{SUFFIX}.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -34,7 +40,7 @@ def build(song: str, pairs: list) -> None:
     kp = key_path(song)
     key = json.loads(kp.read_text(encoding="utf-8")) if kp.exists() else {}
     have = {(k["x"], k["y"]) for k in key.values()}
-    out = common.EXP / "pairs" / song
+    out = common.EXP / f"pairs{SUFFIX}" / song
     for pr in pairs:
         x, y = pr.split(":")
         if (x, y) in have:
@@ -57,7 +63,7 @@ def agg(song: str) -> None:
     key = json.loads(key_path(song).read_text(encoding="utf-8"))
     rows = []
     for code, k in key.items():
-        p = common.EXP / "pairs" / song / code / "judge.json"
+        p = common.EXP / f"pairs{SUFFIX}" / song / code / "judge.json"
         if not p.exists():
             continue
         j = json.loads(p.read_text(encoding="utf-8"))
@@ -66,10 +72,22 @@ def agg(song: str) -> None:
         sx = None if s is None else (s if x_is_a else -s)       # X から見た点（+ なら X が良い）
         ox, oy = (j.get("only_A") or [], j.get("only_B") or []) if x_is_a else (j.get("only_B") or [], j.get("only_A") or [])
         big = lambda xs: sum(1 for f in xs if f.get("weight") == "大")
-        rows.append({"x": k["x"], "y": k["y"], "score": sx, "verdict": j.get("verdict"),
+        axes = {a: (lambda v: None if v is None else (v if x_is_a else -v))(SCORE.get((j.get("axes") or {}).get(a, {}).get("verdict")))
+                for a in ("flow", "reasons", "core", "lessons")}
+        rows.append({"x": k["x"], "y": k["y"], "score": sx, "verdict": j.get("verdict"), "axes": axes,
                      "x_only_big": big(ox), "y_only_big": big(oy), "x_only": len(ox), "y_only": len(oy),
-                     "lost": [f.get("finding", "")[:60] for f in oy if f.get("weight") == "大"]})
+                     "lost": [(f.get("finding") or f.get("claim") or "")[:60] for f in oy if MACRO or f.get("weight") == "大"]})
     rows.sort(key=lambda r: (spec.get(r["x"], {}).get("role") != "base", r["x"], r["y"]))
+    if MACRO:
+        print(f"## {song}（大局の対の比較。点は X から見て +2 はっきり良い〜-2 はっきり悪い）\n")
+        print("| X | Y（基準） | 総合 | 流れ | 理由づけ | 核 | 示唆 | X にだけの大局の主張 | Y にだけ＝X に無い大局の主張 |")
+        print("|---|---|---|---|---|---|---|---|---|")
+        f = lambda v: "—" if v is None else f"{v:+d}"
+        for r in rows:
+            a = r["axes"]
+            print(f"| {r['x']} | {r['y']} | {f(r['score'])} | {f(a['flow'])} | {f(a['reasons'])} | {f(a['core'])} | {f(a['lessons'])} | "
+                  f"{r['x_only']} | {r['y_only']}：{'／'.join(r['lost']) or '—'} |")
+        return
     print(f"## {song}（対の比較。点は X から見て +2 はっきり良い〜-2 はっきり悪い）\n")
     print("| X | Y（基準） | 点 | X にだけ（大/全） | Y にだけ（大/全）＝X が落とした | X が落とした大きな発見 |")
     print("|---|---|---|---|---|---|")

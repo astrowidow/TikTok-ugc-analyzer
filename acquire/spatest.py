@@ -811,6 +811,15 @@ class SpaCollector:
         self.call_times.extend([now] * max(n, 1))
         self.pending_spacing = self.next_spacing()
 
+    def reached_cap(self, vid) -> bool:
+        """この動画のコメント（本体）が、送らなくても上限に届いているか。ブラウザに届いた分と、先読みで溜めた分の多いほうで見る"""
+        st = self.d.execute_script(STEP_JS, 0, vid) or {}
+        have = max(st.get("got", 0), len(self.gather(vid)))
+        if have >= self.cur_cap:
+            self.log(f"    上限{self.cur_cap}件に届いている（{have}件）ので送らない")
+            return True
+        return False
+
     def scroll_for_more(self, vid):
         """コメント欄を少しずつ送って、ページ自身に次ページを要求させる。
 
@@ -830,11 +839,18 @@ class SpaCollector:
         last_got = -1
         prev_dist = None
         while steps < self.a.max_steps:
+            # 2026-10-06: 上限（1本1ページなら20件）にもう届いていれば、送らずに終える。送ってから数えると、
+            # 先読み（--prescroll）と1段の送りで次のページを呼んでしまう（実走で上限20件の動画が要求3回・58〜59件になった）。
+            # 待つ前と、待ったあと送る直前の2回見る（待つ間に1ページ目が届くことがある）
+            if self.reached_cap(vid):
+                break
             # 次の要求が飛ぶ前に間隔を空ける（--prescroll なら、待つ間に底の手前まで送っておく）
             if self.a.prescroll:
                 self.prescroll_wait()
             else:
                 self.pace_wait()
+            if self.reached_cap(vid):
+                break
             st = self.d.execute_script(STEP_JS, self.a.step_px, vid)
             if st is None:
                 if self.a.scroll_log:

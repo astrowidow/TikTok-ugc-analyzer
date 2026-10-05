@@ -243,6 +243,29 @@ class TestSpatestPool(unittest.TestCase):
         self.assertEqual(got, ["1000001", "1000004"])               # 見つからない 1000003 は、プールの外の 1000004 に差し替え
         self.assertEqual(c.caps["1000004"], 20)
 
+    def test_reached_cap_before_scrolling(self):
+        """2026-10-06: 上限に届いていれば送らない（ブラウザに届いた分と先読みで溜めた分の多いほうで見る）"""
+        from acquire import spatest
+        with tempfile.TemporaryDirectory() as td:
+            a = spatest.build_parser().parse_args(["--music-url", "https://www.tiktok.com/music/x-1",
+                                                   "--out", str(Path(td) / "out.jsonl"), "--log", str(Path(td) / "log.txt")])
+            c = spatest.SpaCollector(a)
+            got = {"n": 0}
+
+            class D:
+                def execute_script(self, js, *args):
+                    return {"got": got["n"]}
+            c.d = D()
+            c.cur_cap = 20
+            self.assertFalse(c.reached_cap("1000001"))
+            got["n"] = 20
+            self.assertTrue(c.reached_cap("1000001"))
+            got["n"] = 0
+            c.pool["1000001"] = {str(i): {"cid": str(i), "reply_id": "0"} for i in range(20)}   # 先読みで溜めた1ページ目
+            self.assertTrue(c.reached_cap("1000001"))
+            c.cur_cap = 40
+            self.assertFalse(c.reached_cap("1000001"))
+
 
 if __name__ == "__main__":
     unittest.main()

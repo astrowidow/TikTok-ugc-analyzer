@@ -7,7 +7,7 @@ TikTok で曲がどう広まったかを、あなたの AI（Claude か ChatGPT�
 
 ## 最初の1回（運営と LINE 通話しながら、20分ほど）
 
-**用意するもの**: Mac（2020年以降の M1・M2・M3・M4）／Google Chrome／Claude の有料プラン（Pro 以上）か、ChatGPT（無料のプランでも、分析1本を最後まで回せることを確かめています。Mac のアプリ・macOS 14 以降）／
+**用意するもの**: Mac（2020年以降の M1・M2・M3・M4）／Google Chrome／Claude の有料プラン（Pro 以上）か、ChatGPT（Mac のアプリ・macOS 14 以降。プランは〔運営が確かめ中〕）／
 **ふだん使っていないメールアドレス**（TikTok の分析用アカウントを作るため。仕事や本アカウントのものは使わない）
 
 1. **AI のアプリを入れる**: Claude の人は https://claude.ai/download 、ChatGPT の人は https://openai.com/chatgpt/download/ から入れて、ログインする

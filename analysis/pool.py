@@ -13,10 +13,12 @@ analysis/pool_verify.py（2026-09-30 の検証）を本番の規則に直した�
 3.1分・6.1分で配る（acquire/pipeline.py の DEFAULTS。docs/IMPLEMENTATION_LOG.md D20）。
 はみ出た分は取得の12時間打ち切りで落ちるが、取得は「必ず入れる動画（priority=1）を先に」取るので、落ちるのは週ごとに配った動画だけ。
 
-2026-10-06 から（既定 --comment-plan page）: 選び方は上のまま、コメントの上限だけを付け替える。必ず入れる動画は1本1ページ（最大20件）、
-週ごとに配った動画は0件（コメントを取らない。ラベルを付ける動画としてプールに残す）。前の取り方は --comment-plan full。
+2026-10-06 から（既定 --comment-plan page。仕様は docs/COMMENT_TARGETS.md）: 選び方は上のまま、必ず入れる動画に
+「属性のまとまり12個それぞれの再生上位3本」を足し（--records があるとき。analysis/attr_cluster.py）、コメントの上限を付け替える。
+必ず入れる動画は1本1ページ（最大20件）、週ごとに配った動画は0件（コメントを取らない。ラベルを付ける動画としてプールに残す）。
+前の取り方は --comment-plan full（まとまりの上位は足さない）。
 
-  python analysis/pool.py <videos.jsonl> <enriched.jsonl> <出力 pool.tsv> [--hours 12] [--min-per-video 3]
+  python analysis/pool.py <videos.jsonl> <enriched.jsonl> <出力 pool.tsv> [--hours 12] [--min-per-video 3] [--records records.jsonl]
 
 出力 pool.tsv の列: video_id seq date week plays username cap priority reasons（理由は , 区切り。priority 1＝必ず入れる。cap 0＝コメントを取らない）
 """
@@ -27,6 +29,8 @@ import math
 import random
 import re
 import unicodedata
+
+import attr_cluster
 
 CAP_STANDARD = 40
 CAP_KEY = 120
@@ -104,10 +108,22 @@ def campaign_tags(alive, enriched, artists, titles) -> set:
     return tags
 
 
-def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None, min_plays_weekly=None, plan="page"):
+def load_records(path) -> dict:
+    """derived/llm_input/records.jsonl → {video_id: 行}（ファイルの並びを保つ。まとまりの作りが並びに依る）"""
+    out = {}
+    for line in open(path, encoding="utf-8"):
+        if line.strip():
+            r = json.loads(line)
+            out[str(r["video_id"])] = r
+    return out
+
+
+def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None, min_plays_weekly=None, plan="page",
+          records=None):
     """プールを決める。返り値 {video_id: {"cap": int, "reasons": [..]}} と説明。
     budget_units と cost_* は同じ単位（本数なら 1、時間なら分）。cost_key は120件の動画1本の重さ（既定は cost_std）。
-    plan: "page"＝必ず入れる動画は各1ページ・週ごとの動画は0件（既定）、"full"＝120件・40件で週ごとも取る（2026-10-05 までの取り方）"""
+    plan: "page"＝必ず入れる動画は各1ページ・週ごとの動画は0件（既定）、"full"＝120件・40件で週ごとも取る（2026-10-05 までの取り方）。
+    records: records.jsonl の行（load_records）。"page" で渡すと、属性のまとまりごとの再生上位を必ず入れる動画に足す"""
     if plan not in COMMENT_PLANS:
         raise ValueError(f"plan は {COMMENT_PLANS} のどれか: {plan}")
     cost_key = cost_std if cost_key is None else cost_key
@@ -189,6 +205,19 @@ def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None, m
             p["cap"] = CAP_STANDARD
             n_artist_capped += 1
 
+    # 2026-10-06 ユーザー採用（docs/COMMENT_TARGETS.md）: 属性のまとまり12個それぞれの再生上位3本のうち、まだ必ず入れる動画でないものを足す。
+    # 曲全体の上位・最初期だけだと、属性の違う山（海外の別の層など）の大きな動画が漏れるための保険。足すのはシルエット20本・きゃわ17本ほど（+12〜14分）。
+    # 週ごとに配った動画と重なれば、その動画が必ず入れる動画に変わる（ラベルを付ける動画は増えるだけで減らない）
+    n_cluster_top = 0
+    if plan == "page" and records:
+        by_id = {v["video_id"]: v for v in alive}
+        ids = [v for v in records if v in by_id]
+        plays = {v: by_id[v].get("plays") or 0 for v in ids}
+        is_must = lambda v: v in pool and any(not r.startswith("week:") for r in pool[v]["reasons"])
+        picks = [v for v in attr_cluster.tops(records, enriched, ids, plays) if not is_must(v)]
+        add([by_id[v] for v in picks], "cluster_top")
+        n_cluster_top = len(picks)
+
     # 2026-10-06 ユーザー採用（docs/COMMENT_STRATEGY_HANDOVER.md 第9章）: 必ず入れる動画は1本1ページ、週ごとに配った動画はコメントを取らない。
     # シルエットで「必ず入れる動画だけ・1本1ページ」に削った写しは、記事を正解にした大局・対の比較・主張の再現のどれでも元の版の幅に入り、
     # 週ごとの動画のコメントを足しても良くならなかった（コメント0件だと理由づけが落ちる）。
@@ -203,7 +232,7 @@ def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None, m
                # n_pool はコメントを取る本数（進み具合の「〇/〇本」と見込み時間に使う）。n_rows はラベルを付ける動画も含めた行数
                "n_pool": sum(1 for p in pool.values() if p["cap"] > 0), "n_rows": len(pool),
                "n_no_comments": sum(1 for p in pool.values() if p["cap"] == 0), "comment_plan": plan,
-               "n_cap_key": sum(1 for p in pool.values() if p["cap"] >= CAP_KEY),
+               "n_cluster_top": n_cluster_top, "n_cap_key": sum(1 for p in pool.values() if p["cap"] >= CAP_KEY),
                "n_artist_capped": n_artist_capped, "min_plays_weekly": floor}
     return pool, explain
 
@@ -233,14 +262,17 @@ def main():
     ap.add_argument("--min-plays-weekly", type=int, default=None, help=f"週ごとに配る動画の再生の下限（既定 {MIN_PLAYS_WEEKLY:,}）")
     ap.add_argument("--comment-plan", choices=COMMENT_PLANS, default="page",
                     help="page: 必ず入れる動画は各1ページ・週ごとの動画はコメントを取らない（既定）。full: 120件・40件で週ごとも取る")
+    ap.add_argument("--records", default=None, help="derived/llm_input/records.jsonl（page で、属性のまとまりごとの再生上位を足す）")
     a = ap.parse_args()
     videos, enriched = load(a.videos, a.enriched)
+    records = load_records(a.records) if a.records else None
     if a.budget:   # 本数で直接
-        pool, explain = build(videos, enriched, a.budget, seed=a.seed, min_plays_weekly=a.min_plays_weekly, plan=a.comment_plan)
+        pool, explain = build(videos, enriched, a.budget, seed=a.seed, min_plays_weekly=a.min_plays_weekly, plan=a.comment_plan,
+                              records=records)
     else:          # 時間（分）で
         pool, explain = build(videos, enriched, a.hours * 60, seed=a.seed, cost_std=a.min_per_video,
                               cost_key=a.min_per_key_video or a.min_per_video, min_plays_weekly=a.min_plays_weekly,
-                              plan=a.comment_plan)
+                              plan=a.comment_plan, records=records)
     write(pool, videos, a.out)
     print(json.dumps(explain, ensure_ascii=False))
 

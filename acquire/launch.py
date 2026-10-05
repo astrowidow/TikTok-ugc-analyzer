@@ -32,8 +32,8 @@ LIST_SECONDS = 300
 ENRICH_SECONDS_PER_VIDEO = 3.3
 DERIVE_SECONDS = 120
 TYPICAL_VIDEOS = 900
-# プールが決まる前の、コメントを取る本数の見込み（"page"＝必ず入れる動画だけ。シルエット59本・きゃわ97本、2026-10-06）
-TYPICAL_COMMENT_VIDEOS = 80
+# プールが決まる前の、コメントを取る本数の見込み（"page"＝必ず入れる動画＋属性のまとまりごとの上位。シルエット79本・きゃわ116本、2026-10-06）
+TYPICAL_COMMENT_VIDEOS = 100
 
 
 def new_analysis(owner: str, song: str, artist: str = "", music_url: str = "", settings: dict | None = None,

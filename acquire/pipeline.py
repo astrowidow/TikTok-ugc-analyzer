@@ -459,7 +459,7 @@ class Run:
         args = ["analysis/pool.py", self.p("derived", "videos.jsonl"), self.p("raw", "enriched.jsonl"), out,
                 "--hours", s["comment_hours"], "--min-per-video", s["min_per_video"],
                 "--min-per-key-video", s["min_per_key_video"], "--min-plays-weekly", int(s["min_plays_weekly"]),
-                "--comment-plan", s["comment_plan"]]
+                "--comment-plan", s["comment_plan"], "--records", self.p("derived", "llm_input", "records.jsonl")]
         if int(s["pool_budget"] or 0):
             args += ["--budget", int(s["pool_budget"])]
         return json.loads(self._script(*args).splitlines()[-1])

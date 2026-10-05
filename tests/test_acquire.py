@@ -4,7 +4,7 @@
 
 - tiktok_lock: 取る・待つ・譲る・死んだ持ち主の掃除
 - analysis/pool.py: 検証版（pool_verify.py）と同じ数字が出るか（シルエットの手持ちデータがあるときだけ）
-- 1本1ページ・週ごとは取らない（2026-10-06）: プールの上限の付け替え・spatest が上限0件の動画を開かないこと・見込み時間
+- 1本1ページ・週ごとは取らない・属性のまとまりごとの上位を足す（2026-10-06）: プールの上限の付け替え・spatest が上限0件の動画を開かないこと・見込み時間
 """
 import json
 import os
@@ -136,6 +136,28 @@ class TestPool(unittest.TestCase):
         self.assertEqual(ex_full["n_pool"], len(p_full))
         with self.assertRaises(ValueError):
             pool.build(videos, enriched, 240, plan="?")
+
+    def test_cluster_tops_join_must(self):
+        """2026-10-06: 属性のまとまり12個それぞれの再生上位3本のうち、まだ必ず入れる動画でないものを足す（上限20件）。
+        足しても週ごとの動画（ラベルを付ける動画）は減らない。full では足さない"""
+        import pool
+        videos, enriched = pool.load(TRIAL / "videos.jsonl", TRIAL / "enriched.jsonl")
+        records = pool.load_records(TRIAL / "llm_input" / "records.jsonl")
+        base, ex0 = pool.build(videos, enriched, 12 * 60, cost_std=3.1, cost_key=6.1)
+        p, ex = pool.build(videos, enriched, 12 * 60, cost_std=3.1, cost_key=6.1, records=records)
+        added = [v for v, x in p.items() if "cluster_top" in x["reasons"]]
+        self.assertEqual(len(added), ex["n_cluster_top"])
+        self.assertTrue(0 < len(added) <= pool.attr_cluster.K * pool.attr_cluster.TOP_N)
+        self.assertTrue(all(p[v]["cap"] == pool.CAP_PAGE for v in added))
+        self.assertTrue(set(base) <= set(p))                                    # ラベルを付ける動画は減らない
+        self.assertEqual(ex["n_pool"], ex0["n_pool"] + len(added))
+        must0 = {v for v, x in base.items() if any(not r.startswith("week:") for r in x["reasons"])}
+        self.assertFalse(must0 & set(added))                                    # すでに必ず入れる動画には付けない
+        # 同じデータなら同じまとまり（作り直しても同じ動画）
+        p2, _ = pool.build(videos, enriched, 12 * 60, cost_std=3.1, cost_key=6.1, records=records)
+        self.assertEqual(added, [v for v, x in p2.items() if "cluster_top" in x["reasons"]])
+        pf, exf = pool.build(videos, enriched, 12 * 60, cost_std=3.1, cost_key=6.1, records=records, plan="full")
+        self.assertEqual(exf["n_cluster_top"], 0)
 
     def test_page_plan_writes_cap0_and_pipeline_counts_comment_rows(self):
         import pool

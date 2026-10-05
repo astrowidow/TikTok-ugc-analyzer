@@ -41,7 +41,7 @@ FROZEN = getattr(sys, "frozen", False)
 # 本線のリポジトリの直下（ソースから動かすとき）。固めたアプリでは同梱の code/ を DATA_DIR に写して使う
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # 同梱する部品（UGCCollector.spec も同じ一覧を使う）
-CODE_FILES = ["acquire", "analysis/pool.py", "analysis/enrich.py", "analysis/build_llm_input.py",
+CODE_FILES = ["acquire", "analysis/pool.py", "analysis/attr_cluster.py", "analysis/enrich.py", "analysis/build_llm_input.py",
               "analysis/prep_sample.py", "analysis/prep_comments.py", "scraper.py", "log_setup.py", "tiktok_lock.py",
               "proto_runner.py", "flow_w1.py", "user_settings.py", "mcp_proto.py", "kb_update.py", "prompt_store.py",
               "store.py", "service_prompts"]

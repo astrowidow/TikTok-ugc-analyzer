@@ -48,7 +48,7 @@ UGC Analyzer（メニューバー）── 5秒おきに見る ─────�
 | Claude の道具 | `collector/collector_app/mcp_local.py` | `--mcp` の入口。中身は本線の `mcp_proto.py`（道具9つ）・`proto_runner.py`・`flow_w1.py` |
 | Claude につなぐ | `collector/collector_app/claude_link.py` | Claude の設定ファイルに道具を1行足す（控えを取る） |
 | ChatGPT につなぐ | `collector/collector_app/codex_link.py` | Codex の設定ファイル（`~/.codex/config.toml`）に道具の節と道具ごとの許可を足し（控えを取る）、スキル（`~/.agents/skills/ugc-analyzer/`）を置く。ChatGPT は道具の案内を会話に入れないので、スキルで気づかせる |
-| 取得 | 本線の `acquire/`・`analysis/` | 一覧 → 属性 → プール → コメント（Windows 機と同じ部品） |
+| 取得 | 本線の `acquire/`・`analysis/` | 一覧 → 属性 → プール → コメント（Windows 機と同じ部品）。どの動画のコメントを何件取るかは `docs/COMMENT_TARGETS.md` |
 | 指示書 | 本線の `prompt_store.py`・`service_prompts/w1/` | 初期の指示書と、利用者の指示書。「出力の形」の節はいつも初期のもの |
 | 知識ベース | 本線の `kb_update.py` | 新着を見る・取り込みと整理の仕事 |
 

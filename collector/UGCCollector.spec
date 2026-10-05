@@ -39,7 +39,7 @@ datas += collect_data_files("selenium")   # Selenium Manager（chromedriver を�
 hidden = ["csv", "argparse", "collections", "contextlib", "math", "random", "smtplib", "email.message", "ctypes",
           "unicodedata", "logging.handlers", "urllib.parse", "secrets", "socket", "traceback", "hashlib", "statistics",
           "sqlite3", "zipfile", "io", "typing", "fcntl", "html", "difflib",
-          "pandas", "requests", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont", "websocket",
+          "pandas", "numpy", "requests", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont", "websocket",
           "UserNotifications", "AppKit", "Foundation", "objc"]
 hidden += collect_submodules("selenium.webdriver.chrome") + collect_submodules("selenium.webdriver.common") \
     + collect_submodules("selenium.webdriver.remote") + collect_submodules("selenium.webdriver.support")

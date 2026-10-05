@@ -165,6 +165,22 @@ HOOK = r"""
 #     ここに scrollTop を代入しても何も起きなかった（第3章11の「発火しない」の正体）
 #   - 一気に scrollHeight まで飛ばすと発火しない。仮想リストが途中位置を処理しないため。
 #     300px ずつ刻んで送ると、ページが自分で次ページを要求する
+# この動画の本体のコメントのうち、ブラウザに届いている分の cid（reached_cap）
+CIDS_JS = r"""
+const vid = String(arguments[0]);
+const out = [];
+for (const h of ((window.__cap || {}).hits || [])) {
+  try {
+    for (const c of (JSON.parse(h.body).comments || [])) {
+      if (String(c.aweme_id) === vid && String(c.reply_id || '0') === '0') out.push(String(c.cid));
+    }
+  } catch (e) {}
+}
+return out;
+"""
+# 上限がこれ以下なら「1ページだけ取る」（analysis/pool.py の CAP_PAGE。TikTok は1回の要求で約20件返す）
+PAGE_CAP = 20
+
 STEP_JS = r"""
 const m = document.querySelector('[class*="DivCommentMain"]');
 if (!m) return null;
@@ -812,9 +828,12 @@ class SpaCollector:
         self.pending_spacing = self.next_spacing()
 
     def reached_cap(self, vid) -> bool:
-        """この動画のコメント（本体）が、送らなくても上限に届いているか。ブラウザに届いた分と、先読みで溜めた分の多いほうで見る"""
-        st = self.d.execute_script(STEP_JS, 0, vid) or {}
-        have = max(st.get("got", 0), len(self.gather(vid)))
+        """この動画のコメント（本体）が、送らなくても上限に届いているか。ブラウザに届いた分と、先読みで溜めた分を cid で重ねて数える。
+        上限が1ページ（PAGE_CAP 以下）なら、件数ではなく「1ページでも届いたか」で見る（1ページ目が19件のこともある。2026-10-06 の実走）"""
+        have = len(set(self.d.execute_script(CIDS_JS, vid) or []) | {str(c.get("cid")) for c in self.gather(vid)})
+        if have and self.cur_cap <= PAGE_CAP:
+            self.log(f"    1ページ目が届いている（{have}件、上限{self.cur_cap}）ので送らない")
+            return True
         if have >= self.cur_cap:
             self.log(f"    上限{self.cur_cap}件に届いている（{have}件）ので送らない")
             return True

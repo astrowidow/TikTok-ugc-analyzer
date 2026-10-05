@@ -244,28 +244,34 @@ class TestSpatestPool(unittest.TestCase):
         self.assertEqual(c.caps["1000004"], 20)
 
     def test_reached_cap_before_scrolling(self):
-        """2026-10-06: 上限に届いていれば送らない（ブラウザに届いた分と先読みで溜めた分の多いほうで見る）"""
+        """2026-10-06: 上限に届いていれば送らない。1ページの動画は1ページでも届けば止める（19件のこともある）。
+        ブラウザに届いた分と先読みで溜めた分は cid で重ねて数える（別のページなら足し算になる）"""
         from acquire import spatest
         with tempfile.TemporaryDirectory() as td:
             a = spatest.build_parser().parse_args(["--music-url", "https://www.tiktok.com/music/x-1",
                                                    "--out", str(Path(td) / "out.jsonl"), "--log", str(Path(td) / "log.txt")])
             c = spatest.SpaCollector(a)
-            got = {"n": 0}
+            browser = {"cids": []}
 
             class D:
                 def execute_script(self, js, *args):
-                    return {"got": got["n"]}
+                    return list(browser["cids"])
             c.d = D()
+            vid = "1000001"
             c.cur_cap = 20
-            self.assertFalse(c.reached_cap("1000001"))
-            got["n"] = 20
-            self.assertTrue(c.reached_cap("1000001"))
-            got["n"] = 0
-            c.pool["1000001"] = {str(i): {"cid": str(i), "reply_id": "0"} for i in range(20)}   # 先読みで溜めた1ページ目
-            self.assertTrue(c.reached_cap("1000001"))
+            self.assertFalse(c.reached_cap(vid))                                  # まだ何も届いていない
+            browser["cids"] = [str(i) for i in range(19)]
+            self.assertTrue(c.reached_cap(vid))                                   # 1ページ目が19件でも止める
             c.cur_cap = 40
-            self.assertFalse(c.reached_cap("1000001"))
-
+            self.assertFalse(c.reached_cap(vid))
+            c.pool[vid] = {str(i): {"cid": str(i), "reply_id": "0"} for i in range(19, 38)}   # 先読みで溜めた別のページ
+            self.assertFalse(c.reached_cap(vid))                                  # 19＋19＝38 < 40
+            c.pool[vid]["99"] = {"cid": "99", "reply_id": "0"}
+            c.pool[vid]["98"] = {"cid": "98", "reply_id": "0"}
+            self.assertTrue(c.reached_cap(vid))                                   # 40件
+            browser["cids"] = [str(i) for i in range(19, 38)]                     # 同じページが両方にあるなら重ねて数える
+            c.pool[vid] = {str(i): {"cid": str(i), "reply_id": "0"} for i in range(19, 38)}
+            self.assertFalse(c.reached_cap(vid))
 
 if __name__ == "__main__":
     unittest.main()

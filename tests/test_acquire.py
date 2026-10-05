@@ -120,6 +120,14 @@ class TestPool(unittest.TestCase):
         d = pipeline.DEFAULTS
         self.assertEqual((d["reply_top"], d["reply_questions"], d["reply_author"]), (0, 0, 0))
 
+    def test_pace_and_fallback(self):
+        """2026-10-05: 平均3回/分・60秒に4回。止まったら 1.8回/分・60秒に2回に落とす"""
+        from acquire import pipeline
+        d = pipeline.DEFAULTS
+        self.assertEqual((d["calls_per_min"], d["max_calls_per_min"]), (3.0, 4.0))
+        self.assertLess(d["fallback_calls_per_min"], d["calls_per_min"])
+        self.assertLess(d["fallback_max_calls_per_min"], d["max_calls_per_min"])
+
 
 if __name__ == "__main__":
     unittest.main()

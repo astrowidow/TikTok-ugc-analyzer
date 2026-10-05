@@ -53,8 +53,12 @@ DEFAULTS = {
     "list_sets": 3, "list_scrolls": 30, "list_stall": 4,   # 一覧: scraper.py と同じ 3セット×30スクロール。増えなくなったら早めに止める
     "enrich_sleep": 2.0,
     "collect_scrolls": 150,      # コメント: グリッドでプールを探すスクロールの上限
-    "calls_per_min": 1.8, "max_calls_per_min": 2.0, "interval": 15.0,
-    # コメント取得の速さ（acquire/spatest.py 冒頭の 2026-10-05 の説明）。要求の間隔の設定は変えない。
+    # 要求の間隔（平均と60秒の上限）。2026-10-05 にユーザーの判断で 1.8回/分・60秒に2回 → 3回/分・60秒に4回へ上げた。
+    # 実走: 2.0回/分で5時間・123本、3回/分で1時間・40本、どちらも空応答・4xx 0。同じ動画の取得が68%に（docs/COMMENT_SPEED.md 第5章）。
+    # 長時間で 2.5回/分を超える実績はまだ無いので、止まったら fallback_* に落として続きを取る（step_comments）
+    "calls_per_min": 3.0, "max_calls_per_min": 4.0, "interval": 15.0,
+    "fallback_calls_per_min": 1.8, "fallback_max_calls_per_min": 2.0,
+    # コメント取得の速さ（acquire/spatest.py 冒頭の 2026-10-05 の説明）。
     # 試験（きゃわぽっぴんどぅー20本、直した版）で 84.5分 → 61.6分、20本とも取得・混入0・頭打ち0（docs/COMMENT_SPEED.md）
     "stop_on_no_more": True, "prescroll": True, "only_open_video": True, "remount_on_stall": True,
     "chrome_port": "9222",
@@ -532,7 +536,10 @@ class Run:
                 if blocked and retries < int(s["blocked_retries"]) and (not deadline or spent < deadline):
                     retries += 1
                     self.unlock()
-                    self.log(f"    ブロックを検知したので {s['blocked_wait_min']}分空けてから続きを取ります（{retries}回目）")
+                    # 止まったら、元の速さ（実績の長い 1.8回/分・60秒に2回）に落として続きを取る（2026-10-05 に3回/分へ上げたときの安全網）
+                    s["calls_per_min"], s["max_calls_per_min"] = s["fallback_calls_per_min"], s["fallback_max_calls_per_min"]
+                    self.log(f"    ブロックを検知したので {s['blocked_wait_min']}分空けてから、要求の間隔を平均{s['calls_per_min']}回/分に落として"
+                             f"続きを取ります（{retries}回目）")
                     time.sleep(float(s["blocked_wait_min"]) * 60)
                     continue
                 if len(errors) >= 2 and retries < int(s["blocked_retries"]):

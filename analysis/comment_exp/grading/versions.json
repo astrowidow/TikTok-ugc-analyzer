@@ -44,6 +44,21 @@
     "dir": "{HOME}/analyses/x-sil-ct2",
     "role": "variant",
     "note": "ct1 と同じ条件の2回目"
+   },
+   "c0": {
+    "dir": "{HOME}/analyses/x-sil-c0",
+    "role": "check",
+    "note": "コメントを一切使わない（0件）"
+   },
+   "m1p": {
+    "dir": "{HOME}/analyses/x-sil-m1p",
+    "role": "variant",
+    "note": "全動画1ページ（先頭20件）＋必ず取る動画だけ（59本）・返信なし"
+   },
+   "b1p": {
+    "dir": "{HOME}/analyses/x-sil-b1p",
+    "role": "variant",
+    "note": "全動画1ページ（先頭20件）＋週ごとはクラスタ上位3本（B、95本）・返信なし"
    }
   }
  },

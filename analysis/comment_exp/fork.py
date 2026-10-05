@@ -169,7 +169,7 @@ def main():
     a = pr.Analysis(args.new)
     st = pr._load_state(a)
     cur = pr._run_services(a, st)
-    if cur is None or cur["type"] != "ccomments":
+    if cur is None or cur["type"] not in ("ccomments", "ref_select"):   # コメントが0件なら ccomments は作られない
         sys.exit(f"plan のあとが ccomments になりません: {cur and cur['type']}")
 
     # --- 参考記事を元の版に固定 ---

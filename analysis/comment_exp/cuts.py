@@ -8,6 +8,7 @@ docs/COMMENT_STRATEGY_HANDOVER.md 第5章 段2 の削り方。コメントの並
   std20        標準40件 → 20件: 上限40件の動画を先頭20件に。実際の取得は1ページ17〜20件で、20件に届かなければ2ページ目も取るので、
                ここでの20件は実際より少なめ（点数には厳しい側の近似）
   top5         【物差しの確かめ用。取得の案ではない】どの動画もコメントを先頭5件だけ・返信なし。これでも同点なら物差しが鈍い
+  all20        全動画（起点・大型ヒットの120件の動画も）を先頭20件に＝1ページだけ取る（2026-10-06 ユーザー「1本5件でいい」。1回の要求で約20件届くので、5件と20件は同じ時間）
   half_weekly  プールの「残りを週ごとに配る」分を半分に: 週ごとに、前に選んだ動画の中から pool.build と同じ選び方で半分を選び直す
                （必ず入れる動画は残す。前に選んでいない動画は取っていないので、選び直しの候補は前に選んだ動画だけ。近似）
 
@@ -21,7 +22,7 @@ import math
 import random
 from pathlib import Path
 
-CUTS = ["no_replies", "artist40", "std20", "half_weekly", "top5"]
+CUTS = ["no_replies", "artist40", "std20", "half_weekly", "top5", "all20"]
 KEY_REASONS = {"origin", "top_hit", "official"}   # artist 以外で120件になる理由（analysis/pool.py の CAP_KEY を付ける add）
 
 
@@ -110,6 +111,8 @@ def apply(rows: list, cuts: list, adir: Path, keep: set | None = None) -> list:
             if "artist" in rs and not (rs & KEY_REASONS):
                 _trim(r, 40)
         if "std20" in cuts and r.get("cap") != 120:
+            _trim(r, 20)
+        if "all20" in cuts:
             _trim(r, 20)
         if "top5" in cuts:
             r["reply_comments"] = []

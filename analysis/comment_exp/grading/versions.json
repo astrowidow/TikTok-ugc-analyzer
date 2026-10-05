@@ -1,0 +1,21 @@
+{
+ "silhouette": {
+  "items": "items_silhouette.md",
+  "article": ["output/notes_corpus/2026-01-02_n55fc5180ae60.md"],
+  "versions": {
+   "prod": {"dir": "{APP}/analyses/a20260930-2342-0035", "role": "base", "note": "本番（Claude デスクトップ、2026-10-03、0.2.0 のコード）"},
+   "b1": {"dir": "{HOME}/analyses/x-sil-b1", "role": "base", "note": "元の量の写し1（AI 役）"},
+   "b2": {"dir": "{HOME}/analyses/x-sil-b2", "role": "base", "note": "元の量の写し2（AI 役）"}
+  }
+ },
+ "kyawa": {
+  "items": "items_kyawa.md",
+  "article": [["output/notes_corpus/2026-08-02_n5c6e6e4b86d2.md", 10, 22], ["output/notes_corpus/2026-09-03_n72c234f1b825.md", 125, 137]],
+  "versions": {
+   "prod": {"dir": "{APP}/analyses/a20261004-0837-4e69", "role": "base", "note": "本番（Claude デスクトップ、2026-10-04）"},
+   "b1": {"dir": "{HOME}/analyses/x-kyw-b1", "role": "base", "note": "元の量の写し1（AI 役）"},
+   "b2": {"dir": "{HOME}/analyses/x-kyw-b2", "role": "base", "note": "元の量の写し2（AI 役）"},
+   "gpt": {"dir": "{APP}/analyses/a20261004-2253-746a", "role": "check", "note": "ChatGPT（Free・gpt-6-luna）の試し。ユーザーの評価「質が低すぎる」。物差しが鈍くないかの確かめ"}
+  }
+ }
+}

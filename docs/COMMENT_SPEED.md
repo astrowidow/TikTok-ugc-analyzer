@@ -13,7 +13,7 @@
   1回目（00:53〜01:54）で C の穴（下の「試験で見つかったこと」1）が見つかり、直してから2回目を走らせた。
 - 切り替えは `acquire/spatest.py`（`--stop-on-no-more` `--prescroll` `--only-open-video` `--remount-on-stall`）と
   `acquire/pipeline.py` の設定（`stop_on_no_more` ほか）。**pipeline の既定を入にした（10/5）。アプリに入るのは次に作り直したとき。**
-- 次: 間隔を詰める・取る量を減らす（「最小のコメントで今と同じ点数のレポート」）の検討。下の「次の検討」。
+- 次: 間隔を詰める・取る量を減らす（「最小のコメントで今と同じ点数のレポート」）。**別のウィンドウで進める。引き継ぎ書は `docs/COMMENT_STRATEGY_HANDOVER.md`、開始の文は `docs/COMMENT_STRATEGY_PROMPT.md`**（2026-10-05）。
 
 ---
 

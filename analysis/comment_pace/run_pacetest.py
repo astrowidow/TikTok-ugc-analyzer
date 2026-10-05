@@ -27,6 +27,9 @@ ap.add_argument("--max-cpm", default="3.0")
 ap.add_argument("--pool", default=str(SRC / "derived/pool.tsv"))
 ap.add_argument("--out", default=str(REPO / "output/pacetest-20261005"))
 ap.add_argument("--hours", default="8")
+# 2026-10-06: 1本1ページの取り方（docs/COMMENT_TARGETS.md）の1本の時間を測る走行用。本番の既定は返信0・差し替え20件
+ap.add_argument("--reply", default="1", help="返信欄を開くコメントの数（返信数の多い順・質問形・投稿者本人それぞれ）")
+ap.add_argument("--subs-cap", default="40")
 cli = ap.parse_args()
 OUT = Path(cli.out)
 CPM, MAX_CPM = cli.cpm, cli.max_cpm
@@ -63,8 +66,8 @@ try:
             "--candidates", str(SRC / "derived/llm_input/records.jsonl"),
             "--subs-out", str(OUT / "subs.tsv"),
             "--collect-scrolls", "150",
-            "--reply-policy", "targets", "--reply-top", "1", "--reply-questions", "1", "--reply-author", "1",
-            "--cap", "40", "--min-comments", "20",
+            "--reply-policy", "targets", "--reply-top", cli.reply, "--reply-questions", cli.reply, "--reply-author", cli.reply,
+            "--cap", "40", "--min-comments", "20", "--subs-cap", cli.subs_cap,
             "--calls-per-min", CPM, "--max-calls-per-min", MAX_CPM,
             "--interval", "15", "--jitter", "0.5", "--deadline-hours", cli.hours,
             "--out", str(OUT / "comments.jsonl"), "--log", str(OUT / "comments.log"),

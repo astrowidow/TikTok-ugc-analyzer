@@ -162,6 +162,8 @@ def _build_server(user_of=None, local: bool = False):
                         "分かれば music_url。取得は半日ほどかかる。")
                      + "replies は、利用者が返信（コメントへの返信）も取るように頼んだときだけ true。既定は取らない"
                      "（取るとコメントの取得が2〜3割長くなる）。"
+                     "min_plays は、週ごとに選ぶ動画の再生の下限（既定10万。起点・大型ヒット・本人・公式などは再生に関わらず取る）。"
+                     "利用者が「再生〇万以上の動画だけで」「小さい動画も見て」などと頼んだときだけ数で指定する。"
                      + "返ってきた内容を利用者に短く伝えて止まる（取得を待たない・見に来ない）。" + rule),
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=True),
@@ -169,9 +171,10 @@ def _build_server(user_of=None, local: bool = False):
     async def start_analysis(ctx: Context, song: str, artist: str = "", music_url: str | None = None,
                              video_url: str | None = None, candidate_urls: list[str] | None = None,
                              only_one: bool = False, music_urls: list[str] | None = None,
-                             video_urls: list[str] | None = None, replies: bool = False) -> str:
+                             video_urls: list[str] | None = None, replies: bool = False,
+                             min_plays: int | None = None) -> str:
         return _call(runner.start_analysis, _user(ctx), song, artist, music_url or "", video_url or "",
-                     candidate_urls or [], only_one, music_urls or [], video_urls or [], bool(replies))["text"]
+                     candidate_urls or [], only_one, music_urls or [], video_urls or [], bool(replies), min_plays)["text"]
 
     @mcp.tool(
         title="分析の状態",
@@ -272,14 +275,16 @@ def _build_server(user_of=None, local: bool = False):
                     "取得中・順番待ち・止まった分析の取得をやめ、music_url（https://www.tiktok.com/music/…）があればその楽曲ページで取り直す。"
                     "楽曲ページを2つ以上で取り直すとき（外したページを足すときは、進めていたページも含めて全部）は music_urls に入れる（全部から取って合わせる）。"
                     "music_url を省くと、楽曲ページ探しから最初にやり直す（返ってくる探し方に従って検索し、start_analysis を呼ぶ）。"
-                    "replies は返信も取るか（省くと前の分析の指定を引き継ぐ。利用者が頼んだときだけ true／false を渡す）。"
+                    "replies は返信も取るか、min_plays は週ごとに選ぶ動画の再生の下限（どちらも省くと前の分析の指定を引き継ぐ。利用者が頼んだときだけ渡す）。"
                     "analysis_id は分析 ID か曲名。返ってきた内容を利用者に短く伝える。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False,
                                     open_world_hint=True),
     )
     async def restart_analysis(ctx: Context, music_url: str | None = None, analysis_id: str | None = None,
-                               music_urls: list[str] | None = None, replies: bool | None = None) -> str:
-        return _call(runner.restart_analysis, _user(ctx), analysis_id, music_url or "", music_urls or [], replies)["text"]
+                               music_urls: list[str] | None = None, replies: bool | None = None,
+                               min_plays: int | None = None) -> str:
+        return _call(runner.restart_analysis, _user(ctx), analysis_id, music_url or "", music_urls or [], replies,
+                     min_plays)["text"]
 
     @mcp.tool(
         title="取得をやめる",

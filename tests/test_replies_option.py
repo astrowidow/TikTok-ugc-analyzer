@@ -45,6 +45,7 @@ class FakeLocal:
 
 
 class TestRepliesOption(unittest.TestCase):
+    """返信の指定と、週ごとに選ぶ動画の再生の下限（min_plays）の指定"""
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = (pr.ANALYSES_DIR, pipeline.ANALYSES_DIR, pr.LOCAL)
@@ -89,6 +90,18 @@ class TestRepliesOption(unittest.TestCase):
         r = pr.start_analysis("u1", "テスト", "だれか", music_urls=[URL], replies=True)
         res = pr.restart_analysis("u1", r["analysis_id"])                         # 楽曲ページ探しから
         self.assertIn("replies=true", res["text"])
+
+    def test_min_plays_default_and_override(self):
+        self.assertEqual(pipeline.DEFAULTS["min_plays_weekly"], 100000)
+        r = pr.start_analysis("u1", "テスト", "だれか", music_urls=[URL])
+        self.assertIsNone(pr.min_plays_of(self.meta(r["analysis_id"])))          # 省けば既定（目録に書かない）
+        r2 = pr.start_analysis("u2", "テスト2", "だれか", music_urls=[URL2], min_plays=10000)
+        m = self.meta(r2["analysis_id"])
+        self.assertEqual(pr.min_plays_of(m), 10000)
+        self.assertEqual({**pipeline.DEFAULTS, **m["acquisition_settings"]}["min_plays_weekly"], 10000)
+        self.assertIn("再生10,000以上", r2["text"])
+        r3 = pr.restart_analysis("u2", r2["analysis_id"], music_url=URL)          # 省けば引き継ぐ
+        self.assertEqual(pr.min_plays_of(self.meta(r3["analysis_id"])), 10000)
 
 
 if __name__ == "__main__":

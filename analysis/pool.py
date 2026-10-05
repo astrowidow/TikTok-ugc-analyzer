@@ -29,9 +29,11 @@ CAP_STANDARD = 40
 CAP_KEY = 120
 # 120件にする理由のうち、本人（artist）以外のもの。本人だけが理由の動画は、選んだあとで40件に下げる（build の末尾）
 KEY_REASONS_BUT_ARTIST = {"origin", "top_hit", "official"}
-# 週ごとに配る動画の再生の下限（2026-10-05）。元の量の版3本のレポートが引用・熟読・名指しした動画に、再生1万未満は両曲とも0本だった
-# （docs/COMMENT_STRATEGY_HANDOVER.md 第9章、analysis/comment_exp/select_study.py）。必ず入れる動画（起点など）には掛けない
-MIN_PLAYS_WEEKLY = 10_000
+# 週ごとに配る動画の再生の下限（必ず入れる動画（起点・大型ヒット・本人・公式など）には掛けない）。
+# 2026-10-05 に1万で入れ（レポートが使った動画に1万未満は0本）、同日ユーザーの判断で既定を10万に:
+# 「レポートの価値は大きなバズの流れをとらえて理由を言語化すること。10万以下の動画から拾った情報は、大局を見たい場面ではむしろ不適切」。
+# 分析ごとに AI の道具（start_analysis の min_plays）で変えられる（acquire/pipeline.py の min_plays_weekly → --min-plays-weekly）
+MIN_PLAYS_WEEKLY = 100_000
 
 
 def norm(s: str) -> str:
@@ -96,10 +98,11 @@ def campaign_tags(alive, enriched, artists, titles) -> set:
     return tags
 
 
-def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None):
+def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None, min_plays_weekly=None):
     """プールを決める。返り値 {video_id: {"cap": int, "reasons": [..]}} と説明。
     budget_units と cost_* は同じ単位（本数なら 1、時間なら分）。cost_key は120件の動画1本の重さ（既定は cost_std）"""
     cost_key = cost_std if cost_key is None else cost_key
+    floor = MIN_PLAYS_WEEKLY if min_plays_weekly is None else min_plays_weekly
     alive = [v for v in videos if (enriched.get(v["video_id"]) or {}).get("author")]
     info = song_info(enriched)
     artists = artist_accounts(alive, enriched, info["author"])
@@ -146,7 +149,7 @@ def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None):
     random.seed(seed)
     alloc = {w: max(1, round(rem * math.sqrt(len(x)) / wsum)) for w, x in weeks.items()}
     for w, vs in sorted(weeks.items()):
-        cand = [v for v in vs if v["video_id"] not in pool and (v.get("plays") or 0) >= MIN_PLAYS_WEEKLY]
+        cand = [v for v in vs if v["video_id"] not in pool and (v.get("plays") or 0) >= floor]
         k = alloc[w]
         chosen = []
         # 週の中: 投稿地域ごと・TikTok のカテゴリラベルごとに最大再生を1本ずつ
@@ -181,7 +184,7 @@ def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None):
                "campaign_tags": sorted(ctags), "alive": len(alive), "videos": len(videos),
                "budget_units": budget_units, "units_used": round(units_used, 1),
                "n_pool": len(pool), "n_cap_key": sum(1 for p in pool.values() if p["cap"] >= CAP_KEY),
-               "n_artist_capped": n_artist_capped}
+               "n_artist_capped": n_artist_capped, "min_plays_weekly": floor}
     return pool, explain
 
 
@@ -207,13 +210,14 @@ def main():
     ap.add_argument("--min-per-key-video", type=float, default=0.0, help="120件の動画1本の見込み（分）。0なら --min-per-video と同じ")
     ap.add_argument("--budget", type=int, default=0, help="本数で直接指定（時間より優先）")
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--min-plays-weekly", type=int, default=None, help=f"週ごとに配る動画の再生の下限（既定 {MIN_PLAYS_WEEKLY:,}）")
     a = ap.parse_args()
     videos, enriched = load(a.videos, a.enriched)
     if a.budget:   # 本数で直接
-        pool, explain = build(videos, enriched, a.budget, seed=a.seed)
+        pool, explain = build(videos, enriched, a.budget, seed=a.seed, min_plays_weekly=a.min_plays_weekly)
     else:          # 時間（分）で
         pool, explain = build(videos, enriched, a.hours * 60, seed=a.seed, cost_std=a.min_per_video,
-                              cost_key=a.min_per_key_video or a.min_per_video)
+                              cost_key=a.min_per_key_video or a.min_per_video, min_plays_weekly=a.min_plays_weekly)
     write(pool, videos, a.out)
     print(json.dumps(explain, ensure_ascii=False))
 

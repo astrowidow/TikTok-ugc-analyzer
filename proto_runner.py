@@ -891,28 +891,40 @@ def wants_replies(meta: dict) -> bool:
     return any(int(s.get(k) or 0) > 0 for k in REPLIES_ON)
 
 
-def acquisition_settings_for(replies: bool) -> dict | None:
-    """新しい分析の目録に書く取得の設定（取得アプリの設定に、返信の指定を重ねる）"""
+def min_plays_of(meta: dict):
+    """この分析で指定した、週ごとに選ぶ動画の再生の下限（指定が無ければ None＝既定）"""
+    v = (meta.get("acquisition_settings") or {}).get("min_plays_weekly")
+    return int(v) if v is not None else None
+
+
+def acquisition_settings_for(replies: bool, min_plays: int | None = None) -> dict | None:
+    """新しい分析の目録に書く取得の設定（取得アプリの設定に、返信・再生の下限の指定を重ねる）"""
     s = dict(LOCAL.acquisition_settings() or {}) if LOCAL is not None else {}
     if replies:
         s.update(REPLIES_ON)
+    if min_plays is not None:
+        s["min_plays_weekly"] = max(0, int(min_plays))
     return s or None
 
 
 def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
                    candidate_urls: list | None = None, only_one: bool = False, music_urls: list | None = None,
-                   video_urls: list | None = None, replies: bool = False) -> dict:
-    """分析を作って取得の待ち行列に入れる。replies=True なら返信も取る（既定は取らない）"""
+                   video_urls: list | None = None, replies: bool = False, min_plays: int | None = None) -> dict:
+    """分析を作って取得の待ち行列に入れる。replies=True なら返信も取る（既定は取らない）。
+    min_plays は週ごとに選ぶ動画の再生の下限（省けば acquire/pipeline.py の既定 min_plays_weekly）"""
     res = _start_analysis(user_id, song, artist, music_url, video_url, candidate_urls, only_one, music_urls, video_urls,
-                          replies)
-    if replies and not res.get("analysis_id"):   # 楽曲ページ探しの案内（分析はまだ作っていない）
-        res["text"] += "\n（AI へ: 利用者は返信も取るように頼んでいる。start_analysis を呼び直すときも replies=true を付ける）"
+                          replies, min_plays)
+    if not res.get("analysis_id"):   # 楽曲ページ探しの案内（分析はまだ作っていない）
+        if replies:
+            res["text"] += "\n（AI へ: 利用者は返信も取るように頼んでいる。start_analysis を呼び直すときも replies=true を付ける）"
+        if min_plays is not None:
+            res["text"] += f"\n（AI へ: 利用者は再生の下限を指定している。start_analysis を呼び直すときも min_plays={int(min_plays)} を付ける）"
     return res
 
 
 def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
                     candidate_urls: list | None = None, only_one: bool = False, music_urls: list | None = None,
-                    video_urls: list | None = None, replies: bool = False) -> dict:
+                    video_urls: list | None = None, replies: bool = False, min_plays: int | None = None) -> dict:
     """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係か、利用者の Mac の取得アプリが走らせる）。
     取得アプリの形では、どの楽曲ページで進めるか（題・作者・UGC 数・URL）を返事に出す（2026-10-04 ユーザー
     「止めるのではなく、このページで進めるからね、ってのがプロンプトに出るくらいがいい」）。
@@ -1025,7 +1037,8 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
             if len(active) >= MAX_ACTIVE_PER_USER:
                 raise RunnerError(f"取得中・順番待ちの分析が{len(active)}件あります。終わってから次を頼んでください: "
                                   + ", ".join(a.title for a in active))
-            aid = launch.new_analysis(user_id, song, artist, music_url, acquisition_settings_for(replies), music_urls=urls)
+            aid = launch.new_analysis(user_id, song, artist, music_url, acquisition_settings_for(replies, min_plays),
+                                      music_urls=urls)
     if LOCAL is not None and created and pages is None:   # どの楽曲ページで進めるかを見せるため、題・作者・UGC 数を読む（読めなくても進める）
         try:
             info = LOCAL.inspect_music(music_url) or {}
@@ -1046,12 +1059,16 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
     when = f"終わるのは{_clock(eta)}の見込みです（約{_hm(eta)}）。" if eta else ""
     head = f"「{title}」の{'取得を受け付けました' if created else '取得はもう受け付けています'}（分析 ID: {aid}）。"
     meta_now = _read_json(ANALYSES_DIR / aid / "analysis.json", {}) or {}
+    mp = min_plays_of(meta_now)
+    plays_line = (f"週ごとに選ぶ動画は再生{mp:,}以上にします（起点・大型ヒット・本人・公式などは再生に関わらず取ります）。"
+                  if mp is not None else "")
     if wants_replies(meta_now):
         reply_line = REPLIES_NOTE
     elif replies and not created:
         reply_line = "（返信も取る指定は、すでに受け付けている取得には効きません。返信も取るなら「取得をやめて、やり直して」と頼んでください）"
     else:
         reply_line = ""
+    reply_line += plays_line
     if LOCAL is not None:
         pg = pages or [(music_url, {})]
         warn = ""
@@ -1565,7 +1582,7 @@ def cancel_analysis(user_id: str, ref: str | None) -> dict:
 
 
 def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_urls: list | None = None,
-                     replies: bool | None = None) -> dict:
+                     replies: bool | None = None, min_plays: int | None = None) -> dict:
     """取得をやめて、やり直す（取得アプリの形）。music_url・music_urls があればそのページ（複数なら全部合わせて）で、
     無ければ楽曲ページ探しから最初に
     （2026-10-04 ユーザー「〇〇の取得をやめて、このページでやり直して」「止めて初めからもう一度やって、正しい楽曲ページを抽出できるか試したい」）。
@@ -1594,13 +1611,16 @@ def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_u
         song = (m.get("song") or {}).get("title") or a.title
         artist = (m.get("song") or {}).get("artist") or ""
         rep = wants_replies(m) if replies is None else bool(replies)   # 省けば前の分析の指定を引き継ぐ
+        mp = min_plays_of(m) if min_plays is None else int(min_plays)
     if not urls:   # 最初から: 楽曲ページを探し直す（AI が検索して start_analysis を呼ぶ）
         res = _music_search_hint(song, artist, f"「{a.title}」の前の取得（{old}）をやめた。楽曲ページ探しから最初にやり直す。")
         if rep:
             res["text"] += "\n（AI へ: この分析は返信も取る指定。start_analysis を呼ぶときは replies=true を付ける）"
+        if mp is not None:
+            res["text"] += f"\n（AI へ: この分析は再生の下限の指定あり。start_analysis を呼ぶときは min_plays={mp} を付ける）"
         res["cancelled"] = a.id
         return res
-    res = start_analysis(user_id, song, artist, music_urls=urls, replies=rep)   # やり直しは利用者が選んだページで（複数なら全部）
+    res = start_analysis(user_id, song, artist, music_urls=urls, replies=rep, min_plays=mp)   # やり直しは利用者が選んだページで（複数なら全部）
     res["text"] = (f"「{a.title}」の前の取得（{old}）をやめました。\n" + res["text"])
     res["cancelled"] = a.id
     return res

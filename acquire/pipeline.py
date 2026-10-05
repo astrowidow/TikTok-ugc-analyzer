@@ -50,6 +50,8 @@ DEFAULTS = {
     # 本体と一緒に届く返信（reply_comment）は今までどおり残る
     "reply_top": 0, "reply_questions": 0, "reply_author": 0,
     "pool_budget": 0,            # プールの本数を直接指定（0なら時間から）
+    # 週ごとに配る動画の再生の下限（必ず入れる動画には掛けない）。分析ごとに道具（start_analysis の min_plays）で変えられる。analysis/pool.py の MIN_PLAYS_WEEKLY
+    "min_plays_weekly": 100000,
     "list_sets": 3, "list_scrolls": 30, "list_stall": 4,   # 一覧: scraper.py と同じ 3セット×30スクロール。増えなくなったら早めに止める
     "enrich_sleep": 2.0,
     "collect_scrolls": 150,      # コメント: グリッドでプールを探すスクロールの上限
@@ -451,7 +453,7 @@ class Run:
             return {"n_pool": n, "resumed": True}
         args = ["analysis/pool.py", self.p("derived", "videos.jsonl"), self.p("raw", "enriched.jsonl"), out,
                 "--hours", s["comment_hours"], "--min-per-video", s["min_per_video"],
-                "--min-per-key-video", s["min_per_key_video"]]
+                "--min-per-key-video", s["min_per_key_video"], "--min-plays-weekly", int(s["min_plays_weekly"])]
         if int(s["pool_budget"] or 0):
             args += ["--budget", int(s["pool_budget"])]
         return json.loads(self._script(*args).splitlines()[-1])

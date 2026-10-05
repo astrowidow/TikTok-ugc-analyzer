@@ -39,6 +39,11 @@
     "dir": "{HOME}/analyses/x-sil-ct1",
     "role": "variant",
     "note": "返信なし＋本人40件＋取る動画を「必ず取る59本＋属性クラスタ12個ごとの再生上位3本」の95本に絞る（今のプールの中から）"
+   },
+   "ct2": {
+    "dir": "{HOME}/analyses/x-sil-ct2",
+    "role": "variant",
+    "note": "ct1 と同じ条件の2回目"
    }
   }
  },
@@ -106,6 +111,11 @@
     "dir": "{HOME}/analyses/x-kyw-ct1",
     "role": "variant",
     "note": "返信なし＋本人40件＋取る動画を「必ず取る97本＋属性クラスタ12個ごとの再生上位3本」の127本に絞る（今のプールの中から）"
+   },
+   "ct2": {
+    "dir": "{HOME}/analyses/x-kyw-ct2",
+    "role": "variant",
+    "note": "ct1 と同じ条件の2回目"
    }
   }
  }

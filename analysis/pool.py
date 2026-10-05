@@ -27,6 +27,8 @@ import unicodedata
 
 CAP_STANDARD = 40
 CAP_KEY = 120
+# 120件にする理由のうち、本人（artist）以外のもの。本人だけが理由の動画は、選んだあとで40件に下げる（build の末尾）
+KEY_REASONS_BUT_ARTIST = {"origin", "top_hit", "official"}
 
 
 def norm(s: str) -> str:
@@ -162,10 +164,21 @@ def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None):
         chosen += random.sample(rest, min(len(rest), max(0, k - len(chosen))))
         add(chosen, f"week:{w}")
 
+    units_used = units(pool)
+    # 120件の理由が本人（artist）だけの動画は40件にする（2026-10-05。docs/COMMENT_STRATEGY_HANDOVER.md 第9章）。
+    # 本人の投稿の41〜120件目はレポートの引用にほとんど使われず、40件にした写しで回し直してもレポートの点は元の版のぶれの内側だった。
+    # 起点・大型ヒット・公式も兼ねる動画は120件のまま。本数の配り方は今までどおり120件の重さで数える（浮いた分は本数を増やさず、時間の短縮に回す）
+    n_artist_capped = 0
+    for p in pool.values():
+        if p["cap"] >= CAP_KEY and not set(p["reasons"]) & KEY_REASONS_BUT_ARTIST:
+            p["cap"] = CAP_STANDARD
+            n_artist_capped += 1
+
     explain = {"song": info, "artist_accounts": sorted(a for a in artists if a),
                "campaign_tags": sorted(ctags), "alive": len(alive), "videos": len(videos),
-               "budget_units": budget_units, "units_used": round(units(pool), 1),
-               "n_pool": len(pool), "n_cap_key": sum(1 for p in pool.values() if p["cap"] >= CAP_KEY)}
+               "budget_units": budget_units, "units_used": round(units_used, 1),
+               "n_pool": len(pool), "n_cap_key": sum(1 for p in pool.values() if p["cap"] >= CAP_KEY),
+               "n_artist_capped": n_artist_capped}
     return pool, explain
 
 

@@ -42,9 +42,13 @@ DEFAULTS = {
     # 「シルエットはモデルケースなので、上限に引っ掛かる状況は望ましくない」「上限は20時間くらい。あったほうがいい」
     "comment_deadline_hours": 20,
     # プールの予算の見積もり（1本あたりの分）。試走の実測（2026-09-30）: 40件の動画4.2分・120件7.2分（返信を各2件開いた場合）。
-    # 返信を各1件にして 3.1分・6.1分の見込み（docs/IMPLEMENTATION_LOG.md D20）
+    # 返信を各1件にして 3.1分・6.1分の見込み（docs/IMPLEMENTATION_LOG.md D20）。
+    # 2026-10-05 に返信を開くのをやめ、本人だけの動画を40件にしたが、見込みは変えない（本数を今のままにして、浮いた分は時間の短縮に回す）
     "min_per_video": 3.1, "min_per_key_video": 6.1,
-    "reply_top": 1, "reply_questions": 1, "reply_author": 1,   # 返信欄を開くコメント（返信数の多い順・質問形・投稿者本人）
+    # 返信欄を開くコメント（返信数の多い順・質問形・投稿者本人）。2026-10-05 から開かない（0）。
+    # 開いて取った返信は本番レポート2本で引用0件、開かない写しで回し直してもレポートの点は元の版のぶれの内側（docs/COMMENT_STRATEGY_HANDOVER.md 第9章）。
+    # 本体と一緒に届く返信（reply_comment）は今までどおり残る
+    "reply_top": 0, "reply_questions": 0, "reply_author": 0,
     "pool_budget": 0,            # プールの本数を直接指定（0なら時間から）
     "list_sets": 3, "list_scrolls": 30, "list_stall": 4,   # 一覧: scraper.py と同じ 3セット×30スクロール。増えなくなったら早めに止める
     "enrich_sleep": 2.0,

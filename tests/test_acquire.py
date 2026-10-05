@@ -89,14 +89,36 @@ class TestPool(unittest.TestCase):
         seqs = {str(v["seq"]) for v in videos if v["video_id"] in p}
         self.assertGreaterEqual(sum(1 for r in reps if r["seq"] in seqs), 53)   # 検証版: 代表65本中53
 
-    def test_origin_and_artist_get_120(self):
+    def test_origin_gets_120_and_artist_only_gets_40(self):
         import pool
         videos, enriched = pool.load(TRIAL / "videos.jsonl", TRIAL / "enriched.jsonl")
-        p, _ = pool.build(videos, enriched, 240)
+        p, ex = pool.build(videos, enriched, 240)
         by_seq = {v["seq"]: v["video_id"] for v in videos}
         self.assertEqual(p[by_seq[0]]["cap"], 120)          # 起点
         artist = [vid for vid, x in p.items() if "artist" in x["reasons"]]
-        self.assertTrue(artist and all(p[v]["cap"] == 120 for v in artist))
+        self.assertTrue(artist)
+        for v in artist:   # 2026-10-05: 120件の理由が本人だけなら40件。起点・大型ヒット・公式も兼ねれば120件
+            other = set(p[v]["reasons"]) & pool.KEY_REASONS_BUT_ARTIST
+            self.assertEqual(p[v]["cap"], 120 if other else 40, p[v]["reasons"])
+        self.assertEqual(ex["n_artist_capped"], sum(1 for v in artist if not set(p[v]["reasons"]) & pool.KEY_REASONS_BUT_ARTIST))
+
+    def test_artist_cap_does_not_change_selection(self):
+        """本人だけの動画を40件にしても、選ぶ動画（本数）は変えない（浮いた分は時間の短縮に回す）"""
+        import pool
+        videos, enriched = pool.load(TRIAL / "videos.jsonl", TRIAL / "enriched.jsonl")
+        p, ex = pool.build(videos, enriched, 12 * 60, cost_std=3.1, cost_key=6.1)
+        keep = pool.KEY_REASONS_BUT_ARTIST
+        try:
+            pool.KEY_REASONS_BUT_ARTIST = keep | {"artist"}     # 下げない（2026-10-05 より前の決まり）
+            p_old, _ = pool.build(videos, enriched, 12 * 60, cost_std=3.1, cost_key=6.1)
+        finally:
+            pool.KEY_REASONS_BUT_ARTIST = keep
+        self.assertEqual(set(p), set(p_old))
+
+    def test_replies_not_opened_by_default(self):
+        from acquire import pipeline
+        d = pipeline.DEFAULTS
+        self.assertEqual((d["reply_top"], d["reply_questions"], d["reply_author"]), (0, 0, 0))
 
 
 if __name__ == "__main__":

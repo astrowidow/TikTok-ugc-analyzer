@@ -27,7 +27,8 @@ sys.path.insert(0, str(BASE_DIR))
 from acquire import pipeline, worker  # noqa: E402
 
 TASK_NAME = "tiktok-acq"
-# 見込み（シルエット規模）。一覧5分・属性 1本3.3秒・派生2分・コメントはコメントを取る本数×1本の見込み（pipeline.minutes_per_comment_video）
+# 見込み（シルエット規模）。一覧5分・属性 1本3.3秒・派生2分・コメントはコメントを取る本数×1本の見込み（pipeline.minutes_per_comment_video）＋準備10分
+# （準備: Chrome を起こしてグリッドで対象を探す。2026-10-06 の実走で 5.5分）
 LIST_SECONDS = 300
 ENRICH_SECONDS_PER_VIDEO = 3.3
 DERIVE_SECONDS = 120

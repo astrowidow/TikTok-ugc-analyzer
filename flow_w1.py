@@ -2080,7 +2080,11 @@ def service_assemble(a, st: dict) -> dict:
             "note": a.outputs("NOTE_BODY.md").exists()}
 
 
-PLAY_RE = re.compile(r"seq\s*(\d+)[^。\n]{0,60}?(\d+(?:\.\d+)?)\s*(万|億)?\s*(?:回)?再生")
+# 「seq N … 〇〇万再生」の照合。カンマ入りの数字（1,420万）を読み、ほかの動画（seq M）をまたいで数字を拾わない
+# （2026-10-06: 掘り下げの試験で、元の版から同じ誤報3件が「数字の一部は運営が確認中」として利用者に出ていた）
+PLAY_RE = re.compile(r"seq\s*(\d+)(?:(?!seq\s*\d)[^。\n]){0,60}?(\d[\d,]*(?:\.\d+)?)\s*(万|億)?\s*(?:回)?再生")
+# 「seq N、@投稿者、日付、再生 4,100,000」の形（執筆の指示どおりの書き方。前はこちらを照合していなかった。本番2曲の写しで 75・88 件、ずれ0）
+PLAY_RE_PRE = re.compile(r"seq\s*(\d+)(?:(?!seq\s*\d)[^。\n]){0,60}?再生\s*(\d[\d,]*(?:\.\d+)?)\s*(万|億)?")
 
 
 def service_verify(a, st: dict) -> dict:
@@ -2096,11 +2100,11 @@ def service_verify(a, st: dict) -> dict:
     for c_ in sorted(cids):
         if c_ not in known:
             errors.append(f"入力に無い cid: {c_}")
-    for m in PLAY_RE.finditer(rep):
+    for m in [*PLAY_RE.finditer(rep), *PLAY_RE_PRE.finditer(rep)]:
         s = int(m.group(1))
         if s not in recs:
             continue
-        val = float(m.group(2)) * (10000 if m.group(3) == "万" else 100000000 if m.group(3) == "億" else 1)
+        val = float(m.group(2).replace(",", "")) * (10000 if m.group(3) == "万" else 100000000 if m.group(3) == "億" else 1)
         real = recs[s]["plays"]
         if real and abs(val - real) / real > 0.06:
             warnings.append(f"seq {s} の再生数: 本文 {m.group(0)[-20:]} ／ データ {real:,}")

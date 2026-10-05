@@ -191,6 +191,16 @@ class TestPlanAndMerge(unittest.TestCase):
         self.assertEqual([(r["seq"], r["cap"], r["priority"]) for r in rows], [("5", "40", "1"), ("3", "40", "1"), ("0", "120", "2")])
 
 
+class TestVerifyPlays(unittest.TestCase):
+    """検算の再生数の照合（2026-10-06 に直した: カンマ入り・ほかの動画をまたがない・「再生 数字」の形）"""
+    def test_patterns(self):
+        def found(text):
+            return [(int(m.group(1)), m.group(2), m.group(3)) for m in [*flow_w1.PLAY_RE.finditer(text), *flow_w1.PLAY_RE_PRE.finditer(text)]]
+        self.assertEqual(found("seq 19（1,420万再生）"), [(19, "1,420", "万")])
+        self.assertEqual(found("動画（seq 14）や開封（seq 23、1,150万再生）"), [(23, "1,150", "万")])   # seq 14 の数字にしない
+        self.assertEqual(found("seq 0、@a、2025-07-20、再生 4,100,000）"), [(0, "4,100,000", None)])
+
+
 class TestComeBack(unittest.TestCase):
     def test_come_back_line(self):
         s = pr.come_back_line(25 * 60, "この界隈のコメントを取り足すの", "シルエット", "取り足した分でレポートを書き直します。")

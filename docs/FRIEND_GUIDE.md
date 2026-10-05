@@ -1,5 +1,7 @@
 # UGC Analyzer の使い方（1枚）
 
+> 友達に見せるのはページ版「UGC Analyzer の始め方」（https://claude.ai/artifact/Tp343YwoMtSrFWKuJcCLmC 、元は `docs/pages/guide.html`）。この紙はその元になった1枚もの。数字や手順を変えたら両方を直す（`docs/pages/README.md`）
+
 TikTok で曲がどう広まったかを、あなたの AI（Claude か ChatGPT）が分析してレポートにします。
 あなたがすることは、**AI に決まった一言を言うこと**だけです。
 

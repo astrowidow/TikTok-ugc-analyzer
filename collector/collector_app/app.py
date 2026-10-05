@@ -624,7 +624,7 @@ class CollectorApp(rumps.App):
         ]
         if config.OPERATOR_FLAG.exists():   # 運営の Mac だけ（友達には出さない）
             op = rumps.MenuItem("運営向け")
-            op.add(rumps.MenuItem("曲を取得する（本番の規模・約13時間）…", callback=self.add_full))
+            op.add(rumps.MenuItem("曲を取得する（本番の規模）…", callback=self.add_full))
             op.add(rumps.MenuItem("ちょいとり（試し・約5分）…", callback=self.add_trial))
             self.ai_trial = rumps.MenuItem("AI（Claude・ChatGPT）から頼んだ取得を、ちょいとりの規模にする",
                                            callback=self.toggle_ai_trial)
@@ -787,7 +787,7 @@ class CollectorApp(rumps.App):
             message=("曲名とアーティスト名を「曲名 / アーティスト名」の形で入れてください。\n"
                      "TikTok の楽曲ページの URL（https://www.tiktok.com/music/…）でもかまいません。"
                      + ("\n\nちょいとり: 動画20本の一覧と、2本のコメント（各30件）だけ取ります。約5分です。" if trial else
-                        "\n\n本番の規模: 終わるまで13時間前後。そのあいだ Mac を開いたまま、電源につないでおいてください。")),
+                        "\n\n本番の規模: 終わるまで Mac を開いたまま、電源につないでおいてください。")),
             title="ちょいとり（試し・約5分）" if trial else "曲を取得する",
             default_text="", ok="取得を始める", cancel="やめる", dimensions=(360, 24))
         r = w.run()

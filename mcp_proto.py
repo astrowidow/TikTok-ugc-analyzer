@@ -155,14 +155,23 @@ def _build_server(user_of=None, local: bool = False):
         return "claude-code" in n or "claude code" in n
 
     def _waiting_text(ctx: Context, r: dict) -> str:
-        """待ちの返事。Code タブから呼ばれたときだけ、作業フォルダの ./ugc-wait を裏で走らせて続ける一文を足す（docs/CODE_TAB_ONE_SITTING.md）"""
+        """待ちの返事。Code タブから呼ばれたときだけ、作業フォルダの ./ugc-wait を裏で走らせて続ける一文を足す（docs/CODE_TAB_ONE_SITTING.md）。
+        待てば進む待ち（取得中・取り足し中・順番待ち。state が無い start_analysis・deepen・restart_analysis の返事も）だけに付ける。
+        利用者が何かするまで進まない待ち（アプリが動いていない・ログイン待ち・止まった）には「済んだら、ここで続けて」の言い方を、
+        やめた分析には何も足さない（返事にやり直し方が書いてある。2026-10-06 通し試験）"""
         text = r["text"]
         code_tab = _code_tab(ctx)
         if code_tab and r.get("analysis_id") and (r.get("kind") == "wait" or "その間 AI は待てない" in text):
-            text += (f"\n（AI へ: いまは Claude の Code タブから呼ばれている。上の「〇〇の分析を続けて」と頼む一文は利用者に伝えず、"
-                     "「集め終わったら、このまま自動で続けます。Mac と Claude は開いたままにしてください」と伝える。"
-                     f"そのあと Bash で `./ugc-wait {r['analysis_id']}` を裏で（run_in_background）走らせて止まる。"
-                     "終わった知らせが来たら next_task から続ける（作業フォルダの CLAUDE.md のとおり）。）")
+            state = r.get("state")
+            if state in (None, "acquiring", "deepening", "behind"):
+                text += (f"\n（AI へ: いまは Claude の Code タブから呼ばれている。上の「〇〇の分析を続けて」と頼む一文は利用者に伝えず、"
+                         "「集め終わったら、このまま自動で続けます。Mac と Claude は開いたままにしてください」と伝える。"
+                         f"そのあと Bash で `./ugc-wait {r['analysis_id']}` を裏で（run_in_background）走らせて止まる。"
+                         "終わった知らせが来たら next_task から続ける（作業フォルダの CLAUDE.md のとおり）。）")
+            elif state != "cancelled":
+                text += ("\n（AI へ: いまは Claude の Code タブから呼ばれている。この待ちは、利用者が上のことを済ませるまで進まないので、"
+                         "./ugc-wait は走らせない。上の内容を利用者に伝え、「済んだら、この会話で『続けて』と言ってください」と添えて止まる。"
+                         "「続けて」と言われたら next_task から続ける。）")
         return text
 
     def _call(fn, *args):
@@ -190,7 +199,7 @@ def _build_server(user_of=None, local: bool = False):
                         "利用者が楽曲ページの URL を渡したときは、探し直さずに全部を music_urls に入れる（2つ以上なら全部から取って合わせる）。"
                         "利用者に URL を頼むのは、何通りも検索して見つからないときの最後の手段。利用者に確認は求めない。"
                         "取得を始めると、どの楽曲ページで進めるか（題・作者・UGC 数・URL）が返ってくるので、それを利用者に伝える。"
-                        "取得は利用者の Mac の UGC Analyzer が半日ほどかけてやり、終わると Mac の通知が出る。" if local else
+                        "取得は利用者の Mac の UGC Analyzer が2〜3時間ほどかけてやり、終わると Mac の通知が出る。" if local else
                         "分かれば music_url。取得は半日ほどかかる。")
                      + "replies は、利用者が返信（コメントへの返信）も取るように頼んだときだけ true。既定は取らない"
                      "（取るとコメントの取得が2〜3割長くなる）。"
@@ -351,8 +360,8 @@ def _build_server(user_of=None, local: bool = False):
     async def restart_analysis(ctx: Context, music_url: str | None = None, analysis_id: str | None = None,
                                music_urls: list[str] | None = None, replies: bool | None = None,
                                min_plays: int | None = None) -> str:
-        return _call(runner.restart_analysis, _user(ctx), analysis_id, music_url or "", music_urls or [], replies,
-                     min_plays)["text"]
+        return _waiting_text(ctx, _call(runner.restart_analysis, _user(ctx), analysis_id, music_url or "", music_urls or [],
+                                        replies, min_plays))
 
     @mcp.tool(
         title="取得をやめる",

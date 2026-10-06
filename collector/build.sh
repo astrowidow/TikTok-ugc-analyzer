@@ -1,6 +1,7 @@
 #!/bin/bash
 # UGC Analyzer の .app と .dmg を作る（Apple シリコンの Mac で）。
 #   collector/build.sh            → collector/dist/UGC Analyzer.app と collector/dist/UGC-Analyzer-<版>.dmg
+# 友達に配るときは、コミットして push してから collector/release.sh（GitHub のリリースに載せる。友達のリンクは版によらず同じ）
 # 署名はしない（Apple の開発者登録をしない。2026-10-01 ユーザー判断）。受け取った人は最初に
 # 「システム設定 → プライバシーとセキュリティ → このまま開く」が要る（docs/FRIEND_GUIDE.md）
 # 最初の知識ベース（output/notes_corpus/。リポジトリには入れていない）を同梱するので、それがある Mac で作る。

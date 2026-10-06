@@ -97,6 +97,8 @@ h3 { font-size: 18px; margin: 32px 0 12px; }
 .copy { font: inherit; font-size: 13px; cursor: pointer; border: 1px solid var(--accent); color: var(--accent); background: transparent; border-radius: 999px; padding: 2px 12px; }
 .copy[data-done] { background: var(--accent); color: var(--user-fg); }
 .key { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; margin: 0; }
+.dl { justify-self: start; display: inline-block; text-decoration: none; background: var(--user-bg); color: var(--user-fg); font-weight: 700; border-radius: 999px; padding: 8px 22px; }
+.dl:hover { opacity: .9; }
 
 .chat { display: grid; gap: 14px; margin-top: 24px; }
 .msg { display: grid; gap: 4px; min-width: 0; }
@@ -169,7 +171,6 @@ footer p { margin: 0; }
       <li><div>Google Chrome</div></li>
       <li><div>Claude か ChatGPT（どちらか1つ）<span>Claude の人は Mac の Claude アプリ（有料プランの Pro 以上が要ります）。ChatGPT の人は Mac の ChatGPT アプリ（macOS 14 以降。無料プランでも動きますが、レポートの質がかなり落ちるので、有料プランをおすすめします）</span></div></li>
       <li><div>TikTok の分析専用のサブアカウント<span>分析のためだけに使う、ふだんとは別の TikTok のアカウントです。ふだんのアカウントは使いません。持っていない人は、手順4で作ります（そのための、ふだん使っていないメールアドレスを1つ用意してください）</span></div></li>
-      <li><div>運営から届いた UGC Analyzer のダウンロードリンク</div></li>
     </ul>
 
     <h3>やること（5つ）</h3>
@@ -181,7 +182,9 @@ footer p { margin: 0; }
 
       <li><div>
         <b class="t">UGC Analyzer を入れる</b>
-        <p class="muted">運営から届いたリンクから <code>.dmg</code> という種類のファイルをダウンロードして、ダブルクリックします。小さな窓に「UGC Analyzer」と「アプリケーション」の2つが並ぶので、「UGC Analyzer」を「アプリケーション」の上までドラッグして離します。</p>
+        <p class="muted">下のボタンを押すと、<code>UGC-Analyzer.dmg</code> というファイル（60MB ほど）がダウンロードされます。置き場は GitHub ですが、登録やログインは要りません。</p>
+        <a class="dl" href="https://github.com/astrowidow/TikTok-ugc-analyzer/releases/latest/download/UGC-Analyzer.dmg">UGC Analyzer をダウンロード</a>
+        <p class="muted">ダウンロードしたファイル（「ダウンロード」フォルダにあります）をダブルクリックします。小さな窓に「UGC Analyzer」と「アプリケーション」の2つが並ぶので、「UGC Analyzer」を「アプリケーション」の上までドラッグして離します。</p>
       </div></li>
 
       <li><div>
@@ -386,7 +389,7 @@ footer p { margin: 0; }
     </ul>
     <h3>運営への連絡</h3>
     <p>わからないこと・変だと思ったことは、何でも LINE でどうぞ。「レポートのここが変」という感想も助かります。</p>
-    <p>運営から「UGC Analyzer を新しくしました」と連絡が来たら、割れた音符 →「終了」→ 届いた新しい <code>.dmg</code> を、最初と同じように「アプリケーション」へドラッグしてください。「置き換える」を選んで OK です。データとログインはそのまま残ります。</p>
+    <p>運営から「UGC Analyzer を新しくしました」と連絡が来たら、割れた音符 →「終了」→ 手順2と同じボタン（<a href="https://github.com/astrowidow/TikTok-ugc-analyzer/releases/latest/download/UGC-Analyzer.dmg">UGC Analyzer をダウンロード</a>。いつも新しい版が落ちてきます）から <code>.dmg</code> を落として、最初と同じように「アプリケーション」へドラッグしてください。「置き換える」を選んで OK です。データとログインはそのまま残ります。</p>
   </section>
 
   <footer>

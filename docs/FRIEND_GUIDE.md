@@ -13,7 +13,7 @@ TikTok で曲がどう広まったかを、あなたが使っている Claude �
 **TikTok の分析専用のサブアカウント**（分析のためだけに使う、ふだんとは別のアカウント。ふだんのアカウントは使わない。持っていなければ手順4で作るので、ふだん使っていないメールアドレスを1つ用意する）
 
 1. **Claude（または ChatGPT）を Mac に入れる**: Claude の人は https://claude.ai/download 、ChatGPT の人は https://openai.com/chatgpt/download/ から入れて、ログインする
-2. **UGC Analyzer を入れる**: 運営から届いたリンクから `UGC-Analyzer-….dmg` というファイルをダウンロードして、ダブルクリック。小さな窓に「UGC Analyzer」と「アプリケーション」の2つが並ぶので、「UGC Analyzer」を「アプリケーション」の上までドラッグして離す
+2. **UGC Analyzer を入れる**: https://github.com/astrowidow/TikTok-ugc-analyzer/releases/latest/download/UGC-Analyzer.dmg を開くと、`UGC-Analyzer.dmg` というファイル（60MB ほど）がダウンロードされる（置き場は GitHub。登録やログインは要らない。新しい版が出たときも、同じリンクで新しい版が落ちてくる）。「ダウンロード」フォルダのそのファイルをダブルクリック。小さな窓に「UGC Analyzer」と「アプリケーション」の2つが並ぶので、「UGC Analyzer」を「アプリケーション」の上までドラッグして離す
 3. **UGC Analyzer を開く**（最初の1回だけ、ひと手間あります）
    1. Finder の「アプリケーション」フォルダで、「UGC Analyzer」をダブルクリック
    2. 「“UGC Analyzer”は開いていません」という警告が出る。運営が Apple に登録していないアプリなので出る警告で、壊れているわけではない。警告の中の「**完了**」を押して、いったん閉じる（「ゴミ箱に入れる」は押さない）

@@ -13,7 +13,7 @@
 | 3 指示を変える | **済み**。アプリの設定から（メニュー「指示書を編集」→ テキストエディット）と、AI に頼む道（道具 `prompts` と、今までの `settings`）の両方 |
 | 4 知識ベースの更新 | **済み**。週1回の新着の確かめ（note の公開の一覧。10/3 は新着0本）、取り込みと整理の仕事（試験の記事で確認） |
 | 5 .dmg と一周 | .dmg は作った（`collector/dist/UGC-Collector-0.2.0.dmg`）。運営の Mac に入れ替え済み。**一周と一晩はユーザー**（`docs/FINAL_TEST.md`） |
-| 6 配る準備 | 紙1枚 `docs/FRIEND_GUIDE.md`、LINE の文面 `docs/LINE_MESSAGES.md`。**.dmg の置き場（U2）と友達への質問（U1）はユーザー** |
+| 6 配る準備 | 紙1枚 `docs/FRIEND_GUIDE.md`、LINE の文面 `docs/LINE_MESSAGES.md`。友達への質問（U1）はユーザー。.dmg の置き場（U2）は **GitHub のリリース**に決めた（10/6。リンク https://github.com/astrowidow/TikTok-ugc-analyzer/releases/latest/download/UGC-Analyzer.dmg、載せるのは `collector/release.sh`） |
 
 外出中に私が決めたこと（ユーザーに確かめてもらう）:
 
@@ -165,7 +165,7 @@
 
 ### 段6: 配る準備
 
-- 友達向けの紙1枚（第2章の手順）、LINE で送る文面、.dmg の置き場（おすすめは Google ドライブの共有リンク）
+- 友達向けの紙1枚（第2章の手順）、LINE で送る文面、.dmg の置き場（10/6 に GitHub のリリースに決めた。`collector/release.sh`）
 - 友達3人に聞く: Mac の種類（M1 以降か）／会社の管理下の Mac か／Chrome が入っているか／Claude のプラン／Claude デスクトップアプリを使っているか
 
 ### 最後に: 文書の片付け

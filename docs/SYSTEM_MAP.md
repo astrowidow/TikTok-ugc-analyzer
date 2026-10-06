@@ -45,7 +45,7 @@ UGC Analyzer（メニューバー）── 5秒おきに見る ─────�
 | 部品 | ファイル | 役 |
 |---|---|---|
 | メニューバー | `collector/collector_app/app.py` | 取得の見張り・ログイン・通知・メニュー（指示書の編集・知識ベース・Claude につなぐ） |
-| Claude の道具 | `collector/collector_app/mcp_local.py` | `--mcp` の入口。中身は本線の `mcp_proto.py`（道具9つ）・`proto_runner.py`・`flow_w1.py` |
+| Claude の道具 | `collector/collector_app/mcp_local.py` | `--mcp` の入口。中身は本線の `mcp_proto.py`（道具13）・`proto_runner.py`・`flow_w1.py` |
 | Claude につなぐ | `collector/collector_app/claude_link.py` | Claude の設定ファイルに道具を1行足す（控えを取る） |
 | ChatGPT につなぐ | `collector/collector_app/codex_link.py` | Codex の設定ファイル（`~/.codex/config.toml`）に道具の節と道具ごとの許可を足し（控えを取る）、スキル（`~/.agents/skills/ugc-analyzer/`）を置く。ChatGPT は道具の案内を会話に入れないので、スキルで気づかせる |
 | 取得 | 本線の `acquire/`・`analysis/` | 一覧 → 属性 → プール → コメント（Windows 機と同じ部品）。どの動画のコメントを何件取るかは `docs/COMMENT_TARGETS.md` |
@@ -60,14 +60,14 @@ UGC Analyzer（メニューバー）── 5秒おきに見る ─────�
 | 2 | Mac を開いたまま（2〜3時間） | 何もしない（待たない・見に来ない） | 取得。終わると Mac の通知 |
 | 3 | 「〇〇の分析を続けて」 | `next_task` → 指示書どおりに → `submit` を繰り返す | 仕事を渡し、検査し、保存する。サービスの工程（代表の選定・組み立て・検算・Excel 用 ZIP）も Mac で |
 | 4 | 界隈の案に答える | — | — |
-| 5 | Mac と Claude を開いたまま（界隈の確認のあと30〜45分） | 続きを片付ける。知識ベースの取り込みがあれば、ここではさむ | 完成したらレポートを「レポート」フォルダへ |
+| 5 | Mac と Claude を開いたまま（界隈の確認のあと40分〜1時間。0.6.2〜 ウェブで調べる仕事・時代背景の仕事を含む。2026-10-06 の実測 44.7分・51.7分） | 続きを片付ける。知識ベースの取り込みがあれば、ここではさむ | 完成したらレポートを「レポート」フォルダへ |
 
 ## 4. 言葉の決まり
 
 | 言葉 | 指すもの |
 |---|---|
 | UGC Analyzer | 友達の Mac に入れるアプリ（メニューバー）と、それが AI に出す道具。利用者に見せる呼び方はこれだけ（2026-10-05 に UGC Collector・取得アプリ・分析アプリから統一。中の部品の名前 collector_app・UGC_COLLECTOR_HOME などはそのまま） |
-| 道具 | アプリが AI に出す12（start_analysis・status・next_task・submit・read・revise・deepen・settings・prompts・update_knowledge・cancel_analysis・restart_analysis）。deepen は完成後の界隈の掘り下げ（2026-10-06〜、`docs/DEEPEN_COMMUNITY.md`） |
-| 指示書 | AI に渡す作業の指示（11本）。利用者が直せる |
+| 道具 | アプリが AI に出す13（start_analysis・status・next_task・submit・read・revise・deepen・recut・settings・prompts・update_knowledge・cancel_analysis・restart_analysis）。deepen は完成後の界隈の掘り下げ（`docs/DEEPEN_COMMUNITY.md`）、recut は界隈の切り直し（`docs/RECUT_COMMUNITY.md`） |
+| 指示書 | AI に渡す作業の指示（21本。0.6.2 でウェブで調べる research・時代背景の era を足した）。利用者が直せる |
 | 知識ベース | 著者（山本慶太朗）の note 記事と、その蒸留物（用語集・文体ガイド・カード） |
 | 取得用の Chrome | アプリが開く、専用プロファイルの Chrome（捨て垢のログインはここだけ） |

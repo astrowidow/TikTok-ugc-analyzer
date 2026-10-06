@@ -72,8 +72,12 @@ def main():
         if rep.exists():
             t = rep.read_text(encoding="utf-8")
             print(f"REPORT.md: {len(t):,}字・章 {len(re.findall(r'(?m)^## ', t))}")
-            ban = [w for w in ("用語集の通り", "用語集どおり", "指示書", "cid", "taxonomy", "synthesis") if w in t]
-            print("読者に見せない言葉:", ban or "なし")
+        note = a / "outputs" / "NOTE_BODY.md"   # 読者に見せる原稿（REPORT.md は根拠の番号 cid つきの版なので見ない）
+        if note.exists():
+            t = note.read_text(encoding="utf-8")
+            print(f"NOTE_BODY.md: {len(t):,}字")
+            ban = [w for w in ("用語集の通り", "用語集どおり", "指示書", "cid", "seq", "taxonomy", "synthesis", "界隈の key") if w in t]
+            print("読者に見せない言葉（NOTE_BODY.md）:", ban or "なし")
 
 
 if __name__ == "__main__":

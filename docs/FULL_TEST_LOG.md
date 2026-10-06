@@ -91,4 +91,5 @@ spatest 25→44%・mcp_proto 18→46%・waiter 89%・deepen 88%・pool 89%）。
 | D2 | 合格 | settings の get・set（style に「レポートの文体をもう少しくだけた感じにする。」）・reset。戻したあと空 |
 | D3 | 合格 | prompts の list・get（done.md）・set（「4. 返答のいちばん最後に『お疲れさまでした』」を足す）・reset（全部）。試験の係が {{song}} を消した全文で set → 「差し込みの印が消えています: {{song}}」で断られた |
 | D4 | 合格 | update_knowledge → 新着なし（記事89本） |
-| D5 | 合格 | きゃわの取得済みの分析を AI の仕事なしで写し、「きゃわぽっぴんどぅーの分析を続けて。界隈の確認はいらないので、そのまま最後まで書いて」→ next_task に skip_confirm=true、印が state/options.json に残る → 界隈の案（仕事1）を出した直後の next_task がラベル付け（仕事3）を渡した（confirm_answer.json に auto=true・「（界隈の確認を省く: 利用者の頼み）」）。2回目の next_task にも AI は skip_confirm=true を付けていた。確かめたところで AI 役を止めた |
+| D5 | 合格 | きゃわの取得済みの分析を AI の仕事なしで写し、「きゃわぽっぴんどぅーの分析を続けて。界隈の確認はいらないので、そのまま最後まで書いて」→ next_task に skip_confirm=true、印が state/options.json に残る → 界隈の案（仕事1）を出した直後の next_task がラベル付け（仕事3）を渡した（confirm_answer.json に auto=true・「（界隈の確認を省く: 利用者の頼み）」）。2回目の next_task にも AI は skip_confirm=true を付けていた。確かめたところで AI 役を止めた。そのあと新しい会話で「きゃわぽっぴんどぅーの分析を続けて」→ 確認で止まらずに完成まで（下の D5' ） |
+| D5' | 合格 | 確認を省いた写しを完成まで（入っている 0.5.8・きゃわの取得済みのデータ）: AI の時間は界隈の案まで6分＋完成まで34分＝約40分、仕事47・差し戻し1（題名の JSON の書き損じ。出し直しで通過）・道具147回。検算 errors 0・warnings 0。完了の知らせに「界隈の確認は省き、AI の案のまま書いた」・使った界隈12個・切り直しの案内が入り、「数字の一部は運営が確認中」は出ない。REPORT.md 30,556字・11章、NOTE_BODY.md 33,016字に読者に見せない言葉なし。AI 役のトークン 約85万 |

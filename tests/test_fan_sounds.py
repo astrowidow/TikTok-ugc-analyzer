@@ -202,28 +202,27 @@ class TestAddFanSounds(unittest.TestCase):
         self.assertEqual(run.release_urls(), [U1, U2])
         self.assertEqual(run.music_urls(), [U1, U2, fan_url])
 
-    def test_inspect_and_max_pages_limits(self):
-        aid = self.make({"fan_inspect": 2, "fan_max_pages": 1})
-        cands = [{"id": str(7000000000000000010 + i), "title": f"オリジナル楽曲 - {i}", "author": "z", "duration": 12,
-                  "hits": 5 - i, "videos": []} for i in range(4)]
-        counts = {c["id"]: {"video_count": 20000} for c in cands}
-        self.run_with(aid, cands, counts)
-        log = pipeline.read_json(self.adir / aid / "raw" / "sound_search.json")
-        self.assertEqual(len(log["checked"]), 2)
-        self.assertEqual(len(log["added"]), 1)
-
-    def test_picks_largest_not_first_seen(self):
-        """2割以上が複数なら大きい順（discover に出た回数の順ではない）。既定で足すのは1つ。2026-10-06 の実走の並び"""
+    def test_joins_all_over_20_percent_largest_first(self):
+        """2割以上は数の上限なく全部、大きい順に（discover に出た回数の順ではない）。見つけた音源は全部 UGC 数を読む。
+        2026-10-06 の実走の並び。ユーザー「こういう変な制限はしなくていいよ」"""
         aid = self.make()
         cands = [{"id": NAGI, "title": "オリジナル楽曲 - なぎ", "author": "なぎ", "duration": 190, "hits": 5, "videos": []},
                  {"id": FAN, "title": "オリジナル楽曲 - 쿠레아", "author": "쿠레아", "duration": 12, "hits": 2, "videos": []},
                  {"id": "7653437523162942215", "title": "オリジナル楽曲 - 片栗粉", "author": "片栗粉", "duration": 13, "hits": 1,
-                  "videos": []}]
-        counts = {NAGI: {"video_count": 8563}, FAN: {"video_count": 39000}, "7653437523162942215": {"video_count": 6881}}
+                  "videos": []}] + \
+                [{"id": str(7000000000000000010 + i), "title": f"オリジナル楽曲 - {i}", "author": "z", "duration": 12, "hits": 1,
+                  "videos": []} for i in range(6)]
+        counts = {NAGI: {"video_count": 8563}, FAN: {"video_count": 39000}, "7653437523162942215": {"video_count": 6881},
+                  **{str(7000000000000000010 + i): {"video_count": 1000} for i in range(6)}}
         self.run_with(aid, cands, counts)
         log = pipeline.read_json(self.adir / aid / "raw" / "sound_search.json")
-        self.assertEqual([c["joined"] for c in log["checked"]], [False, True, False])
-        self.assertEqual(log["added"], [pipeline.music_url_of(FAN, "オリジナル楽曲 - 쿠레아")])
+        self.assertEqual(len(log["checked"]), 9)
+        self.assertEqual(log["added"], [pipeline.music_url_of(FAN, "オリジナル楽曲 - 쿠레아"),
+                                        pipeline.music_url_of(NAGI, "オリジナル楽曲 - なぎ"),
+                                        pipeline.music_url_of("7653437523162942215", "オリジナル楽曲 - 片栗粉")])
+        m = json.loads((self.adir / aid / "analysis.json").read_text(encoding="utf-8"))
+        self.assertEqual(m["music_urls"][2:], log["added"])
+        self.assertEqual(len(m["fan_music_urls"]), 3)
 
     def test_reads_main_count_when_not_recorded(self):
         aid = self.make(pages=False)

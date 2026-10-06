@@ -65,10 +65,10 @@ DEFAULTS = {
     # 同じ曲のファンの音源（「オリジナル楽曲 - 〇〇」）も探し、よく使われていれば合わせて取る（Run.add_fan_sounds。0 で探さない。
     # 利用者が楽曲ページを渡した分析は 0）。2026-10-06 きゃわぽっぴんどぅー: 2番の「血液型とかMBTIとか」で自己紹介する波が、
     # ファンが上げた12秒の音源（39K。公式の2つは 31.1K・17.7K）に乗っていて、公式の音源だけを取ったレポートから丸ごと抜けた。
-    # 読む discover のページは曲名と表記ゆれの語 fan_words 個、1ページ fan_videos 本。UGC 数を読むのは多く出た順に fan_inspect 個、
-    # 足すのは主の UGC の2割以上のうち大きい順に fan_max_pages 個まで。1つ足すと動画が約850本増え、属性だけで約50分延びるので、既定は1つ
-    # （2026-10-06 きゃわの実走: 2割以上は 39K・8.5K（フル版）・6.9K の3つ。取るのは 39K）
-    "fan_sounds": 1, "fan_words": 3, "fan_videos": 16, "fan_inspect": 6, "fan_max_pages": 1,
+    # 読む discover のページは曲名と表記ゆれの語 fan_words 個、1ページ fan_videos 本。見つけた音源は全部 UGC 数を読み、
+    # 主の UGC の2割以上なら全部足す（数の上限は付けない。2026-10-06 ユーザー「こういう変な制限はしなくていいよ」。
+    # きゃわの実走では 39K・8.5K（フル版）・6.9K の3つ。1つ足すと動画が約850本増え、属性だけで約50分延びる）
+    "fan_sounds": 1, "fan_words": 3, "fan_videos": 16,
     "collect_scrolls": 150,      # コメント: グリッドでプールを探すスクロールの上限
     # 要求の間隔（平均と60秒の上限）。2026-10-05 にユーザーの判断で 1.8回/分・60秒に2回 → 3回/分・60秒に4回へ上げた。
     # 実走: 2.0回/分で5時間・123本、3回/分で1時間・40本、どちらも空応答・4xx 0。同じ動画の取得が68%に（docs/COMMENT_SPEED.md 第5章）。
@@ -275,7 +275,7 @@ class Run:
                                       int(s["fan_words"]), page_links)
             self.log(f"    discover {len(found['words'])}ページ（{'・'.join(found['words'])}）で動画 {found['videos']}本の音源を読み、"
                      f"同じ曲（TikTok の照合 {'・'.join(found['meta_song_ids']) or 'なし'}）のほかの音源 {len(found['candidates'])}個")
-            cands = found["candidates"][:int(s["fan_inspect"])]
+            cands = found["candidates"]
             if cands and not main_n:
                 d.get(urls[0])
                 time.sleep(scraper.PAGE_LOAD_TIME)
@@ -295,11 +295,10 @@ class Run:
                 d.quit()
             except Exception:
                 pass
-        # 主の UGC の2割以上のうち、大きい順に fan_max_pages 個（discover に出た回数の順ではない。2026-10-06 の実走で、
-        # 先に出た 8.5K のフル版で上限に届き、39K の音源を取り逃がしかけた）
+        # 主の UGC の2割以上を全部、大きい順に（ページの並び＝音源A・B・C の順になる）
         ok = [c for c in checked if main_n and c["video_count"] and not c["unavailable"]
               and c["video_count"] >= FAN_JOIN_RATIO * main_n]
-        for c in sorted(ok, key=lambda c: -c["video_count"])[:int(s["fan_max_pages"])]:
+        for c in sorted(ok, key=lambda c: -c["video_count"]):
             c["joined"] = True
             info = infos[c["url"]]
             kind = "official" if fits_song(song, artist, info.get("title") or c.get("title"),
@@ -307,7 +306,7 @@ class Run:
             added.append({**{k: v for k, v in info.items() if v is not None}, "url": c["url"], "kind": kind,
                           "duration": c.get("duration"), "hits": c["hits"], "at": now(),
                           "how": "取得のはじめに、discover の人気の動画の音源から見つけた同じ曲の音源"})
-        self.log(f"    主の楽曲ページの UGC {main_n or '読めず'} の{int(FAN_JOIN_RATIO * 100)}%以上: {len(ok)}個 → 合わせて取る: " +
+        self.log(f"    主の楽曲ページの UGC {main_n or '読めず'} の{int(FAN_JOIN_RATIO * 100)}%以上を合わせて取る: " +
                  ("、".join(f"『{p.get('title')}』（{p.get('video_count_text')}）" for p in added) or "なし"))
         write_json(self.p("raw", "sound_search.json"), {**found, "main_video_count": main_n, "checked": checked,
                                                          "added": [p["url"] for p in added], "at": now()})

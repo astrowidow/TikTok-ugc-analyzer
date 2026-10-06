@@ -8,6 +8,8 @@ ChatGPT の Mac アプリは、Codex の設定ファイル（~/.codex/config.tom
   - スキル（~/.agents/skills/ugc-analyzer/SKILL.md）。ChatGPT は道具の案内（MCP の instructions）を会話に入れず、
     道具の名前も最初は見せない。そのままだと「〇〇の分析を続けて」を会話の続きと受け取り、道具を使わずに答える。
     スキルは名前と説明が毎回の会話に入るので、曲の分析を頼まれたら道具を使うことに気づける
+もう1つ、ファイルの先頭に web_search = "live" を足す（2026-10-06〜。レポートの「ウェブで調べる」仕事で最新のページを見るため。
+利用者がすでに web_search を決めていれば触らない。つなぎを外すと消える）。
 ほかの設定には触らない。書き換える前に、同じフォルダに控え（config.toml.bak-ugc-<日時>）を残す。
 """
 import datetime
@@ -70,7 +72,7 @@ _OUR_MARK = re.compile(r"^\s*# UGC (?:Collector|Analyzer) の道具")   # 前の
 
 
 # ウェブ検索を live に（2026-10-06〜。docs/WEB_RESEARCH.md）。Codex の既定（cached）は OpenAI の索引だけを見るので、YouTube の再生数のような
-# 日々変わる数字が取れない。設定ファイルのいちばん上（最初の [ ] より前）に書く。利用者がすでに web_search を決めていれば触らない
+# 日々変わる数字が取れない。設定ファイルの先頭（いちばん上の階層）に書く。利用者がすでに web_search を決めていれば触らない
 WEB_LINE = 'web_search = "live"   # UGC Analyzer が足した（曲の情報・チャートを最新のページで調べるため）'
 _OUR_WEB = re.compile(r'^\s*web_search\s*=\s*"live"\s*#\s*UGC Analyzer')
 
@@ -125,18 +127,15 @@ def _strip(text: str) -> str:
 
 
 def _with_web(text: str) -> str:
-    """いちばん上の階層に web_search が無ければ、最初の表の見出しの前に足す"""
+    """いちばん上の階層に web_search が無ければ、ファイルの先頭に足す（先頭はいつもいちばん上の階層。「[」で始まる行を見出しと
+    取り違えて、複数行の文字列や配列の中に差し込まない。R8-6）"""
     try:
         if "web_search" in tomllib.loads(text):
             return text
     except tomllib.TOMLDecodeError:
         return text
-    lines = text.splitlines()
-    i = next((k for k, line in enumerate(lines) if _ANY_HEADER.match(line)), len(lines))
-    head = lines[:i]
-    while head and not head[-1].strip():   # 前に足して外した跡の空行をためない（何度つないでも同じ文になるように）
-        head.pop()
-    return "\n".join(head + ([""] if head else []) + [WEB_LINE, ""] + lines[i:]).rstrip("\n")
+    body = text.lstrip("\n")   # 前に足して外した跡の空行をためない（何度つないでも同じ文になるように）
+    return WEB_LINE + ("\n\n" + body if body else "")
 
 
 def _load() -> dict:

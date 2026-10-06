@@ -233,7 +233,6 @@ class TestWithoutWeb(Base):
         self.assertEqual(fw.check_chapter(self.a, music_md().replace(" [W1]", ""), HEAD["music"]), [])
         self.assertEqual(self.acc(task("finish_title"), {"title": TITLE, "guesses_md": "なし"}), [])
 
-    @unittest.expectedFailure   # R8-1: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_following_the_suggestion_is_not_suggested_again(self):
         """【疑い】ウェブ検索が使えなかった分析の完了の知らせ・確認メモは「ウェブ検索をオンにして『〇〇のレポートの6章に、TikTok の外の数字を
         調べて足して』と頼めば足せる」と言う。利用者がそのとおり頼むと直し（revise）になるが、revise には調べた事実を research.json に
@@ -253,7 +252,6 @@ class TestWithoutWeb(Base):
 # 0.6.1 までに完成した分析（research.json が無い・note_meta が前の形）を 0.6.2 で直す
 # ---------------------------------------------------------------------------
 class TestOldAnalysis(Base):
-    @unittest.expectedFailure   # R8-2: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_done_does_not_claim_nothing_is_left_to_add(self):
         """【疑い】前の形の分析（research.json なし）を 0.6.2 で直す・掘り下げると、書き直さない章（3〜5章・6章）には
         「ここは人の考察を入れる場所」が残る。なのに完了の知らせ（done.md の 3）は、無条件に「書き切ってあり、書き足す場所は無い」と言わせる"""
@@ -288,7 +286,6 @@ class TestOldAnalysis(Base):
         self.assertIn("[確認メモ.md]", links)
         self.assertTrue((folder / "確認メモ.md").read_text(encoding="utf-8").startswith("メモ"))   # 前の形のメモはそのまま
 
-    @unittest.expectedFailure   # R8-3: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_music_prompt_without_era_material(self):
         """【疑い】0.6.1 で仕事の列（plan）を作り終え、0.6.2 で書く分析には research・era の仕事が無い。それでも3〜5章の指示は
         「3つとも書き切る」「似た位置づけの曲（曲名・アーティスト・時期を具体的に）」を求め、材料は「（時代背景の材料は無い）」。
@@ -307,7 +304,6 @@ class TestOldAnalysis(Base):
 # 検査（PLACEHOLDER_RE・INTERNAL_RE・題名・時代背景の材料・確認メモ）
 # ---------------------------------------------------------------------------
 class TestChecks(Base):
-    @unittest.expectedFailure   # R8-7: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_intro_title_number_is_caught(self):
         """【疑い】号数（No.—）の検査は finish_title の title にだけあるが、note 用の原稿の題名は冒頭の章の1行目
         （service_assemble は本文が「# 」で始まると note_meta の title を使わない）。冒頭の章に文体ガイドどおりの
@@ -316,14 +312,12 @@ class TestChecks(Base):
         errs = fw.check_chapter(self.a, body, fw.heading_of(self.a, "intro")) + fw.check_finished(self.a, body, set())
         self.assertTrue(any("号数" in e or "No." in e for e in errs), errs)
 
-    @unittest.expectedFailure   # R8-9: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_era_with_h4_headings(self):
         """【疑い】時代背景の材料の見出しを「####」で書くと、見出しの検査（部分一致）は通るのに、節を拾う _section_loose は「###」だけを
         見るので「似た位置づけの曲に記事の名前を2本以上」で差し戻す（名前は書いてある）。直し方の分からない差し戻しが続く"""
         errs = self.era(era_md(h="####"))
         self.assertTrue(errs == [] or any("見出し" in e for e in errs), errs)
 
-    @unittest.expectedFailure   # R8-8: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_youtube_url_line_is_not_an_internal_mark(self):
         """【疑い】仕上げは YouTube の公式の動画の URL をそれだけの行に置いてよいが、INTERNAL_RE（P\\d・seq など、大文字小文字を問わない）が
         動画 ID の一部を内部の印として拾う（例: v=P3_kZx9LmQa の「P3」）。消せない URL で差し戻しが続く"""
@@ -333,14 +327,12 @@ class TestChecks(Base):
         errs = fw.check_finished(self.a, body, set())
         self.assertFalse(any("内部の印" in e for e in errs), errs)
 
-    @unittest.expectedFailure   # R8-11: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_placeholder_re_keeps_a_reported_fact(self):
         """【疑い】PLACEHOLDER_RE の「書き足」は、調べた事実の文（本人がサビの歌詞を書き足した、など）も止める"""
         self.assertEqual(self.research(), [])
         errs = fw.check_chapter(self.a, music_md("本人は、サビの歌詞を後から書き足したと語っている [W1]。"), HEAD["music"])
         self.assertFalse(any("空けておく" in e for e in errs), errs)
 
-    @unittest.expectedFailure   # R8-10: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_guesses_md_is_checked_for_placeholders(self):
         """【疑い】確認メモ（利用者のフォルダの「確認メモ.md」）の「推測で書いたところ」（guesses_md）は検査が無い。
         前の書き足すところのメモの書き方（「ここは人の考察」「書き足すと完成」）で返しても受け付け、そのまま確認メモに載る"""
@@ -380,7 +372,6 @@ class TestAuthorRe(Base):
             with self.subTest(s=s):
                 self.assertTrue(self.author_errs(s))
 
-    @unittest.expectedFailure   # R8-4: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_catches_other_forms_written_in_the_style_guide(self):
         """【疑い】文体ガイド（同梱の STYLE_GUIDE.md）に書かれているのに AUTHOR_RE が見逃す名乗り・会社の案内:
         一人称の「山本」「当社」（104行「一人称は『山本』『僕』『筆者』『弊社』『我々』『当社』が混在（山本＋弊社を維持）」、39行）、
@@ -397,14 +388,12 @@ class TestAuthorRe(Base):
             with self.subTest(s=s):
                 self.assertEqual(self.chapter_author_errs(s), [])
 
-    @unittest.expectedFailure   # R8-5: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_does_not_flag_a_quoted_brand_caption(self):
         """【疑い】企業の公式アカウント（tier official_brand）の説明文やコメントの「弊社」を引用すると、著者の会社の案内として差し戻す。
         引用の文言は変えない決まり（finish.md）と食い違い、AI は引用を書き換えるか消すしかない"""
         s = "企業の公式アカウントが『弊社の新入社員で踊ってみました！』と投稿した動画（seq 3、@user3、2025-07-04、50万再生）が伸びた。"
         self.assertEqual(self.chapter_author_errs(s), [])
 
-    @unittest.expectedFailure   # R8-5: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_does_not_flag_a_quoted_creator_named_yamamoto(self):
         """【疑い】山本という名の投稿者の名乗りを引用すると（『どうも、山本です！』）、著者の名乗りとして差し戻す"""
         s = "ダンサーの投稿『どうも、山本です！今日はこの曲で踊ります』（seq 0、@user0、2025-07-01、300万再生）が起点になった。"
@@ -444,7 +433,6 @@ class TestCodexWebSearch(unittest.TestCase):
     def cfg(self) -> dict:
         return tomllib.loads(self.cl.CONFIG.read_text(encoding="utf-8"))
 
-    @unittest.expectedFailure   # R8-6: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_multiline_string_with_a_bracket_line(self):
         """【疑い】いちばん上の階層の複数行の文字列（例: developer_instructions）に「[」で始まる行があると、_with_web はそこを
         最初の表の見出しと取り違え、文字列の中に web_search の行を差し込む。利用者の指示文が書き換わり、web_search も効かない"""
@@ -456,7 +444,6 @@ class TestCodexWebSearch(unittest.TestCase):
         self.assertEqual(d["developer_instructions"], tomllib.loads(orig)["developer_instructions"])
         self.assertEqual(d.get("web_search"), "live")
 
-    @unittest.expectedFailure   # R8-6: 0.6.2 の不具合。2a が直したら印を外す（docs/FULL_TEST_LOG.md）
     def test_multiline_nested_array_still_connects(self):
         """【疑い】いちばん上の階層の複数行の配列で、要素の行が「[」で始まる（配列の配列）と、web_search の行を配列の中に差し込み、
         TOML が崩れて「書き足すと設定ファイルの形が崩れるため、やめました」でつなげなくなる（0.6.1 ではつなげた形）"""

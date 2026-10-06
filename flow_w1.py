@@ -69,10 +69,14 @@ READER_RE = re.compile(r"用語集|知識ベース|文体ガイド|因果パタ�
                        r"今回集めた|(?<!を)集めた動画|グリッド|ラベル付き|ラベルを付け|ラベル上|\d+\s*本中")
 # 空けておく書き方（人が書き足す前提の文・書けないことの断り書き）。執筆と仕上げの検査で止める
 # （2026-10-06 ユーザー「『ここは人が…』の箇所を極限まで無くしたい」。docs/WEB_RESEARCH.md）
-PLACEHOLDER_RE = re.compile(r"人の考察|考察を入れる|書き足|扱えな|扱えません|扱えていな|音源(?:そのもの)?を?(?:は)?分析していな")
+PLACEHOLDER_RE = re.compile(r"人の考察|考察を入れる|書き足す(?:場所|ところ|と完成)|書き足して(?:ください|ほしい)|(?:著者|人)が書き足|"
+                            r"扱えな|扱えません|扱えていな|音源(?:そのもの)?を?(?:は)?分析していな")
 # 著者の名乗り・執筆クレジット・会社の案内（2026-10-06 ユーザー「冒頭の『こんにちは、山本です！』は一旦いらない」）。
 # 文体と分析の枠組みだけを借り、利用者が自分の名前で出せる文にする。執筆と仕上げの検査で止める
-AUTHOR_RE = re.compile(r"山本です|山本慶太朗|ハイトリンク|Hi-Trink|執筆[：:]|お仕事大募集|keitarocomp|今回の執筆は|弊社")
+AUTHOR_RE = re.compile(r"山本です|山本慶太朗|山本(?:は|が|の気づき|一言)|ハイトリンク|Hi-Trink|執筆者?[：:]|お仕事大募集|コンサル依頼|"
+                       r"keitarocomp|今回の執筆は|弊社|当社")
+QUOTED_RE = re.compile(r"『[^』\n]*』|「[^」\n]*」")   # 引用（コメント・説明文・歌詞）。名乗りと空けておく書き方の検査では外す（R8-5）
+NUMBER_RE = re.compile(r"\[No\.|No\.\s*[—\-–]")      # 題名の号数（「[No.— - YY/MM-K]」。文体ガイドの形。号数は付けない。R8-7）
 WEB_REF_RE = re.compile(r"\[W(\d+)\]")                  # ウェブで調べた事実の出どころの印（research.json の id）
 KB_FILE_RE = re.compile(r"\d{4}-\d{2}-\d{2}_n[0-9a-z]{6,}")   # 知識ベースの記事の名前（時代背景の材料の出どころ。本文には書かない）
 CHAPTER_TITLES = {"intro": "冒頭・本楽曲に着目すべき理由・分析方針", "branch": "拡大経路のまとめ・バズの分岐点とその理由",
@@ -1310,6 +1314,14 @@ def research_ids(a) -> set:
     return {int(it["id"][1:]) for it in (research(a) or {}).get("items") or []}
 
 
+def web_added_later(a) -> bool:
+    """ウェブで調べたこと（research.json）のあとに、利用者の直し（revise）が入ったか。ウェブ検索なしで書いた分析で、
+    完了の知らせ・確認メモの「頼めば足せる」を、そのとおり頼んだあとにも繰り返さないため（R8-1）"""
+    d = a.outputs("revisions")
+    at = str((research(a) or {}).get("at", ""))
+    return d.exists() and any(str((pr._read_json(p, {}) or {}).get("at", "")) >= at for p in d.glob("*.json"))
+
+
 def research_ready(a) -> bool:
     return a.outputs("research.json").exists() and a.outputs("era.md").exists()
 
@@ -1487,7 +1499,7 @@ def accept_research(a, raw: str) -> list:
 
 
 def accept_era(a, raw: str) -> list:
-    md = pr._strip_fence(raw).strip()
+    md = re.sub(r"(?m)^#{4,}(?=\s)", "###", pr._strip_fence(raw).strip())   # 「####」で書いても「###」にそろえる（R8-9）
     errs = [f"見出し `{h}` がありません" for h in ERA_HEADS if h not in md]
     ok = {c_["file"].replace(".md", "") for c_ in cards(a)}
     bad = sorted(f for f in set(KB_FILE_RE.findall(md)) if f not in ok)
@@ -1726,21 +1738,34 @@ def write_prompt(a, t, base, st):
         materials = (music_materials(a) + "\n\n" + research_block(a, ("song",), "ウェブで調べた曲の情報（作り手・BPM・ジャンル・歌詞の構成・本人の言葉）") +
                      "\n\n#### 時代背景の材料（この曲の型と、似た位置づけの曲・同じ時期の流行。記事の file 名は本文に書かない）\n" + era_text(a) +
                      "\n\n" + common)
-        cat += [pr._catalog_line("research", "ウェブで調べたこと（全部）"), pr._catalog_line("era", "時代背景の材料")]
+        has_era = a.outputs("era.md").exists()
+        if a.outputs("research.json").exists():
+            cat.append(pr._catalog_line("research", "ウェブで調べたこと（全部）"))
+        if has_era:
+            cat.append(pr._catalog_line("era", "時代背景の材料"))
+            era_spec = ("- 5章: 時代背景の材料に沿って著者の型で書く: この曲の型 → 似た位置づけの曲（曲名・アーティスト・時期を具体的に）→ その型の流れ → "
+                        "その流れの中で、この曲は何が同じで何が新しいか。型の名前は書いてよいが、教材・過去の記事・月報といった出どころには触れない\n")
+        else:   # 前の形の分析（0.6.1 までに仕事の列を作った・掘り下げで書き直す）: 過去の記事を自分で読んで比べる。記憶で曲を挙げない（R8-3）
+            cat += [pr._catalog_line("kb:cards", "過去の記事のカード（1行1本）"),
+                    pr._catalog_line("note:<名前>", "過去の記事の全文（カードの file から .md を除いた名前）")]
+            era_spec = ("- 5章: この分析には時代背景の材料が無い。read の `kb:cards` から、この曲と型や界隈の渡り方が近い楽曲分析の記事を2本ほど選び、"
+                        "`note:<名前>` で読んでから、著者の型（この曲の型 → 読んだ記事の曲との比べ → この曲は何が同じで何が新しいか）で書く。"
+                        "読んでいない曲は挙げない。教材・過去の記事といった出どころには触れない\n")
         spec = ("`## 3. 楽曲の音楽的特徴（内的要因）`・`## 4. 楽曲構成の整理（切り出し箇所）`・`## 5. 時代背景における本楽曲の立ち位置` の3つの見出しを立て、"
                 "**3つとも書き切る**（2026-10-06〜。人が書き足す場所を残さない）。\n"
                 "- 3章: 曲そのものの特徴を、ウェブで調べた曲の情報（作り手・編曲・BPM・ジャンル・歌詞・本人や作り手の言葉）と、使われ方"
                 "（画面の文字・検索候補・尺・元音源の割合）、コメントの言及で書く。音の特徴は、出どころ（調べた情報かコメント）のあることだけを言い切る\n"
                 "- 4章: よく使われた部分（画面の文字・台詞）が曲のどこ（イントロ・Aメロ・サビ・台詞）にあたるかを、調べた歌詞の構成と突き合わせて書き、"
                 "なぜそこが切り出されたかを使われ方で説明する\n"
-                "- 5章: 時代背景の材料に沿って著者の型で書く: この曲の型 → 似た位置づけの曲（曲名・アーティスト・時期を具体的に）→ その型の流れ → "
-                "その流れの中で、この曲は何が同じで何が新しいか。型の名前は書いてよいが、教材・過去の記事・月報といった出どころには触れない\n"
+                + era_spec +
                 "調べても分からなかったことには触れない。「音源を分析していない」「ここは人の考察」のような断り書きを書かない。")
         heading, length = heading_of(a, ch), "2,500〜5,000字"
     elif ch == "result":
         materials = (result_materials(a) + "\n\n" + research_block(a, ("outside",), "ウェブで調べた TikTok の外の指標") +
                      "\n\n" + common + "\n\n分岐点の章は read の `chapter:branch`。")
-        cat += [pr._catalog_line("chapter:branch", "書き終えた分岐点の章"), pr._catalog_line("research", "ウェブで調べたこと（全部）")]
+        cat.append(pr._catalog_line("chapter:branch", "書き終えた分岐点の章"))
+        if a.outputs("research.json").exists():
+            cat.append(pr._catalog_line("research", "ウェブで調べたこと（全部）"))
         spec = ("`## 6. バズった結果得られたもの`・`## 7. 今回のヒットの核`（一文で言い切る）・`## 8. 再現性のある要素`（著者の型: 自分でコントロール下に置ける要素だけを"
                 "①②③で3〜4項目、見出しは命令形・名詞句、運の部分は「ここは運」と明示）の3つの見出しを立てる。"
                 "締めは「『曲名』の分析は以上になります！」と読者への1文まで（【お仕事大募集中！】のような会社の案内・執筆者の名前は書かない）。\n"
@@ -1904,15 +1929,25 @@ def done_materials(a) -> dict:
     if errs or warns:
         notes.append(f"- 検算: 確かめきれなかった点が {len(errs) + len(warns)} 件ある（運営が確認する）。利用者には「数字の一部を運営が確認中」と一言だけ")
     res = research(a)
-    if res is not None and not res.get("web_search"):
+    if res is not None and not res.get("web_search") and not web_added_later(a):
         notes.append("- ウェブ検索: AI のウェブ検索が使えず、曲の情報と TikTok の外の数字は入っていない。3 は「TikTok の中のデータで書き切ってある」と言い換え、"
                      "ウェブ検索をオンにして「" + a.title + "のレポートの6章に、TikTok の外の数字（YouTube・チャートなど）を調べて足して」と頼めば足せる、と一言添える")
     note = "\n".join(notes)
     if REPORTS_DIR and links:   # 先頭にフォルダ（2026-10-03 ユーザー「最終の返答に、成果物フォルダや成果物へのリンクを含んで欲しい」）
         links = folder_lines(a) + links + [f"- 週ごとの投稿数と再生（{WEEKLY_CSV}）: 同じフォルダ（Excel で開けます）"]
+    nb = a.outputs("NOTE_BODY.md")
+    left = sorted({m.group(0) for m in PLACEHOLDER_RE.finditer(QUOTED_RE.sub("", nb.read_text(encoding="utf-8")))}) if nb.exists() else []
+    if left:   # 0.6.2 より前に書いた章が残っている（前の形の分析の直し・掘り下げ）
+        completeness = ("このレポートには、前の版で空けた場所（「ここは人の考察を入れる場所」など）がまだ残っていること。「" + a.title +
+                        "のレポートの3〜5章を、空けずに書き切って」のように頼めば、その章を書き直して埋められること。"
+                        "ほかに直したいところや足したい考察があれば、そのまま言ってもらえれば章ごとに直すこと")
+    else:
+        completeness = ("曲の情報・時代背景（似た位置づけの曲との比べ）・TikTok の外の数字（YouTube・チャートなど）まで書き切ってあり、書き足す場所は無いこと。"
+                        "ウェブで調べた数字の出どころと、推測で書いたところは確認メモにあること。"
+                        "直したいところや足したい考察があれば、そのまま言ってもらえれば章ごとに直すこと")
     head = "**成果物**（この Mac に保存しました）" if REPORTS_DIR else "**成果物**"
     return {"links": head + "\n\n" + ("\n".join(links) or "- （成果物のリンクを作れなかった）"),
-            "summary": summary, "verify_note": note}
+            "summary": summary, "verify_note": note, "completeness": completeness}
 
 
 # ---------------------------------------------------------------------------
@@ -1982,7 +2017,9 @@ def check_chapter(a, md: str, heading: str) -> list:
 
 
 def check_no_placeholder(body: str) -> list:
+    """空けておく書き方・著者の名乗り・題名の号数。引用（『』「」の中）は利用者や投稿者の言葉なので見ない"""
     errs = []
+    body = QUOTED_RE.sub("", body)
     hits = sorted({m.group(0) for m in PLACEHOLDER_RE.finditer(body)})
     if hits:
         errs.append(f"空けておく書き方があります: {hits[:5]}（人が書き足す前提の文や、書けないことの断り書きは書かない。"
@@ -1990,7 +2027,9 @@ def check_no_placeholder(body: str) -> list:
     who = sorted({m.group(0) for m in AUTHOR_RE.finditer(body)})
     if who:
         errs.append(f"著者の名乗り・執筆クレジット・会社の案内があります: {who[:5]}（「こんにちは、山本です！」「執筆：…」「弊社」"
-                    "「お仕事大募集」は書かない。文体と分析の枠組みだけを借りる。「弊社では」は「ここでは」などに）")
+                    "「お仕事大募集」は書かない。文体と分析の枠組みだけを借りる。「弊社では」は「ここでは」などに、一人称が要るときは「筆者」）")
+    if NUMBER_RE.search(body):
+        errs.append("題名に号数（[No.— …]）を付けないでください（「【曲名 / アーティスト】Hitの理由分析レポート 〜TikTok今週の1曲」の形）")
     return errs
 
 
@@ -2001,10 +2040,11 @@ INTERNAL_RE = re.compile(r"seq\s*\d+|\bcid\b|(?<![A-Za-z0-9])P\d(?![A-Za-z0-9])|
 def check_finished(a, md: str, allowed_urls: set) -> list:
     errs = []
     body = pr._strip_fence(md)
-    hits = sorted(set(m.group(0) for m in INTERNAL_RE.finditer(body)))
+    nourl = re.sub(r"https?://\S+", "", body)   # URL の中（YouTube の動画 ID など）は内部の印・作業の言葉として見ない
+    hits = sorted(set(m.group(0) for m in INTERNAL_RE.finditer(nourl)))
     if hits:
         errs.append(f"内部の印が残っています: {hits[:10]}（消すか日本語に）")
-    words = sorted({m.group(0) for m in READER_RE.finditer(body)})
+    words = sorted({m.group(0) for m in READER_RE.finditer(nourl)})
     if words:
         errs.append(f"読者に見せない作業の言葉・集めた本数の言い方が残っています: {words[:10]}"
                     "（読者に向けた説明に言い換えるか消す。数字は曲全体の UGC 数で語る）")
@@ -2331,9 +2371,8 @@ def _accept(a, t: dict, raw: str, st: dict) -> list:
         if not all(isinstance(obj.get(k), str) for k in ("title", "guesses_md")) or \
                 not isinstance(obj.get("changes_md") or "", str):
             return ["title・guesses_md（・changes_md）は文字列にしてください（guesses_md は Markdown の文字列）"]
-        errs = check_no_placeholder(obj["title"])
-        if re.search(r"No\.\s*—|No\.\s*-", obj["title"]):
-            errs.append("題名に号数（No.—）を付けないでください（「【曲名 / アーティスト】Hitの理由分析レポート 〜TikTok今週の1曲」の形）")
+        errs = check_no_placeholder(obj["title"]) + [
+            "guesses_md（推測で書いたところ）: " + e for e in check_no_placeholder(obj["guesses_md"])]   # R8-10: 書き足す場所の一覧に戻さない
         if errs:
             return errs
         pr._write_json(a.outputs("note_meta.json"), obj)
@@ -2832,6 +2871,9 @@ def memo_md(a, meta: dict, chapters: list) -> str:
     res = research(a)
     if res is None:
         out.append("この分析には、ウェブで調べる工程がありませんでした（UGC Analyzer 0.6.2 より前に始めた分析）。")
+    elif not res.get("web_search") and web_added_later(a):
+        out.append("最初の版は AI のウェブ検索が使えなかったため、曲の情報と TikTok の外の数字が入っていませんでした。"
+                   "あとから直しで足した数字は、本文に添えた出どころを見てください。")
     elif not res.get("web_search"):
         out.append("AI のウェブ検索が使えなかったため、曲の情報と TikTok の外の数字（YouTube・チャートなど）は入っていません。"
                    "ウェブ検索をオンにして、AI に「" + a.title + "のレポートの6章に、TikTok の外の数字を調べて足して」と頼めば足せます。")
@@ -2960,8 +3002,9 @@ def service_verify(a, st: dict) -> dict:
         for u in re.findall(r"https?://(?:www\.)?tiktok\.com/[^\s)）」、。]+", note):
             if u.split("?")[0] not in allowed:
                 errors.append(f"note に一覧に無い URL: {u[:80]}")
-        if INTERNAL_RE.search(note):
-            warnings.append("note に内部の印が残っている: " + ", ".join(sorted({m.group(0) for m in INTERNAL_RE.finditer(note)})[:5]))
+        nourl = re.sub(r"https?://\S+", "", note)
+        if INTERNAL_RE.search(nourl):
+            warnings.append("note に内部の印が残っている: " + ", ".join(sorted({m.group(0) for m in INTERNAL_RE.finditer(nourl)})[:5]))
         if READER_RE.search(note):
             warnings.append("note に作業の言葉が残っている: " + ", ".join(sorted({m.group(0) for m in READER_RE.finditer(note)})[:5]))
     res = {"at": pr._now(), "seqs": len(seqs), "cids": len(cids), "errors": errors[:50], "warnings": warnings[:50]}
@@ -3090,6 +3133,8 @@ def units_of(a, name: str, st: dict):
             return re.split(r"(?m)^(?=#{1,3} )", kb_update.community_guide_text(same_song_files(a)))
         if f.endswith(".jsonl"):   # カード: 分析する曲を扱った記事は外す
             return [json.dumps(c_, ensure_ascii=False) + "\n" for c_ in cards(a)]
+        if f == "STYLE_GUIDE.md":   # 著者の名乗り・会社の案内は使わない（2026-10-06 ユーザー。R8-4: ガイドが勧めるので、読むたびに先に断る）
+            return [STYLE_OVERRIDE] + _md_units(p)
         return _md_units(p)
     if name.startswith("chapter:"):
         ch = name.split(":", 1)[1]
@@ -3153,6 +3198,15 @@ def units_of(a, name: str, st: dict):
             raise pr.RunnerError("拡散経路の下書きはまだありません")
         return _md_units(p)
     return None
+
+
+STYLE_OVERRIDE = """> **UGC Analyzer の決まり（この文体ガイドより優先）**: 利用者が自分の名前で出す記事にするため、著者からは文体と分析の枠組みだけを借りる。
+> 次は書かない: 挨拶の名乗り（「こんにちは、山本です！」）・執筆クレジット（「執筆：…」）・一人称の「山本」「弊社」「当社」（要るときは「筆者」。
+> 「弊社では【イノベーター理論】を用いて」は「ここでは【イノベーター理論】を用いて」）・【山本の気づき・こばなし】（【補足】に）・
+> 【お仕事大募集中！】・「コンサル依頼募集中！」・「今回の執筆は『〇〇さん』でした」・題名の号数「[No.— - YY/MM-K]」。
+> 冒頭は「今回は『曲名 / アーティスト』についてのレポートになります。」から、締めは「『曲名』の分析は以上になります！」と読者への1文まで。
+
+"""
 
 
 def _md_units(p: Path) -> list:

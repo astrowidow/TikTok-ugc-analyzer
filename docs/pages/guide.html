@@ -94,6 +94,8 @@ h3 { font-size: 18px; margin: 32px 0 12px; }
 .say { background: var(--surface); border: 2px solid var(--accent); border-radius: 14px; padding: 14px 16px; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; min-width: 0; }
 .say .label { grid-column: 1 / -1; font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
 .say .text { margin: 0; font-weight: 700; font-size: 18px; overflow-wrap: anywhere; min-width: 0; }
+.say.cmd { border-width: 1px; }
+.say.cmd .text { font-family: var(--font-mono); font-size: 13px; font-weight: 500; line-height: 1.6; }
 .copy { font: inherit; font-size: 13px; cursor: pointer; border: 1px solid var(--accent); color: var(--accent); background: transparent; border-radius: 999px; padding: 2px 12px; }
 .copy[data-done] { background: var(--accent); color: var(--user-fg); }
 .key { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; margin: 0; }
@@ -122,7 +124,8 @@ h3 { font-size: 18px; margin: 32px 0 12px; }
 
 .cards { display: grid; gap: 12px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: grid; gap: 8px; min-width: 0; }
-.card h3 { margin: 0; font-size: 17px; }
+.card h3, .card h4 { margin: 0; font-size: 17px; }
+.card .rules { font-size: 15px; }
 .card p { margin: 0; }
 .card .when { font-size: 14px; color: var(--wait); background: var(--wait-bg); border-radius: 6px; padding: 2px 10px; justify-self: start; }
 .prompt { margin: 0; padding: 10px 14px; border-radius: 12px; border-bottom-right-radius: 4px; background: var(--user-bg); color: var(--user-fg); justify-self: end; max-width: 92%; overflow-wrap: anywhere; }
@@ -272,7 +275,7 @@ footer p { margin: 0; }
 
     <h3>これで準備はおしまい</h3>
     <p>画面右上のメニューバーにいる<b>割れた音符のアイコン</b>が UGC Analyzer です。Mac を起動すると自動で立ち上がります。</p>
-    <p class="muted" id="menubar"><b>アイコンが見当たらないとき</b>は、りんごマーク →<b>「システム設定」</b>→ 左の列の<b>「メニューバー」</b>を開き、<b>「メニューバーに追加することを許可」</b>の一覧で「UGC Analyzer」をオンにします。オンなのに出ないときは、メニューバーがいっぱいで入りきっていません。同じ一覧で、使っていないアプリをオフにして場所を空けてください。</p>
+    <p class="muted"><b>アイコンが見当たらないとき</b>は、<a href="#menubar">「割れた音符のアイコンが見当たらないとき」</a>のとおりに直してください（MacBook では、メニューバーに入りきらずに隠れることがよくあります）。</p>
     <p class="key"><b>ChatGPT の人へ</b>：話しかけるのは ChatGPT アプリの <b>Work</b> の画面です。ふだんの Chat の画面や、ブラウザの chatgpt.com では UGC Analyzer につながりません。</p>
   </section>
 
@@ -398,7 +401,7 @@ footer p { margin: 0; }
     <h2>困ったとき</h2>
     <p class="sub">まずは画面右上の割れた音符のアイコンを押して、いちばん上の行を見てください。今何をしているかが出ています（例:「取得中: きゃわぽっぴんどぅー — コメントを取る 35/80本・残り約30分」）。</p>
     <dl class="qa">
-      <div><dt>画面右上に割れた音符のアイコンが無い</dt><dd>りんごマーク →「システム設定」→「メニューバー」→「メニューバーに追加することを許可」で「UGC Analyzer」をオン。オンなのに出なければ、同じ一覧で使っていないアプリをオフにする（<a href="#menubar">これで準備はおしまい</a>）。今の様子は、Claude（ChatGPT）に「〇〇はどうなってる？」と聞いても分かります</dd></div>
+      <div><dt>画面右上に割れた音符のアイコンが無い</dt><dd>メニューバーに入りきっていないか、設定で切れています。下の<a href="#menubar">「割れた音符のアイコンが見当たらないとき」</a>のとおりに直す。今の様子は、Claude（ChatGPT）に「〇〇はどうなってる？」と聞いても分かります</dd></div>
       <div><dt>「開き直す」を押しても何も起きない</dt><dd>Claude の窓を前に出して、「Claudeはまだ作業中です」と出ていたら「このまま終了」を押す。出ていなければ、Claude を ⌘Q で終了してから開く</dd></div>
       <div><dt>「UGC Analyzer で〜」と送ったのに、AI がふつうに答えるだけ</dt><dd>割れた音符 →「Claude につなぐ」（ChatGPT の人は「ChatGPT につなぐ」）→ Claude（ChatGPT）を開き直す。ChatGPT の人は Work の画面で送っているかも確かめる</dd></div>
       <div><dt>いちばん上の行が「止まっています」</dt><dd>割れた音符 →「止まった取得を続きから再開」</dd></div>
@@ -410,6 +413,41 @@ footer p { margin: 0; }
       <div><dt>完成の知らせに「ウェブ検索が使えなかった」と出た</dt><dd>「〇〇のレポートの6章に、TikTok の外の数字（YouTube・チャートなど）を調べて足して」と送る。Claude の入力欄の「＋」に「ウェブ検索」があれば、オンにしてから送る</dd></div>
     </dl>
     <p style="margin:16px 0 0">それでも直らなければ、運営に LINE してください。割れた音符 →「そのほか」→「取得の記録を開く」で出た画面の写真を一緒に送ってもらえると早いです。</p>
+
+    <h3 id="menubar">割れた音符のアイコンが見当たらないとき</h3>
+    <p>メニューバーのアイコンが多いと、入りきらない分は何の印もなく隠れます（MacBook でよく起きます）。新しく入れた UGC Analyzer のアイコンは、いちばん隠れやすい場所に置かれます。まず、りんごマーク →<b>「システム設定」</b>→ 左の列の<b>「メニューバー」</b>の<b>「メニューバーに追加することを許可」</b>で、「UGC Analyzer」がオンになっているかを確かめます。オンなのに出ないときは、次のどれかで場所を空けてください。上ほど簡単です。</p>
+    <div class="cards">
+      <div class="card">
+        <h4>1. 使っていないアイコンを消す</h4>
+        <p>りんごマーク →<b>「システム設定」</b>→ 左の列の<b>「メニューバー」</b>を開きます。</p>
+        <ul class="rules">
+          <li>「メニューバーに追加することを許可」の一覧で、使っていないアプリをオフにする（UGC Analyzer はオンのまま）</li>
+          <li>「メニューバーコントロール」の一覧で、Wi‑Fi や Bluetooth など見なくてよいものを「メニューバーに非表示」にする</li>
+          <li>「時計のオプション…」で「日付を表示」をオフにすると、時計が短くなる</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>2. アイコンの間隔を詰める</h4>
+        <p>⌘（command）とスペースを一緒に押し、「ターミナル」と打って return で開きます。下の1行をコピーしてターミナルに貼り、return を押します。そのあと、りんごマーク →<b>「再起動…」</b>で Mac を再起動すると、アイコンの間隔が半分になります。</p>
+        <div class="say cmd">
+          <span class="label">ターミナルに貼る（間隔を詰める）</span>
+          <p class="text">defaults -currentHost write -globalDomain NSStatusItemSpacing -int 8; defaults -currentHost write -globalDomain NSStatusItemSelectionPadding -int 8</p>
+          <button class="copy" type="button">コピー</button>
+        </div>
+        <p class="muted" style="color:var(--muted);font-size:15px">元に戻すときは、この1行を同じように貼ってから再起動します。Mac が集めている途中なら、終わってから再起動してください。</p>
+        <div class="say cmd">
+          <span class="label">ターミナルに貼る（元に戻す）</span>
+          <p class="text">defaults -currentHost delete -globalDomain NSStatusItemSpacing; defaults -currentHost delete -globalDomain NSStatusItemSelectionPadding</p>
+          <button class="copy" type="button">コピー</button>
+        </div>
+      </div>
+      <div class="card">
+        <h4>3. 整理アプリ Thaw を入れる（無料）</h4>
+        <p>あまり使わないアイコンを隠して、要るものだけをメニューバーに出せるアプリです（運営が作ったものではありません。macOS 26 以降で使えます）。</p>
+        <a class="dl" href="https://github.com/thaw-app/Thaw/releases/latest/download/Thaw.dmg">Thaw をダウンロード</a>
+        <p>UGC Analyzer と同じように「アプリケーション」へドラッグして開きます。最初に「アクセシビリティ」の許可を聞かれたら、許可します。割れた音符のアイコンは、隠さずに見える側に置いてください。</p>
+      </div>
+    </div>
   </section>
 
   <section id="rules">

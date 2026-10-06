@@ -67,6 +67,11 @@ DEFAULTS = {
 READER_RE = re.compile(r"用語集|知識ベース|文体ガイド|因果パターン|過去レポート|過去記事のカード|記事の?カード|"
                        r"カード(?:によれば|によると|に載|の記事)|"
                        r"今回集めた|(?<!を)集めた動画|グリッド|ラベル付き|ラベルを付け|ラベル上|\d+\s*本中")
+# 空けておく書き方（人が書き足す前提の文・書けないことの断り書き）。執筆と仕上げの検査で止める
+# （2026-10-06 ユーザー「『ここは人が…』の箇所を極限まで無くしたい」。docs/WEB_RESEARCH.md）
+PLACEHOLDER_RE = re.compile(r"人の考察|考察を入れる|書き足|扱えな|扱えません|扱えていな|音源(?:そのもの)?を?(?:は)?分析していな")
+WEB_REF_RE = re.compile(r"\[W(\d+)\]")                  # ウェブで調べた事実の出どころの印（research.json の id）
+KB_FILE_RE = re.compile(r"\d{4}-\d{2}-\d{2}_n[0-9a-z]{6,}")   # 知識ベースの記事の名前（時代背景の材料の出どころ。本文には書かない）
 CHAPTER_TITLES = {"intro": "冒頭・本楽曲に着目すべき理由・分析方針", "branch": "拡大経路のまとめ・バズの分岐点とその理由",
                   "music": "楽曲の音楽的特徴・楽曲構成・時代背景", "result": "バズった結果・今回のヒットの核・再現性のある要素"}
 REPORT_ORDER_FIXED = ["branch", "music", "result"]
@@ -551,9 +556,21 @@ def render(a, t: dict, st: dict) -> dict:
                                                 "ref_date": pm.get("date", ""), "i": pm["i"], "n": pm["n"],
                                                 "why": pm.get("why", ""), "article": body})
 
+    elif typ == "research":
+        cat += [pr._catalog_line("pathway", "拡散経路の下書き"), pr._catalog_line("synthesis", "界隈ごとのコメント分析")]
+        text = pr._fill(tpl("research.md"), {**base, "materials": research_materials(a), "today": datetime.date.today().isoformat()})
+
+    elif typ == "era":
+        cat += [pr._catalog_line("note:<名前>", "著者の過去の記事の全文（材料の一覧の名前）"),
+                pr._catalog_line("kb:cards", f"過去の記事のカード（{len(cards(a))}本。1行1本。一覧で足りなければ）"),
+                pr._catalog_line("synthesis", "界隈ごとのコメント分析")]
+        text = pr._fill(tpl("era.md"), {**base, "materials": era_materials(a)})
+
     elif typ == "outline":
         cat += [pr._catalog_line("refs", "参考記事の章立てと論理の運び"), pr._catalog_line("synthesis", "界隈ごとのコメント分析"),
                 pr._catalog_line("pathway", "拡散経路の下書き")]
+        if a.outputs("research.json").exists():
+            cat += [pr._catalog_line("research", "ウェブで調べたこと（W番号つき）"), pr._catalog_line("era", "時代背景の材料")]
         lines = [f"- `{c_}`: {heading_of(a, c_)}（{CHAPTER_TITLES.get(c_) or '拡大経路の段階'}）" for c_ in chapter_order(a, st)]
         text = pr._fill(tpl("outline.md"), {**base, "n_refs": cfg(a)["n_refs"], "chapters": "\n".join(lines),
                                              "materials": outline_materials(a, base),
@@ -567,12 +584,14 @@ def render(a, t: dict, st: dict) -> dict:
 
     elif typ == "finish_title":
         ch = chapter_order(a, st)
-        heads = "\n".join(f"- {first_line(a.outputs('note_chapters', f'{c_}.md'))}" for c_ in ch
+        heads = "\n".join(f"- `{c_}`: {first_line(a.outputs('note_chapters', f'{c_}.md'))}" for c_ in ch
                           if a.outputs("note_chapters", f"{c_}.md").exists())
-        music = a.outputs("chapters", "music.md")
+        o = outline(a) or {}
+        guesses = [f"- `{c_.get('id')}`: {cl.get('claim', '')}" for c_ in o.get("chapters") or [] if isinstance(c_, dict)
+                   for cl in c_.get("claims") or [] if isinstance(cl, dict) and cl.get("guess")]
         deleted = [f"seq {s}" for s in mentioned_seqs(a, ch) if not records(a).get(s, {}).get("enriched")]
-        text = pr._fill(tpl("finish_title.md"), {**base, "headings": heads,
-                                                 "music_md": music.read_text(encoding="utf-8") if music.exists() else "（なし）",
+        cat.append(pr._catalog_line("note_chapter:<章の id>", "仕上げた章"))
+        text = pr._fill(tpl("finish_title.md"), {**base, "headings": heads, "guesses": "\n".join(guesses) or "（なし）",
                                                  "deleted": "、".join(deleted) or "なし"})
 
     elif typ == "revise":
@@ -662,6 +681,15 @@ DELIVERABLES = {"REPORT.md": "outputs/REPORT.md", "NOTE_BODY.md": "outputs/NOTE_
                 "videos_review.csv": "derived/review/videos_review.csv"}
 
 
+# 利用者のフォルダに置くときの名前と、完了の知らせの説明（2026-10-06 ユーザー「生成物の説明がわかりにくい。分析レポートと note 用の原稿の
+# 違いは？」「書き足すところのメモって、もうちょいいい表現ないかな」）。読む・貼るのは仕上げた版。根拠の番号つきの版は、仕上げる前の原稿
+SHOWN = {"NOTE_BODY.md": ("レポート.md", "読む・note に貼るのはこれ（動画は埋め込みの行、根拠の番号なし）"),
+         "REPORT.md": ("レポート（根拠の番号つき）.md",
+                       "同じ分析の、仕上げる前の原稿。どの動画（seq）・コメント（cid）・ウェブの出どころ（W）から言ったかの番号と、"
+                       "使ったデータの付録つき（Excel 用のデータと突き合わせるとき）"),
+         "EDITOR_NOTES.md": ("確認メモ.md", "ウェブで調べた数字の出どころと、推測で書いたところ（公開の前に確かめたいとき）")}
+
+
 def report_folder(a) -> Path:
     """この Mac で成果物を置くフォルダ（取得アプリの形だけ）。曲名と分析を作った日で名前を付ける"""
     title = re.sub(r'[\\/:*?"<>|\s]+', "_", a.title).strip("_")[:60] or a.id
@@ -683,10 +711,12 @@ def dl_url(a, name: str) -> str:
     if REPORTS_DIR:
         from urllib.parse import quote
         src = a.dir / DELIVERABLES[name]
-        dst = report_folder(a) / name
+        dst = report_folder(a) / (SHOWN[name][0] if name in SHOWN else name)
         dst.parent.mkdir(parents=True, exist_ok=True)
         if src.exists():
             shutil.copy2(src, dst)
+            if name in SHOWN and (report_folder(a) / name).exists():   # 前の版の名前（REPORT.md など）で置いた写しは消す
+                (report_folder(a) / name).unlink()
         return "file://" + quote(str(dst))
     return f"{PUBLIC_URL}/dl/{download_key(a)}/{name}"
 
@@ -1260,6 +1290,216 @@ def recut_write_note(a, n, ch) -> str:
 
 
 # --- 構成案（2026-10-03〜） ---
+# --- ウェブで調べる・時代背景の材料（2026-10-06〜。docs/WEB_RESEARCH.md）---
+# ユーザー「『ここは人が…』の箇所を極限まで無くしたい」「時代背景は、似た位置付けの楽曲のレポートをいくつか参照して」
+# 「TikTok 外の指標も YouTube の MV 再生数・サブスク・チャート・ライブ動員くらい AI が調べて足せる」
+RESEARCH_KINDS = {"song": ("fact",), "outside": ("metric", "value", "as_of"), "people": ("who", "fact")}
+RESEARCH_HEADS = {"song": "曲の情報", "outside": "TikTok の外の指標", "people": "要のアカウントの素性"}
+ERA_HEADS = ("### この曲の型", "### 似た位置づけの曲", "### 同じ時期の流行", "### この曲の立ち位置")
+
+
+def research(a):
+    """ウェブで調べたこと（research.json）。この工程が無かった分析（前の形）は None"""
+    return pr._read_json(a.outputs("research.json"), None)
+
+
+def research_ids(a) -> set:
+    return {int(it["id"][1:]) for it in (research(a) or {}).get("items") or []}
+
+
+def research_ready(a) -> bool:
+    return a.outputs("research.json").exists() and a.outputs("era.md").exists()
+
+
+def research_line(it: dict) -> str:
+    if it["kind"] == "outside":
+        body = f"{it['metric']}: {it['value']}（{it['as_of']} 時点" + (f"。{it['note']}" if it.get("note") else "") + "）"
+    elif it["kind"] == "people":
+        body = f"{it['who']}: {it['fact']}" + (f"（{it['note']}）" if it.get("note") else "")
+    else:
+        body = it["fact"] + (f"（{it['note']}）" if it.get("note") else "")
+    src = " ".join(x for x in (it.get("source_name"), it.get("source")) if x)
+    return f"[{it['id']}] {body} — 出どころ: {src}"
+
+
+def research_md(res: dict) -> str:
+    """read の `research`（構成案・執筆が読む）"""
+    out = [f"## ウェブで調べたこと（{str(res.get('at', ''))[:10]}、AI が調べた）", ""]
+    if not res.get("web_search"):
+        return "\n".join(out + ["AI のウェブ検索が使えなかったため、調べていない（記事は TikTok の中のデータだけで書く）"]) + "\n"
+    for kind, head in RESEARCH_HEADS.items():
+        xs = [it for it in res["items"] if it["kind"] == kind]
+        out += [f"### {head}", ""] + ([f"- {research_line(it)}" for it in xs] or ["（なし）"]) + [""]
+    if res.get("not_found"):
+        out += ["### 探したが見つからなかったもの", ""] + [f"- {x}" for x in res["not_found"]] + [""]
+    return "\n".join(out)
+
+
+def research_block(a, kinds, head) -> str:
+    """執筆の材料: ウェブで調べたことのうち、その章で使う種類（見つからなかったものは渡さない。無いことを本文に書かせないため）"""
+    res = research(a)
+    if not res:
+        return f"#### {head}\n（ウェブで調べる工程が無い分析。TikTok の中のデータだけで書き、外のことには触れない）"
+    if not res.get("web_search"):
+        return f"#### {head}\n（AI のウェブ検索が使えず、調べていない。TikTok の中のデータだけで書き、外のことには触れない）"
+    xs = [it for it in res["items"] if it["kind"] in kinds]
+    return (f"#### {head}（{str(res.get('at', ''))[:10]} にウェブで調べた。使ったら文末に [W番号]）\n" +
+            ("\n".join(f"- {research_line(it)}" for it in xs) or "（見つかったものは無い。外のことには触れない）"))
+
+
+def key_accounts(a, n=25) -> list:
+    """ウェブで調べる材料: 経路の要の動画を投稿した、公に活動していそうなアカウント（本人・公式・認証・フォロワー10万以上・大手）"""
+    recs, labs, pl = records(a), labels(a), pool(a)
+    ov = (pr._read_json(a.outputs("phases.json"), {}) or {}).get("overlooked") or []
+    seqs = {s for p in phases(a) for s in p.get("reps") or []} | set(ov)
+    seqs |= set(sorted(recs, key=lambda s: -recs[s]["plays"])[:20])
+    seqs |= {s for s, l in labs.items() if l.get("tier") in ("official_artist", "official_brand")}
+    seqs |= {s for s, r in recs.items() if re.search(r"artist|official", (pl.get(r["video_id"]) or {}).get("reasons", ""))}
+    out, seen = [], set()
+    for s in sorted((s for s in seqs if s in recs), key=lambda s: -recs[s]["plays"]):
+        au = recs[s].get("author") or {}
+        aid = au.get("id")
+        if not aid or aid in seen:
+            continue
+        tier = (labs.get(s) or {}).get("tier", "")
+        fol = au.get("followers") if isinstance(au.get("followers"), int) else 0
+        if not (au.get("verified") or fol >= 100000 or tier in ("official_artist", "official_brand", "large_creator")):
+            continue
+        seen.add(aid)
+        bio = re.sub(r"\s+", " ", au.get("bio") or "")[:80]
+        out.append(f"- @{aid}（{au.get('nickname') or '-'}、フォロワー {fol:,}{'、認証あり' if au.get('verified') else ''}、"
+                   f"界隈 {(labs.get(s) or {}).get('community', '-')}）" + (f" bio: {bio}" if bio else "") + f" 代表の投稿: {vline(recs[s])}")
+        if len(out) >= n:
+            break
+    return out
+
+
+def research_materials(a) -> str:
+    s = a.meta.get("song") or {}
+    recs = records(a)
+    rel = release_info(a)
+    first = min(recs.values(), key=lambda r: r["date"]) if recs else None
+    u = ugc_total(a)
+    stick = collections.Counter(x for r in recs.values() for x in (r.get("sticker_texts") or []))
+    return (f"#### 曲\n- 曲名: {s.get('title', '')}／アーティスト: {s.get('artist', '')}\n" +
+            (f"- TikTok の楽曲ページが作られた日: {rel['date']}\n" if rel else "") +
+            (f"- TikTok で最初の投稿: {first['date']}\n" if first else "") +
+            (f"- TikTok の UGC 数: {fmt_count(u['n'])}（{u['at']} 時点）\n" if u else "") +
+            f"- 分析の時点: {datetime.date.today().isoformat()}\n"
+            "\n#### よく使われた部分（動画の画面に載った文字の上位。歌詞の構成を調べる手掛かり）\n" +
+            ("\n".join(f"- {w[:40]}（{n}本）" for w, n in stick.most_common(10)) or "（なし）") +
+            "\n\n#### 要のアカウント（公に活動していそうなもの。素性を調べてよいのは、この中の本人・公式・芸能人・事務所所属のタレントだけ）\n" +
+            ("\n".join(key_accounts(a)) or "（なし）") +
+            "\n\n拡散の流れは read の `pathway`（拡散経路の下書き）、界隈ごとの反応は `synthesis`。")
+
+
+def glossary_types() -> str:
+    """著者のバズ曲の分類（用語集の B 章「バズの定義と分類」。新しい記事から足した語は read の kb:glossary の末尾）"""
+    p = KB_DIR / "distilled" / "GLOSSARY.md"
+    text = p.read_text(encoding="utf-8") if p.exists() else ""
+    m = re.search(r"(?ms)^## B\..*?(?=^## )", text)
+    return m.group(0).strip() if m else "（用語集が読めない。read の kb:glossary の B 章）"
+
+
+def era_materials(a) -> str:
+    """時代背景の材料づくりに渡すもの: 分析の要約・使われ方・調べた曲の情報・分類・楽曲分析の記事の一覧・同じ時期の月報"""
+    cs = cards(a)
+    rel = release_info(a)
+    recs = records(a)
+    lo = rel["date"] if rel else min(r["date"] for r in recs.values())
+    hi = datetime.date.today().isoformat()
+    monthly = sorted((c_ for c_ in cs if c_.get("kind") == "流行曲Report"), key=lambda c_: c_["date"])
+    near = [c_ for c_ in monthly if lo <= c_["date"] <= hi]
+    if len(near) < 2:   # 新しい曲で月報がまだ無い: 直前のものを足す
+        near = [c_ for c_ in monthly if c_["date"] < lo][-(3 - len(near)):] + near
+    songs = [c_ for c_ in cs if c_.get("kind") == "楽曲分析"]
+    def card(c_):
+        return (f"- `{c_['file'].replace('.md', '')}`（{c_.get('date')}）{c_.get('song') or c_.get('title')} / {c_.get('artist') or '-'}"
+                f" — 型: {c_.get('buzz_type') or '-'}。経路: {str(c_.get('pathway') or '-')[:80]}")
+    return ("#### この曲の分析の要約\n" + analysis_summary(a)[:6000] + "\n\n" + music_materials(a) + "\n\n" +
+            research_block(a, ("song",), "ウェブで調べた曲の情報") +
+            "\n\n#### 著者のバズ曲の分類（用語集の B 章）\n" + glossary_types() +
+            "\n\n#### 楽曲分析の記事の一覧（似た位置づけの曲を選ぶ。読むときは `note:<名前>`）\n" + "\n".join(card(c_) for c_ in songs) +
+            f"\n\n#### 同じ時期の月報（この曲の公開 {lo} から分析の時点まで。足りなければ直前のもの。読むときは `note:<名前>`）\n" +
+            ("\n".join(f"- `{c_['file'].replace('.md', '')}`（{c_.get('date')}）{c_.get('title')}: {str(c_.get('song') or '')[:120]}"
+                       for c_ in near) or "（なし）"))
+
+
+def era_text(a) -> str:
+    p = a.outputs("era.md")
+    return p.read_text(encoding="utf-8").strip() if p.exists() else "（時代背景の材料は無い。前の形の分析）"
+
+
+def _section_loose(md: str, head: str) -> str:
+    """「### 見出し（添え書き）」も拾う md_section"""
+    m = re.search(rf"(?m)^{re.escape(head)}.*$", md)
+    if not m:
+        return ""
+    nxt = re.search(r"(?m)^#{1,3} ", md[m.end():])
+    return md[m.end():m.end() + nxt.start() if nxt else len(md)].strip()
+
+
+def accept_research(a, raw: str) -> list:
+    obj, err = pr._parse_json(raw)
+    if err:
+        return [err]
+    if not isinstance(obj, dict) or not isinstance(obj.get("web_search"), bool):
+        return ['{"web_search": true, "song": [...], "outside": [...], "people": [...], "not_found": [...]} の形にしてください'
+                '（ウェブ検索が使えないなら {"web_search": false} だけ）']
+    nf = [str(x).strip() for x in obj.get("not_found") or [] if str(x).strip()] if isinstance(obj.get("not_found"), list) else []
+    items, errs = [], []
+    if obj["web_search"]:
+        for kind, need in RESEARCH_KINDS.items():
+            xs = obj.get(kind) or []
+            if not isinstance(xs, list):
+                errs.append(f"{kind} は配列にしてください")
+                continue
+            for i, x in enumerate(xs, 1):
+                if not isinstance(x, dict):
+                    errs.append(f"{kind} の {i} 件目は {{...}} の形に")
+                    continue
+                it = {"kind": kind, **{k: str(v).strip() for k, v in x.items()
+                                       if k not in ("kind", "id") and isinstance(v, (str, int, float)) and str(v).strip()}}
+                miss = [k for k in need if not it.get(k)]
+                if miss:
+                    errs.append(f"{kind} の {i} 件目に {'・'.join(miss)} がありません")
+                if not re.fullmatch(r"https?://\S+", it.get("source", "")):
+                    errs.append(f"{kind} の {i} 件目の source（出どころの URL を1つ）がありません")
+                if kind == "outside" and it.get("as_of") and not re.search(r"\d{4}", it["as_of"]):
+                    errs.append(f"outside の {i} 件目の as_of は値の時点（YYYY-MM-DD）に")
+                items.append(it)
+        if not items and not nf:
+            errs.append("調べたことが1件もありません。探して見つからなかったなら、何を探したかを not_found に"
+                        "（ウェブ検索が使えないなら web_search を false に）")
+        if len(items) > 60:
+            errs.append(f"{len(items)} 件あります。記事に使えるものを 40 件までに")
+    if errs:
+        return errs[:20]
+    for i, it in enumerate(items, 1):
+        it["id"] = f"W{i}"
+    res = {"web_search": obj["web_search"], "at": pr._now(), "items": items, "not_found": nf}
+    pr._write_json(a.outputs("research.json"), res)
+    pr._write_text(a.outputs("research.md"), research_md(res))
+    return []
+
+
+def accept_era(a, raw: str) -> list:
+    md = pr._strip_fence(raw).strip()
+    errs = [f"見出し `{h}` がありません" for h in ERA_HEADS if h not in md]
+    ok = {c_["file"].replace(".md", "") for c_ in cards(a)}
+    bad = sorted(f for f in set(KB_FILE_RE.findall(md)) if f not in ok)
+    if bad:
+        errs.append(f"一覧に無い記事の名前があります: {bad[:5]}（材料の一覧にある名前だけ。分析する曲を扱った記事は使わない）")
+    if len(set(KB_FILE_RE.findall(_section_loose(md, "### 似た位置づけの曲")))) < 2:
+        errs.append("「似た位置づけの曲」に、読んだ記事の名前（`2025-04-03_n…` の形）を2本以上添えてください")
+    if len(md) > 6000:
+        errs.append(f"{len(md)} 字あります。3,000 字程度に")
+    if errs:
+        return errs
+    pr._write_text(a.outputs("era.md"), md + "\n")
+    return []
+
+
 def common_materials(a, base) -> str:
     """執筆・構成案の材料の頭: 曲全体の UGC 数を先に。集めた本数は「記事に書かない手掛かり」として"""
     recs = records(a)
@@ -1319,7 +1559,11 @@ def outline_materials(a, base) -> str:
                       "、".join(vline(recs[s]) for s in p.get("reps", []) if s in recs) for p in ph) +
             "\n\n#### 再生数順では落ちるが経路上重要な動画\n" + ("\n".join(f"- {vline(recs[s])}" for s in ov if s in recs) or "（なし）") +
             "\n\n#### 再生上位\n" + "\n".join(f"- {vline(r)}" for r in top) +
-            "\n\n" + intro_materials(a))
+            "\n\n" + intro_materials(a) +
+            "\n\n" + research_block(a, ("outside",), "ウェブで調べた TikTok の外の指標（曲の情報・人物は read の `research`）") +
+            "\n\n#### 時代背景の材料の結論（全体は read の `era`）\n" +
+            (_section_loose(era_text(a), "### この曲の型") + "\n" + _section_loose(era_text(a), "### この曲の立ち位置")
+             if a.outputs("era.md").exists() else "（無い）"))
 
 
 def outline(a):
@@ -1334,7 +1578,8 @@ def outline_md(o: dict, chs: list) -> str:
         c_ = by.get(cid) or {}
         out.append(f"#### `{cid}` — {c_.get('role', '')}")
         for cl in c_.get("claims") or []:
-            ev = "、".join(f"seq {e['seq']}" if "seq" in e else f"cid {e['cid']}" if "cid" in e else str(e.get("number", ""))
+            ev = "、".join(f"seq {e['seq']}" if "seq" in e else f"cid {e['cid']}" if "cid" in e else
+                          f"[{e['web']}]" if "web" in e else str(e.get("number", ""))
                           for e in cl.get("evidence") or [] if isinstance(e, dict))
             out.append(f"- {cl.get('claim', '')}" + ("（推測）" if cl.get("guess") else "") + (f" ／ 根拠: {ev}" if ev else ""))
         if c_.get("bridge"):
@@ -1448,6 +1693,7 @@ def write_prompt(a, t, base, st):
                      f"- 下書きの代表: " + "、".join(vline(recs[s]) for s in p.get("reps", []) if s in recs) +
                      f"\n\n#### この段階の界隈（初出の順。最初期・再生上位の動画）\n" + "\n".join(blocks) +
                      (f"\n\n#### この段階の代表動画のコメント分析（{len(va_lines)}本）\n" + "\n".join(va_lines) if va_lines else "") +
+                     "\n\n" + research_block(a, ("people",), "ウェブで調べた、要のアカウントの素性（所属・経歴は推測せず、ここにあれば言い切る）") +
                      "\n\n界隈ごとのコメント分析（採用文脈と反応）は read の `synthesis`。拡散経路の下書き全体は `pathway`。")
         cat += [pr._catalog_line("synthesis", "界隈ごとの統合（コメント分析のまとめ）"), pr._catalog_line("pathway", "拡散経路の下書き")]
         spec = ("この段階で何が起きたかを書く。界隈を丸数字で並べ（①…②…）、界隈ごとに**【この界隈に使われた理由（インサイト）】**と"
@@ -1464,6 +1710,7 @@ def write_prompt(a, t, base, st):
         ov = (pr._read_json(a.outputs("phases.json"), {}) or {}).get("overlooked") or []
         materials = (f"{common}\n\n#### 段階の要約\n" + "\n".join(f"- {p['id']} {p['name']}: {p.get('summary')}" for p in ph) +
                      "\n\n#### 再生数順では落ちるが経路上重要な動画\n" + ("\n".join(f"- {vline(recs[s])}" for s in ov if s in recs) or "（なし）") +
+                     "\n\n" + research_block(a, ("people",), "ウェブで調べた、要のアカウントの素性") +
                      "\n\n拡大経路の章は read の `chapter:path_P1` など、界隈ごとの統合は `synthesis`、下書きは `pathway`。")
         cat += [pr._catalog_line("chapter:path_P1 …", "書き終えた拡大経路の章"), pr._catalog_line("synthesis", "界隈ごとの統合"),
                 pr._catalog_line("pathway", "拡散経路の下書き")]
@@ -1473,23 +1720,37 @@ def write_prompt(a, t, base, st):
                 "記事に出どころは書かない）。")
         heading, length = heading_of(a, ch), "2,000〜4,000字"
     elif ch == "music":
-        materials = music_materials(a) + "\n\n" + common
-        spec = ("`## 3. 楽曲の音楽的特徴（内的要因）`・`## 4. 楽曲構成の整理（切り出し箇所）`・`## 5. 時代背景における本楽曲の立ち位置` の3つの見出しを立てる。"
-                "このデータには音源・歌詞・年代別のリスナーが無い。**データで言えること（尺・元音源の割合・提案語・画面の文字・コメントの言及）だけを短く書き、"
-                "言えない部分は「ここは人の考察を入れる場所」と書いて空ける。埋めない。**")
-        heading, length = heading_of(a, ch), "800〜2,000字"
+        materials = (music_materials(a) + "\n\n" + research_block(a, ("song",), "ウェブで調べた曲の情報（作り手・BPM・ジャンル・歌詞の構成・本人の言葉）") +
+                     "\n\n#### 時代背景の材料（この曲の型と、似た位置づけの曲・同じ時期の流行。記事の file 名は本文に書かない）\n" + era_text(a) +
+                     "\n\n" + common)
+        cat += [pr._catalog_line("research", "ウェブで調べたこと（全部）"), pr._catalog_line("era", "時代背景の材料")]
+        spec = ("`## 3. 楽曲の音楽的特徴（内的要因）`・`## 4. 楽曲構成の整理（切り出し箇所）`・`## 5. 時代背景における本楽曲の立ち位置` の3つの見出しを立て、"
+                "**3つとも書き切る**（2026-10-06〜。人が書き足す場所を残さない）。\n"
+                "- 3章: 曲そのものの特徴を、ウェブで調べた曲の情報（作り手・編曲・BPM・ジャンル・歌詞・本人や作り手の言葉）と、使われ方"
+                "（画面の文字・検索候補・尺・元音源の割合）、コメントの言及で書く。音の特徴は、出どころ（調べた情報かコメント）のあることだけを言い切る\n"
+                "- 4章: よく使われた部分（画面の文字・台詞）が曲のどこ（イントロ・Aメロ・サビ・台詞）にあたるかを、調べた歌詞の構成と突き合わせて書き、"
+                "なぜそこが切り出されたかを使われ方で説明する\n"
+                "- 5章: 時代背景の材料に沿って著者の型で書く: この曲の型 → 似た位置づけの曲（曲名・アーティスト・時期を具体的に）→ その型の流れ → "
+                "その流れの中で、この曲は何が同じで何が新しいか。型の名前は書いてよいが、教材・過去の記事・月報といった出どころには触れない\n"
+                "調べても分からなかったことには触れない。「音源を分析していない」「ここは人の考察」のような断り書きを書かない。")
+        heading, length = heading_of(a, ch), "2,500〜5,000字"
     elif ch == "result":
-        materials = result_materials(a) + "\n\n" + common + "\n\n分岐点の章は read の `chapter:branch`。"
-        cat.append(pr._catalog_line("chapter:branch", "書き終えた分岐点の章"))
-        spec = ("`## 6. バズった結果得られたもの`（TikTok 内のデータで言えることだけ。TikTok 外の指標は「本データでは扱えない」と明記）・"
-                "`## 7. 今回のヒットの核`（一文で言い切る）・`## 8. 再現性のある要素`（著者の型: 自分でコントロール下に置ける要素だけを①②③で3〜4項目、"
-                "見出しは命令形・名詞句、運の部分は「ここは運」と明示）の3つの見出しを立てる。")
-        heading, length = heading_of(a, ch), "1,500〜3,500字"
+        materials = (result_materials(a) + "\n\n" + research_block(a, ("outside",), "ウェブで調べた TikTok の外の指標") +
+                     "\n\n" + common + "\n\n分岐点の章は read の `chapter:branch`。")
+        cat += [pr._catalog_line("chapter:branch", "書き終えた分岐点の章"), pr._catalog_line("research", "ウェブで調べたこと（全部）")]
+        spec = ("`## 6. バズった結果得られたもの`・`## 7. 今回のヒットの核`（一文で言い切る）・`## 8. 再現性のある要素`（著者の型: 自分でコントロール下に置ける要素だけを"
+                "①②③で3〜4項目、見出しは命令形・名詞句、運の部分は「ここは運」と明示）の3つの見出しを立てる。\n"
+                "6章は、TikTok の中で起きたこと（材料の数字）に加えて、ウェブで調べた TikTok の外の指標（YouTube・サブスク・チャート・出演・ライブなど）を、"
+                "いつの値かを添えて書く。TikTok が伸びた時期と外の動きの前後関係が分かれば、TikTok から外へどう流れたか（流れなかったか）を書く（著者の型）。"
+                "外の指標が材料に無ければ、TikTok の中のことだけで書き切る（「扱えない」「分からない」とは書かない）。")
+        heading, length = heading_of(a, ch), "1,500〜4,000字"
     elif ch == "intro":
-        materials = common + "\n\n" + intro_materials(a) + "\n\n書き終えた章は read の `chapter:branch`・`chapter:result`（結論の先出しに使う）。"
+        materials = (common + "\n\n" + intro_materials(a) + "\n\n" + research_block(a, ("outside",), "ウェブで調べた TikTok の外の指標") +
+                     "\n\n書き終えた章は read の `chapter:branch`・`chapter:result`（結論の先出しに使う）。")
         cat += [pr._catalog_line("chapter:branch, chapter:result", "書き終えた章")]
-        spec = (f"題名 `{heading_of(a, ch)} 〜TikTok今週の1曲 [No.— - YY/MM-K]` の行で始め、文体ガイドの冒頭（挨拶＋対象宣言）→ `## 本楽曲に着目すべき理由`"
-                "（**この曲の UGC 数**・期間・逆説の数字。「※UGCとは…」の定型注記。3パターンの型判定「本楽曲は②…に該当します。何故なら…」）→ `### 先に結論`"
+        spec = (f"題名 `{heading_of(a, ch)} 〜TikTok今週の1曲` の行で始め（号数は付けない）、文体ガイドの冒頭（挨拶＋対象宣言）→ `## 本楽曲に着目すべき理由`"
+                "（**この曲の UGC 数**・期間・逆説の数字。TikTok の外の指標に目立つもの（チャート・MV の再生数など）があれば使ってよい。"
+                "「※UGCとは…」の定型注記。3パターンの型判定「本楽曲は②…に該当します。何故なら…」）→ `### 先に結論`"
                 "（構成案の記事全体の主張を2〜3行の箇条書きで）→ `## 分析方針`（章立ての予告と「それではいきましょう。」）。"
                 "UGC 数は材料の「この曲の UGC 数」を使う。こちらが集めた動画の本数は書かない（方法に触れるなら、"
                 "「楽曲ページの投稿から、広がり方の手掛かりになるものを選んで調べた」のように本数を出さずに一言）。")
@@ -1599,11 +1860,14 @@ def finish_materials(a, t, st) -> dict:
         alive = r.get("enriched")
         lst.append(f"- seq {s}: @{au}（{r['date']}、{fmt_plays(r['plays'])}再生）" +
                    (f" {url_of(vs.get(s, {}))}" if alive else " 削除済み（URL を貼らない）"))
+    used = {int(x) for x in WEB_REF_RE.findall(md)}
+    web = [f"- {research_line(it)}" for it in (research(a) or {}).get("items") or [] if int(it["id"][1:]) in used]
     return {"chapter_title": CHAPTER_TITLES.get(ch) or first_line(a.outputs("chapters", f"{ch}.md")), "i": t["params"]["i"],
             "n": t["params"]["n"], "chapter_md": md,
             "phase_names": "\n".join(f"- {p['id']} → {p['name']}（{p['start']}〜{p['end']}）" for p in phases(a)),
             "community_names": "\n".join(f"- `{k}` → {pr._first_sentence(v)}" for k, v in tax["community"].items() if not k.startswith("_")),
-            "video_list": "\n".join(lst) or "（この章に動画は出てこない）",
+            "video_list": ("\n".join(lst) or "（この章に動画は出てこない）") +
+                          ("\n\n### ウェブで調べた事実の出どころ（この章の [W番号]。印は消す）\n\n" + "\n".join(web) if web else ""),
             "settings": _settings(a, ["style"], t)}
 
 
@@ -1618,17 +1882,27 @@ def done_materials(a) -> dict:
     ver = pr._read_json(a.outputs("verify.json"), {}) or {}
     links = []
     _safe_copy_materials(a)
-    for name, label in (("REPORT.md", "分析レポート"), ("NOTE_BODY.md", "note 用の原稿"),
-                        ("EDITOR_NOTES.md", "書き足すところのメモ"), ("data.zip", "Excel 用のデータ")):
-        if (a.outputs(name)).exists():
-            links.append(f"- [{label}（{name}）]({dl_url(a, name)})")
+    for name in ("NOTE_BODY.md", "REPORT.md", "EDITOR_NOTES.md", "data.zip"):
+        if not a.outputs(name).exists():
+            continue
+        if name in SHOWN and REPORTS_DIR:
+            links.append(f"- [{SHOWN[name][0]}]({dl_url(a, name)}) — {SHOWN[name][1]}")
+        elif name in SHOWN:
+            links.append(f"- [{SHOWN[name][0].removesuffix('.md')}（{name}）]({dl_url(a, name)}) — {SHOWN[name][1]}")
+        else:
+            links.append(f"- [Excel 用のデータ（{name}）]({dl_url(a, name)})")
     ph = phases(a)
     summary = "\n".join(f"- {p['name']}（{p['start']}〜{p['end']}）: {p.get('summary', '')}" for p in ph)
     errs = ver.get("errors") or []
     warns = ver.get("warnings") or []
-    note = ""
+    notes = []
     if errs or warns:
-        note = f"- 検算: 確かめきれなかった点が {len(errs) + len(warns)} 件ある（運営が確認する）。利用者には「数字の一部を運営が確認中」と一言だけ"
+        notes.append(f"- 検算: 確かめきれなかった点が {len(errs) + len(warns)} 件ある（運営が確認する）。利用者には「数字の一部を運営が確認中」と一言だけ")
+    res = research(a)
+    if res is not None and not res.get("web_search"):
+        notes.append("- ウェブ検索: AI のウェブ検索が使えず、曲の情報と TikTok の外の数字は入っていない。3 は「TikTok の中のデータで書き切ってある」と言い換え、"
+                     "ウェブ検索をオンにして「" + a.title + "のレポートの6章に、TikTok の外の数字（YouTube・チャートなど）を調べて足して」と頼めば足せる、と一言添える")
+    note = "\n".join(notes)
     if REPORTS_DIR and links:   # 先頭にフォルダ（2026-10-03 ユーザー「最終の返答に、成果物フォルダや成果物へのリンクを含んで欲しい」）
         links = folder_lines(a) + links + [f"- 週ごとの投稿数と再生（{WEEKLY_CSV}）: 同じフォルダ（Excel で開けます）"]
     head = "**成果物**（この Mac に保存しました）" if REPORTS_DIR else "**成果物**"
@@ -1692,11 +1966,26 @@ def check_chapter(a, md: str, heading: str) -> list:
     if words:
         errs.append(f"読者に見せない作業の言葉・集めた本数の言い方があります: {words[:10]}"
                     "（用語集などの出どころは書かない。数字は曲全体の UGC 数で語り、集めた本数を主語にしない）")
+    errs += check_no_placeholder(body)
+    badw = sorted({int(x) for x in WEB_REF_RE.findall(body)} - research_ids(a))
+    if badw:
+        errs.append(f"材料に無い出どころの番号があります: {['W' + str(x) for x in badw[:10]]}（ウェブで調べたことの [W番号] だけ）")
+    kb = sorted(set(KB_FILE_RE.findall(body)))
+    if kb:
+        errs.append(f"記事の名前（時代背景の材料の出どころ）が本文にあります: {kb[:5]}（曲名・アーティスト名で書き、出どころには触れない）")
     return errs
 
 
+def check_no_placeholder(body: str) -> list:
+    hits = sorted({m.group(0) for m in PLACEHOLDER_RE.finditer(body)})
+    if not hits:
+        return []
+    return [f"空けておく書き方があります: {hits[:5]}（人が書き足す前提の文や、書けないことの断り書きは書かない。"
+            "材料・ウェブで調べたこと・時代背景の材料から言えることで書き切り、分からないことには触れない）"]
+
+
 # 段階の ID（P1〜）は日本語に挟まれても拾う（\b は日本語の文字も語の文字とみなすので「P2の」「段階P2では」を見逃していた）
-INTERNAL_RE = re.compile(r"seq\s*\d+|\bcid\b|(?<![A-Za-z0-9])P\d(?![A-Za-z0-9])|records\.jsonl|本データ|先行工程", re.I)
+INTERNAL_RE = re.compile(r"seq\s*\d+|\bcid\b|(?<![A-Za-z0-9])P\d(?![A-Za-z0-9])|records\.jsonl|本データ|先行工程|\[W\d+\]|" + KB_FILE_RE.pattern, re.I)
 
 
 def check_finished(a, md: str, allowed_urls: set) -> list:
@@ -1709,6 +1998,7 @@ def check_finished(a, md: str, allowed_urls: set) -> list:
     if words:
         errs.append(f"読者に見せない作業の言葉・集めた本数の言い方が残っています: {words[:10]}"
                     "（読者に向けた説明に言い換えるか消す。数字は曲全体の UGC 数で語る）")
+    errs += check_no_placeholder(body)
     tax = pr._taxonomy(a)
     keys = [k for ax in ("community", "format", "motive") for k in tax.get(ax, {}) if "_" in k]
     left = sorted({k for k in keys if re.search(rf"(?<![A-Za-z0-9_]){re.escape(k)}(?![A-Za-z0-9_])", body)})
@@ -1967,6 +2257,12 @@ def _accept(a, t: dict, raw: str, st: dict) -> list:
         pr._write_text(a.outputs("references", f"{t['params']['i']:02d}.md"), md + "\n")
         return []
 
+    if typ == "research":
+        return accept_research(a, raw)
+
+    if typ == "era":
+        return accept_era(a, raw)
+
     if typ == "outline":
         obj, err = pr._parse_json(raw)
         if err:
@@ -2020,11 +2316,16 @@ def _accept(a, t: dict, raw: str, st: dict) -> list:
         obj, err = pr._parse_json(raw)
         if err:
             return [err]
-        if not isinstance(obj, dict) or not obj.get("title") or not obj.get("editor_notes_md"):
-            return ["title と editor_notes_md を入れてください"]
-        if not all(isinstance(obj.get(k), str) for k in ("title", "editor_notes_md")) or \
+        if not isinstance(obj, dict) or not str(obj.get("title", "")).strip() or not str(obj.get("guesses_md", "")).strip():
+            return ["title と guesses_md（推測で書いたところ。無ければ「なし」）を入れてください"]
+        if not all(isinstance(obj.get(k), str) for k in ("title", "guesses_md")) or \
                 not isinstance(obj.get("changes_md") or "", str):
-            return ["title・editor_notes_md（・changes_md）は文字列にしてください（editor_notes_md は Markdown の文字列）"]
+            return ["title・guesses_md（・changes_md）は文字列にしてください（guesses_md は Markdown の文字列）"]
+        errs = check_no_placeholder(obj["title"])
+        if re.search(r"No\.\s*—|No\.\s*-", obj["title"]):
+            errs.append("題名に号数（No.—）を付けないでください（「【曲名 / アーティスト】Hitの理由分析レポート 〜TikTok今週の1曲」の形）")
+        if errs:
+            return errs
         pr._write_json(a.outputs("note_meta.json"), obj)
         return []
 
@@ -2093,6 +2394,7 @@ def _check_evidence(a, cid_: str, claims, recs=None, known=None) -> list:
     errs = []
     recs = records(a) if recs is None else recs
     known = all_cids(a) if known is None else known
+    web = research_ids(a)
     for x in claims:
         if not isinstance(x, dict):
             errs.append(f"`{cid_}` の claims の各要素は {{\"claim\": \"主張\", \"evidence\": [...]}} のオブジェクトにしてください"
@@ -2113,6 +2415,10 @@ def _check_evidence(a, cid_: str, claims, recs=None, known=None) -> list:
                     e["seq"] = s
             if isinstance(e, dict) and "cid" in e and str(e["cid"]) not in known:
                 errs.append(f"`{cid_}` の根拠に入力に無い cid {e['cid']}")
+            if isinstance(e, dict) and "web" in e:
+                m = re.fullmatch(r"\[?W(\d+)\]?", str(e["web"]).strip())
+                if not m or int(m.group(1)) not in web:
+                    errs.append(f"`{cid_}` の根拠に、ウェブで調べたことに無い番号 {e['web']}（read の research の W番号）")
     return errs
 
 
@@ -2197,7 +2503,7 @@ def accept_review(a, t, raw, st) -> list:
     new += [_task(st, "finish", "ai", f"note 用に仕上げ直す（{i}/{len(fin)}: {CHAPTER_TITLES.get(ch) or '拡大経路 ' + ch[5:]}）",
                   {"chapter": ch, "i": i, "n": len(fin)}) for i, ch in enumerate(fin, 1)]
     if pm.get("thesis_changed"):
-        new.append(_task(st, "finish_title", "ai", "題名と執筆メモ（記事全体の主張を変えたので）"))
+        new.append(_task(st, "finish_title", "ai", "題名と確認メモ（記事全体の主張を変えたので）"))
     insert_after(st, t, new)
     rec = pr._read_json(deepen_record(a, pm["round"]), {}) or {}
     rec.update({"review_note": obj.get("note_to_user"), "fixes": fixes, "changed_all": fin, "reviewed_at": pr._now()})
@@ -2391,7 +2697,7 @@ def service_reps(a, t: dict, st: dict) -> dict:
     for i, ch in enumerate(order, 1):
         new.append(_task(st, "finish", "ai", f"note 用に仕上げる（{i}/{len(order)}: {CHAPTER_TITLES.get(ch) or '拡大経路 ' + ch[5:]}）",
                          {"chapter": ch, "i": i, "n": len(order)}))
-    new.append(_task(st, "finish_title", "ai", "題名と執筆メモ"))
+    new.append(_task(st, "finish_title", "ai", "題名と確認メモ"))
     new.append(_task(st, "assemble", "service", "note 用原稿の組み立て（サービス）"))
     new.append(_task(st, "verify", "service", "検算（サービス）"))
     new.append(_task(st, "export", "service", "Excel 用のデータ（サービス）"))
@@ -2424,6 +2730,11 @@ def service_plan(a, t: dict, st: dict) -> dict:
         new.append(_task(st, "ref_select", "ai", "参考にする過去記事を選ぶ"))
         for i in range(1, c["n_refs"] + 1):
             new.append(_task(st, "ref_digest", "ai", f"参考記事の章立てと論理（{i}/{c['n_refs']}）", {"i": i, "n": c["n_refs"], "file": None}))
+    # ウェブで調べる・時代背景の材料（2026-10-06〜）。切り直しのあとは、前の版のものを使い回す（曲の外のことは界隈に依らない）
+    reuse_research = bool(rc) and research_ready(a)
+    if not reuse_research:
+        new.append(_task(st, "research", "ai", "ウェブで調べる（曲の情報・TikTok の外の指標・要のアカウント）"))
+        new.append(_task(st, "era", "ai", "時代背景の材料（似た位置づけの曲の記事と、同じ時期の流行を読む）"))
     new.append(_task(st, "outline", "ai", "構成案（記事全体の主張と、章ごとの主張・根拠）"))
     chs = [f"path_{p['id']}" for p in ph] + ["branch", "music", "result", "intro"]
     for i, ch in enumerate(chs, 1):
@@ -2434,14 +2745,15 @@ def service_plan(a, t: dict, st: dict) -> dict:
     for i, ch in enumerate(order, 1):
         new.append(_task(st, "finish", "ai", f"note 用に仕上げる（{i}/{len(order)}: {CHAPTER_TITLES.get(ch) or '拡大経路 ' + ch[5:]}）",
                          {"chapter": ch, "i": i, "n": len(order)}))
-    new.append(_task(st, "finish_title", "ai", "題名と執筆メモ"))
+    new.append(_task(st, "finish_title", "ai", "題名と確認メモ"))
     new.append(_task(st, "assemble", "service", "note 用原稿の組み立て（サービス）"))
     new.append(_task(st, "verify", "service", "検算（サービス）"))
     new.append(_task(st, "export", "service", "Excel 用のデータ（サービス）"))
     new.append(_task(st, "done", "done", "完了（界隈の切り直し）" if rc else "完了", {"recut": rc} if rc else {}))
     insert_after(st, t, new)
     return {"communities": len(comms), "comment_videos": sum(len(v) for v in by_c.values()), "refs": c["n_refs"],
-            "cells_without_comments": len(missing), "same_song_excluded": len(same_song_files(a)), "reuse_refs": reuse_refs}
+            "cells_without_comments": len(missing), "same_song_excluded": len(same_song_files(a)), "reuse_refs": reuse_refs,
+            "reuse_research": reuse_research}
 
 
 def refs_ready(a) -> bool:
@@ -2488,7 +2800,49 @@ def appendix(a) -> str:
         rec = recut_record(a, n_rc)
         lines.append(f"- 界隈の分け方: 初めの版のあと、利用者の指示で切り直した（{n_rc}回。最後は {str(rec.get('at', ''))[:10]}）。"
                      "切り直した界隈で、読むべき動画にコメントが無かったものは取り足した")
+    res = research(a)
+    if res is not None:
+        if res.get("web_search"):
+            lines += ["", f"### ウェブで調べたことの出どころ（{str(res.get('at', ''))[:10]} に AI が調べた。本文の [W番号]）", ""]
+            lines += [f"- {research_line(it)}" for it in res.get("items") or []] or ["- （見つかったものは無い）"]
+        else:
+            lines.append("- ウェブで調べたこと: AI のウェブ検索が使えず、曲の情報と TikTok の外の指標は入っていない")
     return "\n".join(lines) + "\n"
+
+
+def memo_md(a, meta: dict, chapters: list) -> str:
+    """確認メモ（EDITOR_NOTES.md。利用者のフォルダでは「確認メモ.md」）: 公開の前に事実を確かめたいときのもの。書き足す場所の一覧ではない
+    （2026-10-06〜。前は「書き足すところのメモ」だった。レポートは書き切る）"""
+    if "guesses_md" not in meta and meta.get("editor_notes_md"):   # 前の形の仕上げ（2026-10-06 より前）: そのまま
+        return meta["editor_notes_md"].strip() + "\n\n## 仕上げで変えたこと\n\n" + (meta.get("changes_md") or "").strip() + "\n"
+    s = a.meta.get("song") or {}
+    out = [f"# 確認メモ（{s.get('title', '')} / {s.get('artist', '')}）", "",
+           "レポートは、そのまま読める・公開できる形に書き切ってあります。このメモは、公開の前に事実を確かめたいときに使ってください。", "",
+           "## ウェブで調べたこと（出どころ）", ""]
+    res = research(a)
+    if res is None:
+        out.append("この分析には、ウェブで調べる工程がありませんでした（UGC Analyzer 0.6.2 より前に始めた分析）。")
+    elif not res.get("web_search"):
+        out.append("AI のウェブ検索が使えなかったため、曲の情報と TikTok の外の数字（YouTube・チャートなど）は入っていません。"
+                   "ウェブ検索をオンにして、AI に「" + a.title + "のレポートの6章に、TikTok の外の数字を調べて足して」と頼めば足せます。")
+    else:
+        out += [f"AI が {str(res.get('at', ''))[:10]} にウェブで調べた値です。数字は日々変わるので、公開の前に出どころを開いて確かめると確実です。"
+                "（[W番号] は「レポート（根拠の番号つき）」の本文の印と同じです）", ""]
+        for kind, head in RESEARCH_HEADS.items():
+            xs = [it for it in res.get("items") or [] if it["kind"] == kind]
+            if xs:
+                out += [f"### {head}", ""] + [f"- {research_line(it)}" for it in xs] + [""]
+        if res.get("not_found"):
+            out += ["### 探したが見つからなかったもの（レポートには書いていません）", ""] + [f"- {x}" for x in res["not_found"]] + [""]
+    out += ["", "## 推測で書いたところ", "",
+            "本文で「〜と見ています」のように推測の形にした事実のうち、確かめれば言い切れるものです。", "",
+            (meta.get("guesses_md") or "なし").strip(), ""]
+    recs = records(a)
+    gone = [x for x in mentioned_seqs(a, chapters) if x in recs and not recs[x].get("enriched")]
+    if gone:
+        out += ["## 削除済みで埋め込めなかった動画", ""] + [
+            f"- @{(recs[x].get('author') or {}).get('id')}（{recs[x]['date']}）— 本文では「（現在は削除済み）」と書いています" for x in gone]
+    return "\n".join(out).rstrip() + "\n"
 
 
 def service_assemble(a, st: dict) -> dict:
@@ -2508,9 +2862,8 @@ def service_assemble(a, st: dict) -> dict:
         if title and not body.lstrip().startswith("# "):
             body = f"# {title}\n\n{body}"
         pr._write_text(a.outputs("NOTE_BODY.md"), body + "\n")
-        if meta.get("editor_notes_md"):
-            pr._write_text(a.outputs("EDITOR_NOTES.md"), meta["editor_notes_md"].strip() + "\n\n## 仕上げで変えたこと\n\n" +
-                           (meta.get("changes_md") or "").strip() + "\n")
+        if meta.get("guesses_md") or meta.get("editor_notes_md"):
+            pr._write_text(a.outputs("EDITOR_NOTES.md"), memo_md(a, meta, order))
     return {"report_chars": len(a.outputs("REPORT.md").read_text(encoding="utf-8")),
             "note": a.outputs("NOTE_BODY.md").exists()}
 
@@ -2583,6 +2936,8 @@ def service_verify(a, st: dict) -> dict:
     for c_ in sorted(cids):
         if c_ not in known:
             errors.append(f"入力に無い cid: {c_}")
+    for w in sorted({int(x) for x in WEB_REF_RE.findall(rep)} - research_ids(a)):
+        errors.append(f"ウェブで調べたことに無い出どころの番号: W{w}")
     for s, num, unit, snip, bound in play_claims(rep, bounds=True):
         if s not in recs:
             continue
@@ -2769,6 +3124,19 @@ def units_of(a, name: str, st: dict):
         if not a.outputs("outline.md").exists():
             raise pr.RunnerError("構成案はまだありません")
         return _md_units(a.outputs("outline.md"))
+    if name == "research":
+        if not a.outputs("research.md").exists():
+            raise pr.RunnerError("ウェブで調べたことはありません（この分析にはその工程が無いか、まだ）")
+        return _md_units(a.outputs("research.md"))
+    if name == "era":
+        if not a.outputs("era.md").exists():
+            raise pr.RunnerError("時代背景の材料はありません（この分析にはその工程が無いか、まだ）")
+        return _md_units(a.outputs("era.md"))
+    if name.startswith("note_chapter:"):
+        p = a.outputs("note_chapters", re.sub(r"[^0-9A-Za-z_]", "", name.split(":", 1)[1]) + ".md")
+        if not p.exists():
+            raise pr.RunnerError(f"{name} はまだありません（仕上げた章）")
+        return _md_units(p)
     if name == "pathway":
         p = a.outputs("pathway.md")
         if not p.exists():

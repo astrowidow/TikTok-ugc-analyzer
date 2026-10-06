@@ -385,7 +385,10 @@ class TestAcceptChecks(Base):
 
     def test_finish_title_and_review(self):
         self.assertTrue(self.accept(task("finish_title"), {"title": "題"}))
-        self.assertEqual(self.accept(task("finish_title"), {"title": "題", "editor_notes_md": "メモ"}), [])
+        # 0.6.2〜: 確認メモはサービスが組み立てる。AI は推測で書いたところ（guesses_md）だけ。題名に号数（No.—）は付けない
+        self.assertTrue(self.accept(task("finish_title"), {"title": "題", "editor_notes_md": "メモ"}))
+        self.assertTrue(self.accept(task("finish_title"), {"title": "題 [No.— - 26/10-1]", "guesses_md": "なし"}))
+        self.assertEqual(self.accept(task("finish_title"), {"title": "題", "guesses_md": "メモ"}), [])
         rv = task("review", {"community": "dancer", "round": 1, "instruction": "x", "changed": [{"chapter": "path_P1", "why": "w"}],
                              "thesis_changed": True}, n=70)
         st = state(rv, task("done", kind="done", n=71))
@@ -726,9 +729,9 @@ class TestReviseAndDone(Base):
         self.assertIn("finish_title", t["task_id"])
         bad = pr.submit("u1", t["task_id"], json.dumps({"title": "題0"}))
         self.assertFalse(bad["ok"])
-        r1 = pr.submit("u1", t["task_id"], json.dumps({"title": "題1", "editor_notes_md": "メモ1"}, ensure_ascii=False))
+        r1 = pr.submit("u1", t["task_id"], json.dumps({"title": "題1", "guesses_md": "メモ1"}, ensure_ascii=False))
         self.assertTrue(r1["ok"], r1)
-        r2 = pr.submit("u1", t["task_id"], json.dumps({"title": "題2", "editor_notes_md": "メモ2"}, ensure_ascii=False))
+        r2 = pr.submit("u1", t["task_id"], json.dumps({"title": "題2", "guesses_md": "メモ2"}, ensure_ascii=False))
         self.assertTrue(r2["ok"])
         self.assertIn("受領済み", r2["text"])
         self.assertEqual(json.loads((self.d / "outputs" / "note_meta.json").read_text(encoding="utf-8"))["title"], "題1")
@@ -781,9 +784,12 @@ class TestAppFormAndRead(Base):
         folder = rep / "テスト曲（2026-10-06）"
         self.assertIn("この Mac に保存しました", text)
         self.assertIn("file://", text)
-        self.assertLess(text.index("フォルダ:"), text.index("REPORT.md"))
-        self.assertTrue((folder / "REPORT.md").exists())
-        self.assertTrue((folder / "NOTE_BODY.md").exists())
+        # 0.6.2〜: 利用者のフォルダには日本語の名前で置く（NOTE_BODY → レポート.md、REPORT → レポート（根拠の番号つき）.md）。読むほうを先に
+        self.assertLess(text.index("フォルダ:"), text.index("[レポート.md]"))
+        self.assertLess(text.index("[レポート.md]"), text.index("[レポート（根拠の番号つき）.md]"))
+        self.assertTrue((folder / "レポート（根拠の番号つき）.md").exists())
+        self.assertTrue((folder / "レポート.md").exists())
+        self.assertFalse((folder / "REPORT.md").exists())
         self.assertFalse((folder / "data.zip").exists())                      # 無い成果物は写さず、リンクも出さない
         self.assertNotIn("data.zip", text)
         weekly = (folder / fw.WEEKLY_CSV).read_bytes()

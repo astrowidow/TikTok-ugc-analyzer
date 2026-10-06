@@ -595,8 +595,18 @@ class TestCodexLink(unittest.TestCase):
         self.assertIn("name: ugc-analyzer", (cl.SKILL_DIR / "SKILL.md").read_text(encoding="utf-8"))
         self.assertTrue((cl.SKILL_DIR / "agents" / "openai.yaml").exists())
         self.assertEqual(cl.status(), "connected")
+        self.assertEqual(d["web_search"], "live")   # ウェブ検索を最新のページで（いちばん上の階層。notify の次・最初の表の前）
+        self.assertLess(text.index(cl.WEB_LINE), text.index("[desktop]"))
         cl.connect()   # 2回押しても同じ
         self.assertEqual(cl.CONFIG.read_text(encoding="utf-8"), text)
+
+    def test_web_search_respects_user(self):
+        cl = self.cl
+        cl.CONFIG.parent.mkdir(parents=True)
+        cl.CONFIG.write_text('web_search = "cached"\n\n' + self.EXISTING, encoding="utf-8")
+        cl.connect()
+        self.assertEqual(self._cfg()["web_search"], "cached")   # 利用者が決めていれば触らない
+        self.assertNotIn(cl.WEB_LINE, cl.CONFIG.read_text(encoding="utf-8"))
 
     def test_new_file_and_states(self):
         cl = self.cl
@@ -632,6 +642,7 @@ class TestCodexLink(unittest.TestCase):
         cl.disconnect()
         d = self._cfg()
         self.assertNotIn("ugc-analyzer", d["mcp_servers"])
+        self.assertNotIn("web_search", d)   # 足した1行も外す
         self.assertEqual(d["features"], {"foo": True})
         self.assertIn("node_repl", d["mcp_servers"])
 

@@ -48,7 +48,7 @@ description: UGC Analyzer（この Mac のアプリ。TikTok の楽曲の UGC �
 - 「UGC Analyzer で〇〇／△△を分析して」→ `start_analysis`（曲名とアーティスト名。30〜40秒かかる）
 - 名指しの無い「〇〇を分析して」→ 道具を使わず、ふつうに答える
 - すでにある分析の頼み（「〇〇の分析を続けて」など）→ 分析があるか分からなければ、まず `status`（読むだけ）で、その曲の分析がこの Mac にあるかを確かめる。無ければ道具を使わず、ふつうに答える
-- 分析の状態（集めたデータ・進み具合・成果物）はアプリが持っている。「続けて」は会話の続きではない。会話の履歴や前のスレッド、ウェブを探さない
+- 分析の状態（集めたデータ・進み具合・成果物）はアプリが持っている。「続けて」は会話の続きではない。分析の状態を会話の履歴や前のスレッド、ウェブで探さない（指示書が「ウェブで調べる」と言う仕事では、ウェブ検索で調べる）
 - 「〇〇の分析を続けて」→ `next_task`（analysis_id に曲名）。返ってきた指示書どおりに作業して `submit` し、また `next_task`。kind が done か wait になるまで、利用者に確認せずに繰り返す。kind が ask_user のときだけ、その内容を利用者に見せて答えを待つ
 - 今後ずっと使う設定・指示書・知識ベースの頼みは、「UGC Analyzer の〜」と名指しがあるか、分析の会話の途中のときだけ
 - 「界隈の確認はいらない」「確認なしで最後まで書いて」と言われたら、そのとき呼ぶ `start_analysis` か `next_task` に skip_confirm=true を付ける（界隈の案で止まらず、案のまま最後まで書く。使った界隈は完了の知らせで伝わる）
@@ -67,6 +67,12 @@ SKILL_FILES = {"SKILL.md": SKILL_MD, "agents/openai.yaml": OPENAI_YAML}
 _OUR_HEADER = re.compile(r"""^\s*\[\s*mcp_servers\s*\.\s*(?:"ugc-analyzer"|'ugc-analyzer'|ugc-analyzer)\s*(?:\.[^\]]*)?\]\s*(?:#.*)?$""")
 _ANY_HEADER = re.compile(r"^\s*\[")
 _OUR_MARK = re.compile(r"^\s*# UGC (?:Collector|Analyzer) の道具")   # 前の版（アプリ名が UGC Collector のころ）の目印も
+
+
+# ウェブ検索を live に（2026-10-06〜。docs/WEB_RESEARCH.md）。Codex の既定（cached）は OpenAI の索引だけを見るので、YouTube の再生数のような
+# 日々変わる数字が取れない。設定ファイルのいちばん上（最初の [ ] より前）に書く。利用者がすでに web_search を決めていれば触らない
+WEB_LINE = 'web_search = "live"   # UGC Analyzer が足した（曲の情報・チャートを最新のページで調べるため）'
+_OUR_WEB = re.compile(r'^\s*web_search\s*=\s*"live"\s*#\s*UGC Analyzer')
 
 
 class LinkError(Exception):
@@ -112,10 +118,25 @@ def _strip(text: str) -> str:
             continue
         if ours and _ANY_HEADER.match(line):
             ours = False
-        if ours or _OUR_MARK.match(line):
+        if ours or _OUR_MARK.match(line) or _OUR_WEB.match(line):
             continue
         out.append(line)
     return "\n".join(out).rstrip("\n")
+
+
+def _with_web(text: str) -> str:
+    """いちばん上の階層に web_search が無ければ、最初の表の見出しの前に足す"""
+    try:
+        if "web_search" in tomllib.loads(text):
+            return text
+    except tomllib.TOMLDecodeError:
+        return text
+    lines = text.splitlines()
+    i = next((k for k, line in enumerate(lines) if _ANY_HEADER.match(line)), len(lines))
+    head = lines[:i]
+    while head and not head[-1].strip():   # 前に足して外した跡の空行をためない（何度つないでも同じ文になるように）
+        head.pop()
+    return "\n".join(head + ([""] if head else []) + [WEB_LINE, ""] + lines[i:]).rstrip("\n")
 
 
 def _load() -> dict:
@@ -177,8 +198,8 @@ def connect(enable: bool = False) -> str:
         raise LinkError(f"ChatGPT（Codex）の設定ファイルが読めません（UTF-8 でない・壊れている可能性）: {e}") from e
     prev = (_load().get("mcp_servers") or {}).get(SERVER_NAME)   # 読めない設定ファイルには書き足さない
     disabled = not enable and isinstance(prev, dict) and prev.get("enabled") is False
-    base = _strip(old)
-    new = (base + "\n\n" if base else "") + _block(disabled)
+    base = _with_web(_strip(old))   # ウェブ検索を live に（利用者が決めていれば触らない）
+    new = base + "\n\n" + _block(disabled)
     try:
         cur = (tomllib.loads(new).get("mcp_servers") or {}).get(SERVER_NAME) or {}
     except tomllib.TOMLDecodeError as e:

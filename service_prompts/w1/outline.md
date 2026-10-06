@@ -7,7 +7,12 @@
 
 - 参考記事の章立てと論理の運び（read の `refs`。{{n_refs}} 本ぶん）
 - 界隈ごとのコメント分析（read の `synthesis`）
+- ウェブで調べたこと（read の `research`。曲の情報・TikTok の外の指標・要のアカウントの素性。項目ごとに `W番号`）と、
+  時代背景の材料（read の `era`。この曲の型と、似た位置づけの曲）
 - 下の材料
+
+楽曲の特徴・切り出し箇所・時代背景（`music`）、バズった結果（`result`）、冒頭（`intro`）は、ウェブで調べたことと時代背景の材料も根拠にして、
+**データから書けない部分を残さない計画**にする（人が書き足す場所を作らない）。TikTok の外の指標が見つかっていれば、記事全体の主張にも使ってよい。
 
 ### 決めること
 
@@ -35,9 +40,9 @@
 {"thesis": "記事全体の主張（一言）",
  "title_idea": "記事の題名の案",
  "chapters": [{"id": "<章の id>", "role": "この章の役割",
-               "claims": [{"claim": "主張", "evidence": [{"seq": 12}, {"cid": "7534…"}, {"number": "UGC 約13万（楽曲ページ、取得時点）"}], "guess": false}],
+               "claims": [{"claim": "主張", "evidence": [{"seq": 12}, {"cid": "7534…"}, {"web": "W3"}, {"number": "UGC 約13万（楽曲ページ、取得時点）"}], "guess": false}],
                "bridge": "次の章へのつなぎ（一文）"}]}
 ```
 
 - chapters は上の章の並びの id を全部、この順で
-- evidence の seq・cid は、材料と `synthesis` にあるものだけ
+- evidence の seq・cid は、材料と `synthesis` にあるものだけ。web は `research` にある W番号だけ

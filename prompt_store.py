@@ -32,10 +32,13 @@ TITLES = {
     "comments_community.md": "コメント分析（界隈ごと）",
     "ref_select.md": "参考にする過去記事を選ぶ",
     "ref_digest.md": "参考記事の章立てと論理を取り出す",
+    # 2026-10-06〜（docs/WEB_RESEARCH.md）。人が書き足す場所を残さないための材料
+    "research.md": "ウェブで調べる（曲の情報・TikTok の外の指標・要のアカウント）",
+    "era.md": "時代背景の材料（似た位置づけの曲の記事を読む）",
     "outline.md": "構成案（主張と根拠の割り振り）",
     "write.md": "レポートの執筆（章ごと）",
     "finish.md": "note 用の仕上げ（章ごと）",
-    "finish_title.md": "note の題名と見出し",
+    "finish_title.md": "note の題名と確認メモ（推測で書いたところ）",
     "revise.md": "レポートの直し",
     # 完成後の界隈の掘り下げ（2026-10-06〜。docs/DEEPEN_COMMUNITY.md）
     "deepen_comments.md": "界隈の掘り下げ: コメント分析のやり直し",

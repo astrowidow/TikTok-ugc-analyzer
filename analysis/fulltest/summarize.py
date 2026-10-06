@@ -76,7 +76,9 @@ def main():
         if note.exists():
             t = note.read_text(encoding="utf-8")
             print(f"NOTE_BODY.md: {len(t):,}字")
-            ban = [w for w in ("用語集の通り", "用語集どおり", "指示書", "cid", "seq", "taxonomy", "synthesis", "界隈の key") if w in t]
+            # 英字の語（cid・seq など）は英字に挟まれていないものだけ（引用のスペイン語 felicidades の中の cid を数えない）
+            ban = [w for w in ("用語集の通り", "用語集どおり", "指示書", "cid", "seq", "taxonomy", "synthesis", "界隈の key")
+                   if re.search(rf"(?<![A-Za-z]){re.escape(w)}(?![A-Za-z])", t)]
             print("読者に見せない言葉（NOTE_BODY.md）:", ban or "なし")
 
 

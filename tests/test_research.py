@@ -173,6 +173,11 @@ class TestPlanAndWrite(Base):
                 self.assertEqual(flow_w1.check_chapter(self.a, music_md(s), h), [])
                 self.assertTrue(flow_w1.check_no_placeholder(music_md(s)) + flow_w1.check_headings(self.a, music_md(s)))
 
+    def test_short_community_name(self):
+        """界隈の見出しに使う名前は、定義の最初の一文からかっこ書きの補足を外したもの（実例の「①本家（iLiFE!・メンバー個人）」の再発を防ぐ）"""
+        self.assertEqual(flow_w1.short_name("本家（iLiFE!・メンバー個人）。公式とメンバーの投稿"), "本家")
+        self.assertEqual(flow_w1.short_name("ダンスを主な発信内容にしている人。屋外で踊る人も含む"), "ダンスを主な発信内容にしている人")
+
     def test_outline_web_evidence(self):
         self.research()
         good = [{"claim": "MV も伸びた", "evidence": [{"web": "W2"}]}]

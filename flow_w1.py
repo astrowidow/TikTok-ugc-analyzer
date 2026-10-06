@@ -1712,7 +1712,7 @@ def write_prompt(a, t, base, st):
                      "\n\n界隈ごとのコメント分析（採用文脈と反応）は read の `synthesis`。拡散経路の下書き全体は `pathway`。")
         cat += [pr._catalog_line("synthesis", "界隈ごとの統合（コメント分析のまとめ）"), pr._catalog_line("pathway", "拡散経路の下書き")]
         spec = (f"見出しの次の行に「期間：{p['start'].replace('-', '/')}〜{p['end'].replace('-', '/')}」の1行を置く。"
-                "この段階で何が起きたかを書く。界隈を丸数字で並べ（①…②…）、界隈ごとに**【使われた理由】**と"
+                "この段階で何が起きたかを書く。界隈を丸数字で並べ（①…②…）、界隈の見出しは短い名前だけにし（「①本家」。定義のかっこ書きの補足は付けない）、界隈ごとに**【使われた理由】**と"
                 "**【伸びた理由】**を対で書く。代表動画は「投稿日＋投稿者＋再生数」を本文に書き、seq を添える。"
                 "コメントが示す動機は cid つきで引用する。観測（データで言えること）と推測を分けて書く。")
         if p["id"] == ph[0]["id"]:
@@ -1896,7 +1896,7 @@ def finish_materials(a, t, st) -> dict:
     return {"chapter_title": CHAPTER_TITLES.get(ch) or first_line(a.outputs("chapters", f"{ch}.md")), "i": t["params"]["i"],
             "n": t["params"]["n"], "chapter_md": md,
             "phase_names": "\n".join(f"- {p['id']} → {p['name']}（{p['start']}〜{p['end']}）" for p in phases(a)),
-            "community_names": "\n".join(f"- `{k}` → {pr._first_sentence(v)}" for k, v in tax["community"].items() if not k.startswith("_")),
+            "community_names": "\n".join(f"- `{k}` → {short_name(v)}" for k, v in tax["community"].items() if not k.startswith("_")),
             "video_list": ("\n".join(lst) or "（この章に動画は出てこない）") +
                           ("\n\n### ウェブで調べた事実の出どころ（この章の [W番号]。印は消す）\n\n" + "\n".join(web) if web else ""),
             "settings": _settings(a, ["style"], t)}
@@ -2018,6 +2018,13 @@ def check_chapter(a, md: str, heading: str) -> list:
 HEAD_LINE_RE = re.compile(r"^(?:#{2,6} |\*\*【)")                 # 章・節の見出しと【】の小見出し（題名の「# 」は曲名にかっこがあり得るので見ない）
 PAREN_RE = re.compile(r"（[^）]*）|\([^)]*\)")
 DATE_PAREN_RE = re.compile(r"[（(][\d/年月日\-〜～~・、 ]+[）)]")      # 期間だけのかっこ（前の版の段階の見出し）は見逃す
+
+
+def short_name(definition: str) -> str:
+    """界隈の定義の最初の一文から、見出しに使う短い名前（かっこ書きの補足を外す。2026-10-06 ユーザー「端的 is 至高」。
+    実例の第1版で「①本家（iLiFE!・メンバー個人）」のように、定義のかっこ書きがそのまま見出しに移ったため）"""
+    s = PAREN_RE.sub("", pr._first_sentence(definition)).strip().rstrip("。")
+    return s or pr._first_sentence(definition)
 
 
 def check_headings(a, body: str) -> list:

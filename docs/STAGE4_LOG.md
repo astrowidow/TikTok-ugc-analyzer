@@ -702,6 +702,14 @@ Claude デスクトップを開き直し（2回）／運営向けメニューの
 - **運営の Mac には入れていない**: d9 の全機能の通し試験（0.5.8、シルエット a20261006-0849-833c）の取得が走っていて、install.sh が止める。試験が終わってから `collector/install.sh` で入れる
 - 友達に配る .dmg: `collector/dist/UGC-Analyzer-0.5.9.dmg`（中身は 0.5.8 と文言だけ違う）
 
+### 0.6.0: Claude の Code タブで、頼んでから完成まで一気に回す（2026-10-06 09:2x、0c。運営の Mac への入れ替えはまだ）
+
+- ユーザー「codeタブ対応してないの？してよ」。中身と確かめたことは `docs/CODE_TAB_ONE_SITTING.md`（8 章の最後）
+- 待つ命令 `UGC Analyzer --wait`（`collector_app/waiter.py`）・Code タブ用の作業フォルダ `~/UGC Analyzer`（`collector_app/code_link.py`、起動のたびに整える）・
+  Code タブ（名乗り `claude-code`）から呼ばれたときだけ待ちの返事に一文（`mcp_proto.py`）
+- 0.5.9（da。「捨て垢」→「分析専用のサブアカウント」）の変更を含む。単体試験 119本・`check_local_mcp --no-network`・作り直しの自己点検2つ、全部 OK。.dmg は `collector/dist/UGC-Analyzer-0.6.0.dmg`
+- 運営の Mac への入れ替えは、d9 の通し試験（0.5.8、14時ごろまで）のあと。入れ替えれば、起動のときに `~/UGC Analyzer` ができる
+
 ---
 
 ## 本番に入れたファイルと控え

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import rumps
 
-from . import VERSION, chrome, claude_link, codex_link, config, jobs, notify, system, worker_entry
+from . import VERSION, chrome, claude_link, code_link, codex_link, config, jobs, notify, system, worker_entry
 
 MUSIC_URL_RE = re.compile(r"^https://(www\.)?tiktok\.com/music/[^\s/]+-\d+")
 
@@ -915,6 +915,13 @@ def run():
                     log.info("ChatGPT（Codex）の設定とスキルを、今のアプリに合わせて直しました")
                 except codex_link.LinkError as e:
                     log.warning("ChatGPT の設定を直せませんでした: %s", e)
+            if claude_link.claude_installed():   # Claude の Code タブ用の作業フォルダ（~/UGC Analyzer。docs/CODE_TAB_ONE_SITTING.md）
+                try:
+                    ch = code_link.ensure()
+                    if ch:
+                        log.info("Code タブ用の作業フォルダ（%s）を、今のアプリに合わせて整えました: %s", code_link.FOLDER, "、".join(ch))
+                except OSError as e:
+                    log.warning("Code タブ用の作業フォルダを整えられませんでした: %s", e)
     config.save_state(first_run_done=True)
     ctl = Controller(code, log)
     system.watch_sleep(ctl.on_sleep, ctl.on_wake)

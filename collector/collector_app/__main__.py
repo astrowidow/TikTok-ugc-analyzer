@@ -5,6 +5,7 @@
   <スクリプト.py> [引数…]       python script.py の代わり（acquire/pipeline.py の _script が sys.executable で呼ぶ）
   --mcp                        Claude に出す道具（Claude デスクトップが起こす。標準入出力で話す）
   --connect-claude             Claude デスクトップの設定に道具を足す（メニュー「Claude につなぐ」と同じ。運営用）
+  --wait <分析> [上限の時間]   取得・取り足しが終わるまで待つ（Claude の Code タブで、Claude が作業フォルダの ugc-wait から裏で走らせる）
   --selftest                   同梱物が読めるかだけ確かめて終わる（TikTok には触らない）
 """
 import runpy
@@ -18,6 +19,9 @@ def main() -> None:
     if argv[:1] == ["--mcp"]:
         from . import mcp_local
         sys.exit(mcp_local.main())
+    if argv[:1] == ["--wait"]:   # Claude の Code タブ用（docs/CODE_TAB_ONE_SITTING.md、collector_app/waiter.py）
+        from . import waiter
+        sys.exit(waiter.main(argv[1:]))
     if argv[:1] == ["--connect-claude"]:   # 運営用: メニューの「Claude につなぐ」と同じことを、画面を出さずに
         from . import claude_link
         backup = claude_link.connect()

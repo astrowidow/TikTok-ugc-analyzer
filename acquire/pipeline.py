@@ -87,7 +87,7 @@ def now() -> str:
 def read_json(p: Path, default=None):
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):   # 無い・フォルダでない（.DS_Store/analysis.json）・壊れている
         return default
 
 

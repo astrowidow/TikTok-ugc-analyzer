@@ -52,6 +52,8 @@ def queue() -> list:
     if not pipeline.ANALYSES_DIR.exists():
         return items
     for d in pipeline.ANALYSES_DIR.iterdir():
+        if not d.is_dir():   # .DS_Store など
+            continue
         m = pipeline.read_json(d / "analysis.json")
         acq = (m or {}).get("acquisition") or {}
         st = acq.get("status")

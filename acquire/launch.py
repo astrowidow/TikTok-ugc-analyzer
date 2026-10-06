@@ -67,6 +67,8 @@ def new_analysis(owner: str, song: str, artist: str = "", music_url: str = "", s
 def find_active(owner: str, song: str, music_url: str = ""):
     """同じ利用者の、同じ曲の取得中・待ちの分析（AI が二重に頼んだときに2つ作らない）"""
     for d in pipeline.ANALYSES_DIR.iterdir() if pipeline.ANALYSES_DIR.exists() else []:
+        if not d.is_dir():   # .DS_Store など
+            continue
         m = pipeline.read_json(d / "analysis.json") or {}
         if m.get("owner") != owner:
             continue
@@ -150,7 +152,7 @@ def progress(analysis_id: str) -> dict:
     ahead_ids = q[:q.index(analysis_id)] if analysis_id in q else []
     # いま係が処理中の分析（PID が生きている running）は待ち行列の先頭より前にいる
     active = [d.name for d in pipeline.ANALYSES_DIR.iterdir()
-              if ((pipeline.read_json(d / "analysis.json") or {}).get("acquisition") or {}).get("status") == "running"
+              if d.is_dir() and ((pipeline.read_json(d / "analysis.json") or {}).get("acquisition") or {}).get("status") == "running"
               and d.name not in q and d.name != analysis_id]
     if analysis_id in q:
         ahead_ids = active + ahead_ids

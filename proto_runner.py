@@ -223,9 +223,16 @@ def list_analyses(user_id: str) -> list:
     out = []
     if not ANALYSES_DIR.exists():
         return out
+    # フォルダだけを見る。Finder が置く .DS_Store や、壊れた analysis.json が1つあっても、ほかの分析は使えるようにする
+    # （2026-10-06 通し試験: analyses/ に .DS_Store があると NotADirectoryError で道具が全部止まっていた）
     for d in sorted(ANALYSES_DIR.iterdir()):
-        meta = _read_json(d / "analysis.json")
-        if meta and meta.get("owner") == user_id:
+        if not d.is_dir():
+            continue
+        try:
+            meta = _read_json(d / "analysis.json")
+        except (OSError, ValueError):
+            continue
+        if isinstance(meta, dict) and meta.get("owner") == user_id:
             out.append(Analysis(d.name))
     return out
 

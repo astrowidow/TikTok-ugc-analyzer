@@ -163,8 +163,10 @@ def analyses() -> list:
     if not pipeline.ANALYSES_DIR.exists():
         return out
     for d in pipeline.ANALYSES_DIR.iterdir():
+        if not d.is_dir():   # .DS_Store など
+            continue
         m = pipeline.read_json(d / "analysis.json")
-        if m:
+        if isinstance(m, dict) and m.get("analysis_id"):
             out.append(m)
     out.sort(key=lambda m: m.get("created_at") or "")
     return out

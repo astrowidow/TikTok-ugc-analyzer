@@ -16,7 +16,8 @@ from . import claude_link
 
 FOLDER = Path(os.environ.get("UGC_CODE_FOLDER") or Path.home() / "UGC Analyzer")
 SERVER = "ugc-analyzer"
-ALLOW = [f"mcp__{SERVER}", "Bash(./ugc-wait:*)", "Bash(./ugc-wait *)"]
+# WebSearch・WebFetch: レポートの「ウェブで調べる」仕事（曲の情報・TikTok の外の指標）で使う。許可を聞かれて断ると調べられない（2026-10-06、docs/WEB_RESEARCH.md）
+ALLOW = [f"mcp__{SERVER}", "Bash(./ugc-wait:*)", "Bash(./ugc-wait *)", "WebSearch", "WebFetch"]
 
 CLAUDE_MD = """# UGC Analyzer（Claude の Code タブ用の作業フォルダ）
 
@@ -25,6 +26,7 @@ UGC Analyzer が自動で作り、アプリを新しくすると書き直す。
 
 - 道具は MCP サーバー `ugc-analyzer`。使い方は道具の説明（instructions）のとおり。利用者への返事は日本語で、短く
 - このフォルダのファイルを読んだり書き換えたりしない。Bash で使ってよいのは `./ugc-wait` だけ。レポートは UGC Analyzer が Mac の「レポート」フォルダに置く
+- ウェブ検索（WebSearch）とページの取得（WebFetch）は、指示書が「ウェブで調べる」と言う仕事（曲の情報・TikTok の外の指標）や時代背景の材料づくりで使う（許可してある）
 
 ## 待つところで止まらずに続ける（Code タブだけの使い方）
 

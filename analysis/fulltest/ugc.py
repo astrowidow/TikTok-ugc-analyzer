@@ -11,6 +11,7 @@ output/case_kyawa_20261006/ugc.py（事例づくり）を、走行のフォル�
   python ugc.py say <user|ai> <ファイル>       … 会話の発言を記録に足す（利用者の頼み・AI の返事）
 
 走行のフォルダに HOME_DIR というファイルがあれば、その中に書いた置き場（運営の置き場の写し）でアプリを起こす。
+APP_EXE があれば、入っているアプリの代わりにその実行ファイルを起こす（作ったばかりの版を写しの置き場で試す）。
 そのときメニューバーのアプリは起こさない（TikTok に触らない）。設定・指示書・界隈の確認を省く試しに使う。
 """
 import asyncio
@@ -44,13 +45,19 @@ def log(row: dict) -> None:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def exe() -> str:
+    """起こすアプリ。走行のフォルダに APP_EXE があれば、その中に書いた実行ファイル（作ったばかりで入れていない版を写しの置き場で試すとき）"""
+    p = RUN / "APP_EXE"
+    return p.read_text(encoding="utf-8").strip() if p.exists() else EXE
+
+
 def params() -> StdioServerParameters:
     home = sandbox_home()
-    if home:   # 写しの置き場で、入っているアプリをそのまま起こす（メニューバーのアプリは起こさない）
+    if home:   # 写しの置き場で、アプリをそのまま起こす（メニューバーのアプリは起こさない）
         env = {"UGC_COLLECTOR_HOME": home, "UGC_COLLECTOR_NO_APP_LAUNCH": "1",
                "PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
-        return StdioServerParameters(command=EXE, args=["--mcp"], env=env)
-    return StdioServerParameters(command=EXE, args=["--mcp"])
+        return StdioServerParameters(command=exe(), args=["--mcp"], env=env)
+    return StdioServerParameters(command=exe(), args=["--mcp"])
 
 
 async def cmd_tools() -> None:

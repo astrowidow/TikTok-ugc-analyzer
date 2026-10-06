@@ -335,7 +335,8 @@ class Controller:
         if failed:
             line = jobs.describe(failed[-1])
             line = line if len(line) <= 70 else line[:69] + "…"   # 止まった理由が長いとメニューの幅が広がりすぎる
-            self.status_text = line + ("" if "続きから再開" in line else "（メニューの「止まった取得を続きから再開」）")
+            region = "日本の地域では使えません" in str((failed[-1].get("acquisition") or {}).get("error") or "")
+            self.status_text = line + ("" if "続きから再開" in line or region else "（メニューの「止まった取得を続きから再開」）")
         else:
             self.status_text = self._idle_text()
         if self.chrome.listening():
@@ -417,6 +418,8 @@ class Controller:
                     if wait > 30:
                         notify.send(f"「{title}」の取得が止まりました",
                                     f"{wait // 60}分後に続きから取り直します（{err[:60]}）")
+                elif "日本の地域では使えません" in err:   # 再開しても同じ所で止まる。止まった文（ほかのページで頼み直す案内）を切らずに出す
+                    notify.send(f"「{title}」の取得が止まりました", err)
                 else:
                     notify.send(f"「{title}」の取得が止まりました",
                                 f"{err[:80]}。メニューの「止まった取得を続きから再開」で続きから取れます")

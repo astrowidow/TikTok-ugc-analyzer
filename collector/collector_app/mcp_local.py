@@ -64,12 +64,18 @@ class LocalHooks:
                 "login_wanted": worker_entry.login_waiting() or not st.get("logged_in_at")}
 
     def inspect_many(self, urls: list) -> list:
-        """楽曲ページを順に開いて、題・作者・UGC 数を読む（1つの Chrome で。1本あたり数秒）"""
+        """楽曲ページを順に開いて、題・作者・UGC 数を読む（1つの Chrome で。1本あたり数秒）。
+        日本の地域で使えないページ（「この楽曲はご利用になれません」）は unavailable=True（pipeline.read_music_page）"""
         if os.environ.get("UGC_COLLECTOR_NO_INSPECT"):   # 試験用: TikTok に触らない。UGC 数は UGC_TEST_COUNTS（{id: 数}）から
             import json as _json
             counts = _json.loads(os.environ.get("UGC_TEST_COUNTS") or "{}")
+            gone = set(_json.loads(os.environ.get("UGC_TEST_UNAVAILABLE") or "[]"))   # 日本の地域で使えないページの id
             out = []
             for u in urls:
+                if u.rsplit("-", 1)[-1] in gone:
+                    out.append({"title": None, "creator": None, "video_count_text": None, "video_count": None,
+                                "unavailable": True})
+                    continue
                 n = counts.get(u.rsplit("-", 1)[-1])
                 out.append({"title": os.environ.get("UGC_TEST_MUSIC_TITLE"), "creator": None,
                             "video_count_text": f"{n} 動画" if n else None, "video_count": n})
@@ -93,8 +99,12 @@ class LocalHooks:
         return out
 
     def inspect_music(self, url: str) -> dict:
-        """楽曲ページを1回だけ開いて、題・作者・UGC 数を読む（ヘッドレス・ログインなし。取得の一覧の段と同じ開き方）"""
+        """楽曲ページを1回だけ開いて、題・作者・UGC 数を読む（ヘッドレス・ログインなし。取得の一覧の段と同じ開き方）。
+        日本の地域で使えないページは unavailable=True（pipeline.read_music_page）"""
         if os.environ.get("UGC_COLLECTOR_NO_INSPECT"):   # 試験用: TikTok に触らない
+            import json as _json
+            if url.rsplit("-", 1)[-1] in set(_json.loads(os.environ.get("UGC_TEST_UNAVAILABLE") or "[]")):
+                return {"title": None, "creator": None, "video_count_text": None, "video_count": None, "unavailable": True}
             return {"title": None, "creator": None, "video_count_text": None, "video_count": None, "skipped": True}
         import time
         import scraper

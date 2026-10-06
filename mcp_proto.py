@@ -158,8 +158,11 @@ def _build_server(user_of=None, local: bool = False):
         """待ちの返事。Code タブから呼ばれたときだけ、作業フォルダの ./ugc-wait を裏で走らせて続ける一文を足す（docs/CODE_TAB_ONE_SITTING.md）。
         待てば進む待ち（取得中・取り足し中・順番待ち。state が無い start_analysis・deepen・restart_analysis の返事も）だけに付ける。
         利用者が何かするまで進まない待ち（アプリが動いていない・ログイン待ち・止まった）には「済んだら、ここで続けて」の言い方を、
-        やめた分析には何も足さない（返事にやり直し方が書いてある。2026-10-06 通し試験）"""
+        やめた分析には何も足さない（返事にやり直し方が書いてある。2026-10-06 通し試験）。
+        取得が済んだ曲の頼み直し（start_analysis の「このまま書き始めます」。kind が resume）は待ちではないので、何も足さない"""
         text = r["text"]
+        if r.get("kind") == "resume":
+            return text
         code_tab = _code_tab(ctx)
         if code_tab and r.get("analysis_id") and (r.get("kind") == "wait" or "その間 AI は待てない" in text):
             state = r.get("state")
@@ -206,7 +209,9 @@ def _build_server(user_of=None, local: bool = False):
                      "min_plays は、週ごとに選ぶ動画の再生の下限（既定10万。起点・大型ヒット・本人・公式などは再生に関わらず取る）。"
                      "利用者が「再生〇万以上の動画だけで」「小さい動画も見て」などと頼んだときだけ数で指定する。"
                      "skip_confirm は、利用者が「界隈の確認はいらない」「確認なしで最後まで書いて」と頼んだときだけ true（取得のあと、界隈の案で止まらずに最後まで書く）。"
-                     + "返ってきた内容を利用者に短く伝えて止まる（取得を待たない・見に来ない）。" + rule),
+                     + "返ってきた内容を利用者に短く伝えて止まる（取得を待たない・見に来ない）。"
+                     "ただし返事に「このまま書き始めます」とあれば（その曲はもう集め終わっている）、止まらずに、"
+                     "「〇〇の分析を続けて」と言われたときと同じに next_task から進める。" + rule),
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=True),
     )
@@ -353,7 +358,9 @@ def _build_server(user_of=None, local: bool = False):
                     "楽曲ページを2つ以上で取り直すとき（外したページを足すときは、進めていたページも含めて全部）は music_urls に入れる（全部から取って合わせる）。"
                     "music_url を省くと、楽曲ページ探しから最初にやり直す（返ってくる探し方に従って検索し、start_analysis を呼ぶ）。"
                     "replies は返信も取るか、min_plays は週ごとに選ぶ動画の再生の下限（どちらも省くと前の分析の指定を引き継ぐ。利用者が頼んだときだけ渡す）。"
-                    "analysis_id は分析 ID か曲名。返ってきた内容を利用者に短く伝える。" + rule,
+                    "analysis_id は分析 ID か曲名。返ってきた内容を利用者に短く伝える。"
+                    "analysis_id を省いて、やり直せる分析が2つ以上あると、どれもやめずに一覧が返るので、どれをやり直すか利用者に1回聞いて、"
+                    "答えの曲名か分析 ID で呼び直す。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False,
                                     open_world_hint=True),
     )
@@ -366,7 +373,9 @@ def _build_server(user_of=None, local: bool = False):
     @mcp.tool(
         title="取得をやめる",
         description="**利用者が「〇〇の取得をやめて」と頼んだときだけ使う**（やり直しまで頼まれたら restart_analysis）。"
-                    "取得中・順番待ちの分析の取得をやめる。analysis_id は分析 ID か曲名。" + rule,
+                    "取得中・順番待ちの分析の取得をやめる。analysis_id は分析 ID か曲名。"
+                    "analysis_id を省いて、やめられる分析が2つ以上あると、どれもやめずに一覧が返るので、どれをやめるか利用者に1回聞いて、"
+                    "答えの曲名か分析 ID で呼び直す。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True,
                                     open_world_hint=False),
     )

@@ -255,17 +255,44 @@ class TestCancelled(Base):
             pr.cancel_analysis("u1", aid)
         self.assertEqual(self.meta(aid)["acquisition"]["status"], "done")
 
-    @unittest.expectedFailure   # R3-11: 利用者の会話の流れが変わる直しなので、ユーザーの判断待ち（docs/FULL_TEST_LOG.md）
     def test_cancel_without_id_when_two_active(self):
-        """疑い: analysis_id を省いて cancel_analysis（壊す道具）を呼ぶと、取得中・順番待ちが2つあっても新しいほうを黙ってやめる。
-        どちらか分からないときは、やめずに候補を返すはず（restart_analysis も同じ選び方）"""
+        """R3-11（2026-10-06 ユーザーの決定で直した）: analysis_id を省いて cancel_analysis（壊す道具）を呼ぶと、前は取得中・順番待ちが
+        2つあっても新しいほうを黙ってやめていた。今は、どれもやめずに一覧を返し、どちらをやめるか AI に利用者へ1回聞かせる"""
         a = self.make("a20261006-0900-aaaa", "曲A", "queued", "2026-10-06T09:00:00+09:00")
         b = self.make("a20261006-0910-bbbb", "曲B", "queued", "2026-10-06T09:10:00+09:00")
-        try:
-            pr.cancel_analysis("u1", None)
-        except pr.RunnerError:
-            pass
+        r = pr.cancel_analysis("u1", None)
         self.assertEqual(sorted(self.active()), sorted([a, b]), "どちらをやめるか分からないのに、1つやめた")
+        self.assertEqual(self.fake.stopped, [])
+        self.assertIsNone(r["analysis_id"])
+        self.assertIn(f"取得中・順番待ちの分析が2つあります: 曲A（順番待ち。分析 ID: {a}）、曲B（順番待ち。分析 ID: {b}）。"
+                      "まだどれもやめていません。", r["text"])
+        self.assertIn("どちらをやめるか利用者に1回聞き、答えの曲名か分析 ID で cancel_analysis を呼び直す", r["text"])
+        r2 = pr.cancel_analysis("u1", "曲A")   # 答えの曲名で呼び直す → そのほうだけやめる
+        self.assertEqual(r2["analysis_id"], a)
+        self.assertEqual(self.active(), [b])
+
+    def test_cancel_without_id_counts_deepen(self):
+        """取り足し（完成後の界隈の掘り下げ）も数える。取得中の段の名前と「取り足し中」を一覧に出す"""
+        a = self.make("a20261006-0900-aaaa", "曲A", "done", "2026-10-06T09:00:00+09:00", complete=True,
+                      extra={"deepen": {"status": "running", "round": 1, "community": "dancer", "est_min": 10,
+                                        "targets": [{"video_id": "1"}]}})
+        b = self.make("a20261006-0910-bbbb", "曲B", "running", "2026-10-06T09:10:00+09:00")
+        m = self.meta(b)
+        m["acquisition"]["step"] = "comments"
+        (self.base / b / "analysis.json").write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
+        r = pr.cancel_analysis("u1", None)
+        self.assertIn(f"曲A（取り足し中。分析 ID: {a}）、曲B（取得中・コメントを取る。分析 ID: {b}）", r["text"])
+        self.assertEqual(self.fake.stopped, [])
+        self.assertEqual(self.meta(b)["acquisition"]["status"], "running")
+
+    def test_cancel_without_id_when_one_active(self):
+        """やめられる分析が1つだけなら、今どおりそれをやめる（完成済みの分析は数えない）"""
+        self.make("a20261001-0000-done", "曲A", "done", "2026-10-01T00:00:00+09:00", complete=True)
+        b = self.make("a20261006-0910-bbbb", "曲B", "queued", "2026-10-06T09:10:00+09:00")
+        r = pr.cancel_analysis("u1", None)
+        self.assertEqual(r["analysis_id"], b)
+        self.assertEqual(self.meta(b)["acquisition"]["status"], "cancelled")
+        self.assertEqual(self.fake.stopped, [b])
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +338,201 @@ class TestRestart(Base):
         self.assertEqual((res["analysis_id"], res["cancelled"]), (None, aid))
         self.assertEqual(self.meta(aid)["acquisition"]["status"], "cancelled")
         self.assertEqual(self.fake.stopped, [aid])
+
+    def test_restart_without_id_when_two(self):
+        """analysis_id を省いた restart_analysis で、やり直せる分析が2つ以上 → どれもやめずに一覧を返し、どちらをやり直すか聞かせる
+        （止まった分析も数える。同じ曲を頼み直して放ってある止まった分析は数えない）"""
+        a = self.make("a20261006-0900-aaaa", "曲A", "failed", "2026-10-06T09:00:00+09:00")
+        b = self.make("a20261006-0910-bbbb", "曲B", "queued", "2026-10-06T09:10:00+09:00", music_url=U2)
+        r = pr.restart_analysis("u1", None, music_url=U3)
+        self.assertIsNone(r["analysis_id"])
+        self.assertIn(f"取得中・順番待ち・止まった分析が2つあります: 曲A（止まっている。分析 ID: {a}）、曲B（順番待ち。分析 ID: {b}）。"
+                      "まだどれもやめていません。", r["text"])
+        self.assertIn("どちらをやり直すか利用者に1回聞き、答えの曲名か分析 ID で restart_analysis を呼び直す。"
+                      "music_url・music_urls などの指定は今回と同じものを渡す", r["text"])
+        self.assertEqual(self.fake.stopped, [])
+        self.assertEqual(sorted(x.id for x in pr.list_analyses("u1")), sorted([a, b]))   # 新しく作っていない
+        self.assertEqual((self.meta(a)["acquisition"]["status"], self.meta(b)["acquisition"]["status"]), ("failed", "queued"))
+
+    def test_restart_without_id_when_one(self):
+        """やり直せる分析が1つだけなら、今どおりそれをやり直す（頼み直して放ってある止まった分析・完成済みは数えない）"""
+        self.make("a20261001-0000-fail", "曲B", "failed", "2026-10-01T00:00:00+09:00")
+        self.make("a20261002-0000-done", "曲A", "done", "2026-10-02T00:00:00+09:00", complete=True)
+        b = self.make("a20261006-0910-bbbb", "曲B", "queued", "2026-10-06T09:10:00+09:00", music_url=U2)
+        r = pr.restart_analysis("u1", None, music_url=U3)
+        self.assertEqual(r["cancelled"], b)
+        self.assertEqual(self.meta(r["analysis_id"])["music_urls"], [U3])
+
+
+# ---------------------------------------------------------------------------
+# 日本の地域で使えない楽曲ページ（2026-10-06 ユーザーの決定。「この楽曲はご利用になれません」と出るページ）
+# ---------------------------------------------------------------------------
+UNAVAILABLE = {**UNREADABLE, "unavailable": True}
+REGION_TEXT = "この楽曲はご利用になれません\nこのサウンドはお住いの国または地域ではご利用になれません"
+
+
+class TestUnavailablePage(Base):
+    BIBI = "https://www.tiktok.com/music/bibbidiba-7000000000000000031"
+    BIBI2 = "https://www.tiktok.com/music/bibbidiba-2-7000000000000000032"
+
+    def _sounds(self, *urls_and_counts):
+        return TestUnreadablePage._sounds(self, *urls_and_counts)
+
+    def _id(self, url):
+        return url.rsplit("-", 1)[-1]
+
+    def test_only_unavailable_page_gives_hint(self):
+        """動画の音源から見つけた楽曲ページが1つで、日本の地域で使えない → 分析を作らず、ほかのページの探し方を返す（利用者には聞かない）"""
+        self.fake.sounds = self._sounds((self.BIBI, 3))
+        self.fake.pages = {self._id(self.BIBI): UNAVAILABLE}
+        r = pr.start_analysis("u1", "ビビデバ", "星街すいせい", skip_confirm=True)
+        self.assertIsNone(r["analysis_id"])
+        self.assertEqual(pr.list_analyses("u1"), [])
+        t = r["text"]
+        self.assertTrue(t.startswith("まだ取得を始めていない。この楽曲ページは日本では使えない（TikTok の地域の制限。"), t)
+        self.assertIn(self.BIBI, t)
+        self.assertIn("同じ曲のほかの公式の楽曲ページ（`https://www.tiktok.com/music/…`。sped up 版・別のアップロードなど）を探す", t)
+        self.assertIn("見つかれば、その URL を music_urls に入れて start_analysis を呼び直す", t)
+        self.assertIn("利用者に「この曲は TikTok の日本の地域で使えないため分析できません」と伝えて止まる", t)
+        self.assertIn("skip_confirm=true", t)   # 呼び直すときも頼みを引き継ぐ注（ほかの探し方の返事と同じ）
+
+    def test_all_candidates_unavailable_gives_hint(self):
+        """候補が2つとも使えない → 分析を作らず、両方を挙げて探し方を返す"""
+        self.fake.sounds = self._sounds((self.BIBI, 2), (self.BIBI2, 2))
+        self.fake.pages = {self._id(u): UNAVAILABLE for u in (self.BIBI, self.BIBI2)}
+        r = pr.start_analysis("u1", "ビビデバ", "星街すいせい")
+        self.assertIsNone(r["analysis_id"])
+        self.assertIn("これらの楽曲ページは日本では使えない", r["text"])
+        self.assertIn(self.BIBI, r["text"])
+        self.assertIn(self.BIBI2, r["text"])
+        self.assertEqual(pr.list_analyses("u1"), [])
+
+    def test_user_given_unavailable_url(self):
+        """利用者が渡した URL（music_urls）でも同じ: 1つでも2つでも、全部使えなければ作らない"""
+        self.fake.pages = {self._id(u): UNAVAILABLE for u in (self.BIBI, self.BIBI2)}
+        for urls in ([self.BIBI], [self.BIBI, self.BIBI2]):
+            r = pr.start_analysis("u1", "ビビデバ", "星街すいせい", music_urls=urls)
+            self.assertIsNone(r["analysis_id"], urls)
+            self.assertIn("music_urls に入れて start_analysis を呼び直す", r["text"])
+        self.assertEqual(pr.list_analyses("u1"), [])
+
+    def test_mixed_drops_unavailable(self):
+        """使えるページと混ざっていれば、使えないほうを外して始める（「それも入れて」とは言わない）"""
+        self.fake.sounds = self._sounds((self.BIBI, 3), (self.BIBI2, 2))
+        self.fake.pages = {self._id(self.BIBI): UNAVAILABLE, self._id(self.BIBI2): _page("ビビデバ", "星街すいせい", 52000)}
+        r = pr.start_analysis("u1", "ビビデバ", "星街すいせい")
+        self.assertTrue(r["created"])
+        self.assertEqual(self.meta(r["analysis_id"])["music_urls"], [self.BIBI2])
+        self.assertIn("次の楽曲ページで進めます", r["text"])
+        self.assertIn(f"外した楽曲ページ:\n  - （UGC 読めず）{self.BIBI} … 日本の地域では使えない（TikTok の地域の制限）", r["text"])
+        self.assertNotIn("それも入れて", r["text"])
+        self.assertNotRegex(r["text"].split("外した楽曲ページ", 1)[0], WARN_RE)   # 使えるページには注意を出さない
+
+    def test_mixed_user_urls_drops_unavailable(self):
+        """利用者が渡した2つのうち1つが使えない → 使えるほうだけで始め、外したと伝える"""
+        self.fake.pages = {self._id(self.BIBI): UNAVAILABLE, self._id(self.BIBI2): _page("ビビデバ", "星街すいせい", 52000)}
+        r = pr.start_analysis("u1", "ビビデバ", "星街すいせい", music_urls=[self.BIBI, self.BIBI2])
+        self.assertEqual(self.meta(r["analysis_id"])["music_urls"], [self.BIBI2])
+        self.assertIn("（渡された楽曲ページ 2 つのうち、日本の地域で使える 1 つで取る）", r["text"])
+        self.assertIn("日本の地域では使えない（TikTok の地域の制限）", r["text"])
+
+    def test_restart_to_unavailable_keeps_old(self):
+        """「このページでやり直して」の新しいページが使えない → 前の取得はやめずに残し、restart_analysis で呼び直すよう返す"""
+        r = pr.start_analysis("u1", "ビビデバ", "星街すいせい", music_urls=[U1], skip_confirm=True)
+        aid = r["analysis_id"]
+        self.fake.pages = {self._id(self.BIBI): UNAVAILABLE}
+        r2 = pr.restart_analysis("u1", aid, music_url=self.BIBI)
+        self.assertIsNone(r2["analysis_id"])
+        self.assertNotIn("cancelled", r2)
+        self.assertEqual(self.meta(aid)["acquisition"]["status"], "queued")
+        self.assertEqual(self.fake.stopped, [])
+        self.assertTrue(r2["text"].startswith(f"「ビビデバ」の前の取得（{U1}）はまだやめていません。"), r2["text"])
+        self.assertIn(f"music_urls に入れて restart_analysis（analysis_id={aid}）を呼び直す", r2["text"])
+        self.assertNotIn("start_analysis を呼び直す", r2["text"])
+        self.assertEqual(len(pr.list_analyses("u1")), 1)
+
+    def test_read_music_page_marks_unavailable(self):
+        """楽曲ページを読む所: 題も UGC 数も読めず、本文に地域の制限の文（日本語・英語）があるときだけ unavailable=True。待たずに返す"""
+        def driver(head, body):
+            def run(js):
+                if js == pipeline.MUSIC_PAGE_JS:
+                    return dict(head)
+                if js == pipeline.PAGE_TEXT_JS:
+                    return body
+                raise AssertionError(js)
+            return types.SimpleNamespace(execute_script=run)
+        empty = {"title": None, "creator": None, "video_count_text": None}
+        t0 = time.time()
+        self.assertTrue(pipeline.read_music_page(driver(empty, REGION_TEXT), wait=30).get("unavailable"))
+        self.assertTrue(pipeline.read_music_page(driver(empty, "This sound isn't available in your country or region"),
+                                                 wait=30).get("unavailable"))
+        self.assertLess(time.time() - t0, 5, "使えないページで待った")
+        # 文が無い（読み込みがたまたま失敗した）・題が読めた・UGC 数が読めた、のどれも使えないとはみなさない
+        self.assertNotIn("unavailable", pipeline.read_music_page(driver(empty, "読み込み中"), wait=0))
+        self.assertNotIn("unavailable", pipeline.read_music_page(driver({**empty, "title": "ビビデバ"}, REGION_TEXT), wait=0))
+        ok = pipeline.read_music_page(driver({**empty, "video_count_text": "52K 動画"}, REGION_TEXT), wait=0)
+        self.assertEqual((ok.get("unavailable"), ok["video_count"]), (None, 52000))
+
+    def _run_list(self, body):
+        """一覧の段（step_list）を、偽の Chrome（題も動画も出ない楽曲ページ）で走らせる"""
+        aid = "a20261006-0900-bibi"
+        self.make(aid, "ビビデバ", "running", music_url=self.BIBI,
+                  extra={"acquisition_settings": {"list_sets": 1, "list_scrolls": 2, "list_stall": 1}})
+
+        class Driver:
+            def get(self, u):
+                pass
+
+            def execute_script(self, js):
+                if js == pipeline.MUSIC_PAGE_JS:
+                    return {"title": None, "creator": None, "video_count_text": None}
+                if js == pipeline.PAGE_TEXT_JS:
+                    return body
+                return 0 if js == "COUNT" else []
+
+            def find_element(self, *a):
+                return types.SimpleNamespace(send_keys=lambda *k: None)
+
+            def quit(self):
+                pass
+        fake = types.SimpleNamespace(create_headless_driver=Driver, PAGE_LOAD_TIME=0, SCROLL_PAUSE_TIME=0, _COUNT_LINKS_JS="COUNT")
+        old_mod, old_wait = sys.modules.get("scraper"), pipeline.read_music_page.__defaults__
+        sys.modules["scraper"] = fake
+        pipeline.read_music_page.__defaults__ = (0,)
+        try:
+            run = pipeline.Run(aid)
+            run.lock = lambda what: None
+            with self.assertRaises(pipeline.StepError) as cm:
+                run.step_list()
+            return aid, str(cm.exception)
+        finally:
+            pipeline.read_music_page.__defaults__ = old_wait
+            if old_mod is not None:
+                sys.modules["scraper"] = old_mod
+            else:
+                sys.modules.pop("scraper", None)
+
+    def test_list_step_stops_with_region_text(self):
+        """一覧の段: 使えないページで動画が0本 → 止まる文は別のページでのやり直し方。アプリは取り直さない（jobs.retriable が False）。
+        「〇〇の分析を続けて」にも、続きから再開や「取得が終わったら」を言わない"""
+        from collector_app import jobs
+        aid, err = self._run_list(REGION_TEXT)
+        self.assertEqual(err, "この楽曲ページは日本の地域では使えません（TikTok の地域の制限）。ほかの楽曲ページの URL で"
+                              "『ビビデバの取得をやめて、このページでやり直して』と頼んでください")
+        self.assertFalse(jobs.retriable({"acquisition": {"status": "failed", "error": err}}))
+        m = self.meta(aid)
+        m["acquisition"].update({"status": "failed", "error": err})
+        (self.base / aid / "analysis.json").write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
+        w = pr.next_task("u1", aid)
+        self.assertEqual((w["kind"], w["state"]), ("wait", "failed"))
+        self.assertIn("取得が止まりました。この楽曲ページは日本の地域では使えません", w["text"])
+        self.assertNotIn("続きから", w["text"])
+        self.assertNotIn("取得が終わったら", w["text"])
+
+    def test_list_step_plain_empty_page_keeps_old_text(self):
+        """くらべ: 地域の制限の文が無い（ただ動画が出ない）ページは、今までの止まる文のまま"""
+        _aid, err = self._run_list("")
+        self.assertEqual(err, "楽曲ページから動画が1本も見つかりませんでした（URL が違うか、TikTok 側の表示制限）")
 
 
 # ---------------------------------------------------------------------------
@@ -374,16 +596,81 @@ class TestStartArgs(Base):
         self.assertEqual(self.meta(r["analysis_id"])["music_urls"], [U1])
         self.assertIn(U1, r2["text"], "実際に取るページが返事に無い:\n" + r2["text"])
 
-    @unittest.expectedFailure   # R3-6: 利用者の会話の流れが変わる直しなので、ユーザーの判断待ち（docs/FULL_TEST_LOG.md）
     def test_start_again_when_acquired_but_not_written(self):
-        """疑い: 取得が済んで（通知が出て）レポートはまだの曲に、利用者が「続けて」でなく「UGC Analyzer で〇〇を分析して」と言い直すと、
-        find_active は取得中・順番待ちしか見ないので、同じ曲の取得をもう一度（2〜3時間）始める。
-        そのあと「〇〇の分析を続けて」は新しいほう（取得中）に向かい、書ける分析が待たされる。
-        正しい動き: 新しく始めずに、済んだ分析を続けるよう返す（返事にその分析 ID を出す）"""
+        """R3-6（2026-10-06 ユーザーの決定 B で直した）: 取得が済んで（通知が出て）レポートはまだの曲に、利用者が「続けて」でなく
+        「UGC Analyzer で〇〇を分析して」と言い直す。前は find_active が取得中・順番待ちしか見ず、同じ曲の取得をもう一度（2〜3時間）始めていた。
+        今は新しく作らず、済んだ分析でそのまま書き始める（返事にその分析 ID と「このまま書き始めます」、AI には next_task から進める注）"""
         old = self.make("a20261006-0900-old0", "テスト", "done", "2026-10-06T09:00:00+09:00", artist="だれか")
         r = pr.start_analysis("u1", "テスト", "だれか", music_urls=[U1])
-        self.assertTrue(r["created"] is False or old in r["text"],
-                        "取得が済んだ曲の取得をもう一度始めた（前の分析に触れていない）:\n" + r["text"][:200])
+        self.assertFalse(r["created"])
+        self.assertEqual((r["analysis_id"], r["kind"]), (old, "resume"))
+        self.assertTrue(r["text"].startswith(f"『テスト』はもう集め終わっています（分析 ID: {old}）。このまま書き始めます。"), r["text"])
+        self.assertIn(f"すぐ next_task（analysis_id={old}）を呼んで、「テストの分析を続けて」と言われたときと同じに進める。取得を待たない",
+                      r["text"])
+        self.assertEqual([a.id for a in pr.list_analyses("u1")], [old], "新しい分析を作った")
+        self.assertEqual(self.fake.stopped, [])
+
+    def test_resume_does_not_open_tiktok(self):
+        """取得済みの曲の頼み直しは、TikTok を開く前に見る（曲名だけで頼まれても、楽曲ページ探しをしない）"""
+        old = self.make("a20261006-0900-old0", "テスト", "done", "2026-10-06T09:00:00+09:00", complete=False)
+
+        def no_tiktok(*a, **kw):
+            raise AssertionError("TikTok を開いた")
+        self.fake.find_sounds = self.fake.inspect_many = self.fake.inspect_music = no_tiktok
+        r = pr.start_analysis("u1", "テスト", "だれか")
+        self.assertEqual((r["analysis_id"], r["created"]), (old, False))
+        self.assertIn("このまま書き始めます", r["text"])
+
+    def test_resume_by_same_music_page(self):
+        """曲名の書き方が違っても、同じ楽曲ページを取り終えた分析なら書き始める（find_active と同じ当て方）"""
+        old = self.make("a20261006-0900-old0", "Bibbidiba", "done", "2026-10-06T09:00:00+09:00", complete=False)
+        r = pr.start_analysis("u1", "ビビデバ", "星街すいせい", music_urls=[U1])
+        self.assertEqual((r["analysis_id"], r["created"]), (old, False))
+
+    def test_resume_with_skip_confirm_marks_analysis(self):
+        """skip_confirm=true で頼み直したら、その分析に確認を省く印を付ける（start_analysis の _set_options と同じ）。
+        返信・再生の下限の指定は効かないと伝える（黙って捨てない）"""
+        old = self.make("a20261006-0900-old0", "テスト", "done", "2026-10-06T09:00:00+09:00", complete=False)
+        r = pr.start_analysis("u1", "テスト", "だれか", skip_confirm=True, replies=True, min_plays=5000)
+        self.assertEqual(r["analysis_id"], old)
+        self.assertTrue(pr._options(self.base / old).get("skip_confirm"))
+        self.assertIn("（返信も取る・再生の下限の指定は、もう集め終わったこの分析には効きません）", r["text"])
+        self.assertNotIn("start_analysis を呼び直す", r["text"])   # 探し方の注は付けない
+
+    def test_finished_song_starts_new(self):
+        """レポートが完成済みの曲は、今どおり新しく始める（直しや掘り下げで仕事が足されていても完成済み）"""
+        old = self.make("a20261001-0000-done", "テスト", "done", "2026-10-01T00:00:00+09:00", complete=True)
+        r = pr.start_analysis("u1", "テスト", "だれか", music_urls=[U1])
+        self.assertTrue(r["created"])
+        self.assertNotEqual(r["analysis_id"], old)
+        # 完成のあとに直しの仕事が足された（_all_done ではない）分析も、完成済みとして扱う
+        st = json.loads((self.base / old / "state" / "tasks.json").read_text(encoding="utf-8"))
+        st["tasks"].append(flow_w1._task(st, "finish", "ai", "直し"))
+        (self.base / old / "state" / "tasks.json").write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+        pr.cancel_analysis("u1", r["analysis_id"])
+        r2 = pr.start_analysis("u1", "テスト", "だれか", music_urls=[U1])
+        self.assertTrue(r2["created"])
+        self.assertNotIn(r2["analysis_id"], (old, r["analysis_id"]))
+
+    def test_failed_or_cancelled_song_starts_new(self):
+        """止まった（failed）・やめた分析は対象外（今どおり新しく始める）"""
+        for i, acq in enumerate(("failed", "cancelled")):
+            song = f"テスト{i}"
+            old = self.make(f"a2026100{i + 1}-0000-old{i}", song, acq, f"2026-10-0{i + 1}T00:00:00+09:00",
+                            music_url=f"https://www.tiktok.com/music/x-700000000000000009{i}")
+            r = pr.start_analysis("u1", song, "だれか", music_urls=[f"https://www.tiktok.com/music/x-700000000000000009{i}"])
+            self.assertTrue(r["created"], acq)
+            self.assertNotEqual(r["analysis_id"], old)
+            pr.cancel_analysis("u1", r["analysis_id"])
+
+    def test_restart_does_not_resume(self):
+        """「取得をやめて、このページでやり直して」（restart_analysis）は、取得済みの同じ曲があっても新しく取る（利用者が取り直しを頼んだ）"""
+        self.make("a20261006-0800-old0", "テスト", "done", "2026-10-06T08:00:00+09:00", complete=False)
+        q = self.make("a20261006-0900-que0", "テスト", "queued", "2026-10-06T09:00:00+09:00", music_url=U2)
+        r = pr.restart_analysis("u1", q, music_url=U3)
+        self.assertTrue(r["created"])
+        self.assertEqual(self.meta(r["analysis_id"])["music_urls"], [U3])
+        self.assertEqual(r["cancelled"], q)
 
     def test_existing_min_plays_not_silently_dropped(self):
         """疑い: すでに受け付けた取得に min_plays を付けて頼み直すと、効かないのに何も言わない（replies には「効きません」と言う）"""
@@ -629,6 +916,21 @@ class TestToolDescriptions(Base):
         t2 = _text(asyncio.run(self.server.call_tool("restart_analysis", {"analysis_id": aid, "music_url": U2}, ctx)))
         self.assertIn("その間 AI は待てない", t2)
         self.assertIn("ugc-wait", t2)
+
+    def test_descriptions_for_new_flows(self):
+        """道具の説明: start_analysis に「このまま書き始めます」なら next_task から進める、cancel・restart に一覧が返ったら利用者に聞く"""
+        self.assertIn("返事に「このまま書き始めます」とあれば（その曲はもう集め終わっている）、止まらずに、"
+                      "「〇〇の分析を続けて」と言われたときと同じに next_task から進める", self.tools["start_analysis"].description)
+        self.assertIn("どれをやめるか利用者に1回聞いて、答えの曲名か分析 ID で呼び直す", self.tools["cancel_analysis"].description)
+        self.assertIn("どれをやり直すか利用者に1回聞いて、答えの曲名か分析 ID で呼び直す", self.tools["restart_analysis"].description)
+
+    def test_resume_in_code_tab_has_no_wait_line(self):
+        """取得済みの曲の頼み直し（このまま書き始めます）は待ちではないので、Code タブでも ./ugc-wait の一文を付けない"""
+        old = self.make("a20261006-0900-old0", "テスト", "done", "2026-10-06T09:00:00+09:00", complete=False)
+        t = _text(asyncio.run(self.server.call_tool("start_analysis", {"song": "テスト", "artist": "だれか"}, _code_tab_ctx())))
+        self.assertIn(f"『テスト』はもう集め終わっています（分析 ID: {old}）。このまま書き始めます。", t)
+        self.assertNotIn("ugc-wait", t)
+        self.assertNotIn("Code タブ", t)
 
 
 if __name__ == "__main__":

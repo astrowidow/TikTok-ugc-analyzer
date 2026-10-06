@@ -160,7 +160,11 @@ def keep_awake(seconds: int = AWAKE_S) -> None:
 
 
 def _failed_line(d: Path, title: str, m: dict) -> str:
-    err = str((m.get("acquisition") or {}).get("error") or "")[:80]
+    full = str((m.get("acquisition") or {}).get("error") or "")
+    if "日本の地域では使えません" in full:   # 再開しても同じ所で止まる（acquire/pipeline.py の UNAVAILABLE_STOP）
+        return (f"止まりました: 「{title}」の取得は、{full}（分析 ID {d.name}）。"
+                "利用者にこのことを伝え、ほかの楽曲ページを探して（start_analysis の返事の探し方のとおり）やり直してください")
+    err = full[:80]
     return (f"止まりました: 「{title}」の取得が止まり、UGC Analyzer はもう自動では取り直しません（{err + '。' if err else ''}分析 ID {d.name}）。"
             "利用者に「メニューバーの UGC Analyzer のメニューで『止まった取得を続きから再開』を押して"
             "（アプリが開いていなければ、先にアプリケーションフォルダの UGC Analyzer を開く）、そのあとここで『続けて』と言ってください。"

@@ -258,6 +258,14 @@ def _song_key(a: Analysis) -> str:
     return _norm((a.meta.get("song") or {}).get("title") or a.title)
 
 
+def _superseded(a: Analysis, others: list) -> bool:
+    """止まった（failed）まま放ってある分析で、同じ曲をあとから頼み直しているか"""
+    if _acq_status(a) != "failed":
+        return False
+    k, at = _song_key(a), a.meta.get("created_at", "")
+    return any(b is not a and _song_key(b) == k and b.meta.get("created_at", "") > at for b in others)
+
+
 def _pick(cands: list) -> Analysis:
     """候補が複数なら、進行中のものを優先し、それでも複数なら新しいもの。
     進行中が無ければ、やめた分析より完成済み・止まった分析を先にする（2026-10-06 通し試験: 完成済みより新しい「やめた分析」があると、
@@ -265,14 +273,7 @@ def _pick(cands: list) -> Analysis:
     止まった（failed）まま放ってある分析は、同じ曲をあとから頼み直していれば進行中に数えない（頼み直したほうを先にする）"""
     if len(cands) == 1:
         return cands[0]
-
-    def superseded(a: Analysis) -> bool:
-        if _acq_status(a) != "failed":
-            return False
-        k, at = _song_key(a), a.meta.get("created_at", "")
-        return any(b is not a and _song_key(b) == k and b.meta.get("created_at", "") > at for b in cands)
-
-    act = [a for a in cands if _is_active(a) and not superseded(a)]
+    act = [a for a in cands if _is_active(a) and not _superseded(a, cands)]
     if not act:
         act = [a for a in cands if _acq_status(a) != "cancelled"]
     return max(act or cands, key=lambda a: a.meta.get("created_at", ""))
@@ -762,6 +763,11 @@ def _acq_view(a: Analysis):
         return {"state": "cancelled", "message": "この取得はやめました（" + (acq.get("cancel_reason") or "利用者がやめた") + "）。",
                 "eta_seconds": None}
     if acq.get("status") == "failed":
+        if "日本の地域では使えません" in str(acq.get("error") or ""):
+            # 日本の地域で使えない楽曲ページ（acquire/pipeline.py の UNAVAILABLE_STOP）。続きから取り直しても同じなので、再開は勧めない。
+            # 止まった文に、ほかの楽曲ページでのやり直し方が書いてある
+            return {"state": "failed", "message": f"取得が止まりました。{acq.get('error')}。", "eta_seconds": None,
+                    "dead_end": True}
         if LOCAL is not None:
             msg = (f"取得が止まりました（{acq.get('error')}）。UGC Analyzer のメニュー「止まった取得を続きから再開」で、"
                    "済んだところの続きから取れます。何度も止まるときは運営に連絡してください。")
@@ -913,12 +919,17 @@ def _pick_music_pages(song: str, artist: str, urls: list, take_all: bool = False
     - 題・作者が曲名・アーティスト名に合うもの（公式の音源）のうち、UGC 数が一番多いページを主にする
       （2026-10-04: きゃわぽっぴんどぅーは同じ題・作者のページが3つあり、UGC 1,632 / 17.7K / 31.2K。本命は 31.2K）
     - ほかの公式のページは、主の UGC の JOIN_RATIO 以上なら合わせて取る（sped up 版など）
-    - take_all（利用者が URL を2つ以上渡した）: 全部取る。主は UGC 数が一番多いもの"""
+    - take_all（利用者が URL を2つ以上渡した）: 全部取る。主は UGC 数が一番多いもの
+    - 日本の地域で使えないページ（unavailable）は、どちらでも外す（理由 UNAVAILABLE_WHY）。全部使えなければ、取るページは空"""
     infos = LOCAL.inspect_many(urls) or []
     rows = [(u, (infos[i] if i < len(infos) else {}) or {}) for i, u in enumerate(urls)]
     n = lambda r: r[1].get("video_count") or 0   # noqa: E731
+    gone = [(*r, UNAVAILABLE_WHY) for r in rows if r[1].get("unavailable")]
+    rows = [r for r in rows if not r[1].get("unavailable")]
+    if not rows:
+        return [], gone
     if take_all:
-        return sorted(rows, key=n, reverse=True), []
+        return sorted(rows, key=n, reverse=True), gone
     good = [r for r in rows if _music_fits(song, artist, r[1])]
     best = max(good or rows, key=n)
     take, dropped = [best], []
@@ -934,13 +945,36 @@ def _pick_music_pages(song: str, artist: str, urls: list, take_all: bool = False
         else:
             dropped.append((*r, f"UGC が一番多いページの{int(JOIN_RATIO * 100)}%未満"))
     take = [take[0]] + sorted(take[1:], key=n, reverse=True)
-    return take, dropped
+    return take, dropped + gone
 
 
 def _unreadable(info: dict) -> bool:
-    """楽曲ページの題・作者・UGC 数が1つも読めなかったか（ログインなしで開くと「この楽曲はご利用になれません…お住いの国または地域では…」
-    と出るページなど）。試験で開かなかったもの（skipped）は含めない"""
+    """楽曲ページの題・作者・UGC 数が1つも読めなかったか（読み込みがたまたま失敗したなど）。
+    日本の地域で使えないという文が出ていたページ（unavailable）は、ここに来る前に外している。試験で開かなかったもの（skipped）は含めない"""
     return not info.get("skipped") and not any(info.get(k) for k in ("title", "creator", "video_count_text", "video_count"))
+
+
+# 日本の地域で使えない楽曲ページ（ログインなしで開くと「この楽曲はご利用になれません。このサウンドはお住いの国または地域では
+# ご利用になれません」と出る。acquire/pipeline.read_music_page が unavailable=True にする）を外した理由
+UNAVAILABLE_WHY = "日本の地域では使えない（TikTok の地域の制限）"
+
+
+def _unavailable_hint(song: str, artist: str, urls: list) -> dict:
+    """取るはずの楽曲ページが全部、日本の地域で使えないとき: 分析を作らず、AI にほかのページの探し方を返す
+    （2026-10-06 ユーザーの決定。一覧の段が数分で止まり、取り直しても同じになるため。利用者には確認を求めない）"""
+    s_, a_ = song or "", artist or ""
+    queries = [f"site:tiktok.com/music {s_}", f"{s_} {a_} sped up tiktok", f"{s_} {a_} tiktok 音源",
+               f"site:tiktok.com {s_} {a_}"]
+    which = "この楽曲ページ" if len(urls) == 1 else "これらの楽曲ページ"
+    text = (
+        f"まだ取得を始めていない。{which}は日本では使えない（TikTok の地域の制限。ログインなしで開くと「この楽曲はご利用になれません」と出て、"
+        "動画の一覧が取れない）:\n" + "\n".join(f"  - {u}" for u in urls) + "\n\n"
+        "1. ウェブ検索で、同じ曲のほかの公式の楽曲ページ（`https://www.tiktok.com/music/…`。sped up 版・別のアップロードなど）を探す。"
+        "次の検索を順に試す:\n" +
+        "\n".join(f"   - {q.strip()}" for q in queries) +
+        "\n2. 見つかれば、その URL を music_urls に入れて start_analysis を呼び直す（上の使えないページは入れない）\n"
+        "3. 何通りか探しても無ければ、利用者に「この曲は TikTok の日本の地域で使えないため分析できません」と伝えて止まる")
+    return {"text": text, "analysis_id": None, "created": False, "needs": "music_url", "unavailable": list(urls)}
 
 
 def _page_line(url: str, info: dict) -> str:
@@ -990,6 +1024,39 @@ def acquisition_settings_for(replies: bool, min_plays: int | None = None) -> dic
     return s or None
 
 
+def _written_once(a: Analysis) -> bool:
+    """レポートが一度でも完成したか（完了の仕事を渡し終えた。そのあとの直し・掘り下げ・切り直しで仕事が足されていても完成済み）"""
+    st = _state(a)
+    return bool(st) and any(t.get("kind") == "done" and t.get("status") == "done" for t in st.get("tasks") or [])
+
+
+def _acquired_unwritten(user_id: str, song: str, urls) -> "Analysis | None":
+    """同じ利用者・同じ曲（launch.find_active と同じ当て方）の、取得が済んでいて（acquisition done）、
+    レポートがまだ完成していない分析（新しいもの）。完成済み・止まった（failed）・やめた分析は見ない"""
+    from acquire import launch
+    for aid in launch.find_acquired(user_id, song, [u for u in urls or [] if u]):
+        try:
+            a = Analysis(aid)
+            if not _written_once(a):
+                return a
+        except (RunnerError, OSError, ValueError):   # 壊れた目録・仕事の状態は飛ばす
+            continue
+    return None
+
+
+def _resume_reply(a: Analysis, replies: bool = False, min_plays: int | None = None) -> dict:
+    """取得が済んでレポートがまだの曲を、もう一度「UGC Analyzer で〇〇を分析して」と頼まれたとき: 新しく作らず、そのまま書き始める
+    （2026-10-06 ユーザーの決定 B。前は取得中・順番待ちしか見ず、同じ曲を2〜3時間取り直していた）。
+    待ちではないので、接続口（mcp_proto._waiting_text）は kind で見分けて待ちの一文を付けない"""
+    lines = [f"『{a.title}』はもう集め終わっています（分析 ID: {a.id}）。このまま書き始めます。"]
+    what = "・".join(x for x in ("返信も取る" if replies else "", "再生の下限" if min_plays is not None else "") if x)
+    if what:   # 黙って捨てない（すでに受け付けている取得のときと同じく伝える）
+        lines.append(f"（{what}の指定は、もう集め終わったこの分析には効きません）")
+    lines.append(f"（AI へ: 利用者にはそう短く伝え、すぐ next_task（analysis_id={a.id}）を呼んで、"
+                 f"「{a.title}の分析を続けて」と言われたときと同じに進める。取得を待たない）")
+    return {"text": "\n".join(lines), "analysis_id": a.id, "created": False, "kind": "resume", "state": "acquired"}
+
+
 def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
                    candidate_urls: list | None = None, only_one: bool = False, music_urls: list | None = None,
                    video_urls: list | None = None, replies: bool = False, min_plays: int | None = None,
@@ -1035,6 +1102,10 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
         raise RunnerError("楽曲ページの URL は https://www.tiktok.com/music/曲名-数字 の形です: " + ", ".join(bad))
     if not song:
         song = _title_from_music_url(music_url or user_urls[0])
+    if before_create is None:   # 取得が済んでレポートがまだの同じ曲は、取り直さずにそのまま書き始める（TikTok を開く前に見る）
+        done = _acquired_unwritten(user_id, song, [music_url] + user_urls)
+        if done is not None:
+            return _resume_reply(done, replies, min_plays)
     found_via = ""
     dropped = []
     pages = None     # [(url, info)]。1つ目が主
@@ -1101,11 +1172,17 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
             "探して video_urls に入れて呼び直す。探しても動画がほかに無ければ、only_one=true を付けて呼び直す。")
     if LOCAL is not None and len(cands) >= 2:   # 候補を比べる（利用者が渡したものは全部取る）
         pages, dropped = _pick_music_pages(song, artist, cands[:MAX_CANDIDATES], take_all=bool(user_urls))
+        if not pages:   # どれも日本の地域で使えない: 分析を作らず、ほかのページの探し方を返す
+            return _unavailable_hint(song, artist, [u for u, _i, _w in dropped])
         music_url = pages[0][0]
         k = min(len(cands), MAX_CANDIDATES)
         where = (f"TikTok で人気の動画など {n_read} 本の音源から見つけた楽曲ページ" if survey.get("found") else
                  f"動画 {n_read} 本の音源などから見つけた楽曲ページ" if n_read else "同じ曲の楽曲ページ")
-        if user_urls:
+        n_gone = sum(1 for _u, _i, w in dropped if w == UNAVAILABLE_WHY)
+        if user_urls and n_gone:
+            found_via = (f"（渡された楽曲ページ {len(pages) + n_gone} つのうち、日本の地域で使える {len(pages)} つ"
+                         f"{'を合わせて取る' if len(pages) > 1 else 'で取る'}）")
+        elif user_urls:
             found_via = f"（渡された楽曲ページ {len(pages)} つを全部合わせて取る）"
         elif not any(i.get("video_count") for _, i in pages) and not any(i.get("video_count") for _, i, _w in dropped):
             # どのページも UGC 数が読めず、比べられていない（「一番使われているものを選んだ」と言わない）
@@ -1122,11 +1199,26 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
                          if survey.get("found") else f"（動画 {n_read} 本の音源から楽曲ページを見つけた）")
     if LOCAL is not None and not music_url:
         return _music_search_hint(song, artist)
-    urls = [u for u, _ in pages] if pages else [music_url]
     from acquire import launch
+    if LOCAL is not None and pages is None and (before_create is not None
+                                                or launch.find_active(user_id, song, music_url) is None):
+        # 楽曲ページが1つ: 分析を作る前に開いて、題・作者・UGC 数を読む（日本の地域で使えないページなら作らない）。
+        # 同じ曲の取得をもう受け付けていれば読まない（返事は受け付け済みのページを出す）
+        try:
+            info = LOCAL.inspect_music(music_url) or {}
+        except Exception as e:
+            info = {"error": type(e).__name__}
+        if info.get("unavailable"):
+            return _unavailable_hint(song, artist, [music_url])
+        pages = [(music_url, info)]
+    urls = [u for u, _ in pages] if pages else [music_url]
     with _lock:
         if before_create is not None:
             before_create()
+        else:   # ページを選んだあとでもう一度（題が違っても、同じ楽曲ページを取り終えた分析があれば、そのまま書き始める）
+            done = _acquired_unwritten(user_id, song, urls)
+            if done is not None:
+                return _resume_reply(done, replies, min_plays)
         aid = launch.find_active(user_id, song, music_url)
         created = aid is None
         if created:
@@ -1198,8 +1290,9 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
                     (f"\n  UGC は合わせて約{total:,}本です。" if total else ""))
         else:
             body = f"次の楽曲ページで進めます{found_via}: {_page_line(*pg[0])}"
-        if dropped:
-            body += ("\n外した楽曲ページ（入れたいときは「それも入れて」と言ってください）:\n" +
+        if dropped:   # 日本の地域で使えないページだけなら「それも入れて」とは言わない（入れても取れない）
+            joinable = any(w != UNAVAILABLE_WHY for _u, _i, w in dropped)
+            body += (("\n外した楽曲ページ（入れたいときは「それも入れて」と言ってください）:\n" if joinable else "\n外した楽曲ページ:\n") +
                      "\n".join(f"  - {_page_line(u, i)} … {why}" for u, i, why in dropped))
         lines = [head, body + other + warn,
                  "あなたの Mac の UGC Analyzer が、楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。"
@@ -1215,7 +1308,9 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
     ai = ("（AI へ: この内容を利用者に短く伝えて、ここで止まる。どの楽曲ページで進めるか（題・作者・UGC 数・URL）は省かずに伝える。"
           "返事の最後に、下の「」の文を言い換えずにそのまま入れる。取得を待たない・見に来ない。")
     if dropped:
-        ai += ("外した楽曲ページも伝える。利用者が「それも入れて」と言ったら、restart_analysis に、上で進める楽曲ページと足すページの URL を"
+        ai += "外した楽曲ページも伝える。"
+    if any(w != UNAVAILABLE_WHY for _u, _i, w in dropped):
+        ai += ("利用者が「それも入れて」と言ったら、restart_analysis に、上で進める楽曲ページと足すページの URL を"
                "全部 music_urls に入れて呼ぶ。")
     lines += [f"「{back}」", "", ai + "）"]
     return {"text": "\n".join(l for l in lines if l is not None), "analysis_id": aid, "created": created,
@@ -1310,6 +1405,8 @@ def next_task(user_id: str, ref: str | None = None, skip_confirm: bool = False) 
             if av["state"] == "cancelled":   # やめた取得は終わらないので「終わったら続けて」とは言わない。やり直し方を書く
                 tail = (f"\nやり直すなら、利用者が「UGC Analyzer で{a.title}を分析して」と頼めば、楽曲ページ探しから最初にやり直す"
                         f"（使いたい楽曲ページの URL があれば、それを渡して「{a.title}の取得を、このページでやり直して」）。")
+            elif av.get("dead_end"):   # 続きから取り直しても同じ（日本の地域で使えない楽曲ページ）。「終わったら続けて」とは言わない
+                tail = ""
             else:
                 tail = "\n取得が終わったら、利用者が「" + a.title + "の分析を続けて」と言えば再開する。"
             return _wait_task(a, av["message"] + tail, av["state"])
@@ -2004,11 +2101,50 @@ def prompts(user_id: str, action: str = "list", name: str | None = None, text: s
         raise RunnerError(str(e)) from e
 
 
+def _stoppable(user_id: str, restart: bool = False) -> list:
+    """曲名も分析 ID も無しで「取得をやめて」「やり直して」と頼まれたときの候補 [(分析, 様子)]（古い順）。
+    やめる: 取得中・順番待ちと、完成後の取り足し中・その順番待ち。やり直す: 取得中・順番待ちと、止まった分析（同じ曲を頼み直したものは除く）"""
+    from acquire import pipeline
+    mine = list_analyses(user_id)
+    out = []
+    for a in mine:
+        acq = a.meta.get("acquisition") or {}
+        st, dp = acq.get("status"), (a.meta.get("deepen") or {}).get("status")
+        if st == "running":
+            step = pipeline.STEP_LABELS.get(acq.get("step") or "")
+            out.append((a, f"取得中・{step}" if step else "取得中"))
+        elif st == "queued":
+            out.append((a, "順番待ち"))
+        elif restart and st == "failed" and not _superseded(a, mine):
+            out.append((a, "止まっている"))
+        elif not restart and dp in ("queued", "running"):
+            out.append((a, "取り足しの順番待ち" if dp == "queued" else "取り足し中"))
+    return sorted(out, key=lambda x: x[0].meta.get("created_at", ""))
+
+
+def _ask_which(cands: list, restart: bool = False) -> dict:
+    """候補が2つ以上: どれもやめずに一覧を返し、どれのことか AI に利用者へ1回聞かせる
+    （2026-10-06 ユーザーの決定。前は新しいほうを黙ってやめていた）"""
+    kinds = "取得中・順番待ち・止まった" if any(label == "止まっている" for _, label in cands) else "取得中・順番待ちの"
+    which = "どちら" if len(cands) == 2 else "どれ"
+    listing = "、".join(f"{a.title}（{label}。分析 ID: {a.id}）" for a, label in cands)
+    tool, verb = ("restart_analysis", "やり直す") if restart else ("cancel_analysis", "やめる")
+    text = (f"{kinds}分析が{len(cands)}つあります: {listing}。まだどれもやめていません。\n"
+            f"（AI へ: {which}を{verb}か利用者に1回聞き、答えの曲名か分析 ID で {tool} を呼び直す"
+            + ("。music_url・music_urls などの指定は今回と同じものを渡す" if restart else "") + "）")
+    return {"text": text, "analysis_id": None, "candidates": [a.id for a, _ in cands]}
+
+
 def cancel_analysis(user_id: str, ref: str | None) -> dict:
-    """取得をやめる（取得アプリの形。2026-10-04 ユーザー「取得を止めて、初めからもう一度やりたい」）"""
+    """取得をやめる（取得アプリの形。2026-10-04 ユーザー「取得を止めて、初めからもう一度やりたい」）。
+    分析を言わずに頼まれ、やめられる分析が2つ以上あれば、やめずに一覧を返す"""
     if LOCAL is None:
         raise RunnerError("取得をやめるのは、このサービスでは使えません（運営に連絡してください）")
     with _lock:
+        if not (ref or "").strip():
+            cands = _stoppable(user_id)
+            if len(cands) >= 2:
+                return _ask_which(cands)
         a = resolve(user_id, ref)
         acq = a.meta.get("acquisition") or {}
         if acq.get("status") == "done":
@@ -2028,7 +2164,8 @@ def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_u
     """取得をやめて、やり直す（取得アプリの形）。music_url・music_urls があればそのページ（複数なら全部合わせて）で、
     無ければ楽曲ページ探しから最初に
     （2026-10-04 ユーザー「〇〇の取得をやめて、このページでやり直して」「止めて初めからもう一度やって、正しい楽曲ページを抽出できるか試したい」）。
-    前の分析は「やめた」にして、取得アプリが係を止める（印のファイル）"""
+    前の分析は「やめた」にして、取得アプリが係を止める（印のファイル）。
+    分析を言わずに頼まれ、やり直せる分析が2つ以上あれば、やめずに一覧を返す"""
     if LOCAL is None:
         raise RunnerError("取得のやり直しは、このサービスでは使えません（運営に連絡してください）")
     urls = _clean_urls([music_url] + list(music_urls or []))
@@ -2037,6 +2174,10 @@ def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_u
     if bad:
         raise RunnerError("楽曲ページの URL は https://www.tiktok.com/music/曲名-数字 の形です: " + ", ".join(bad))
     with _lock:
+        if not (ref or "").strip():
+            cands = _stoppable(user_id, restart=True)
+            if len(cands) >= 2:
+                return _ask_which(cands, restart=True)
         a = resolve(user_id, ref)
         acq = a.meta.get("acquisition") or {}
         if acq.get("status") == "done":
@@ -2082,6 +2223,17 @@ def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_u
         return res
     res = start_analysis(user_id, song, artist, music_urls=urls, replies=rep, min_plays=mp, skip_confirm=skip,
                          before_create=cancel_old)   # やり直しは利用者が選んだページで（複数なら全部）
+    if not res.get("analysis_id"):
+        # 渡されたページが全部、日本の地域で使えなかった（分析は作っていない。前の取得はやめる前なので、そのまま）。
+        # 呼び直すのは start_analysis でなく restart_analysis（同じ曲の取得が残っていると、start_analysis は受け付け済みを返すため）
+        body = _unavailable_hint(song, artist, res["unavailable"])["text"] if res.get("unavailable") else res["text"]
+        res["text"] = (f"「{a.title}」の前の取得（{old}）は{'もうやめてあります' if was_cancelled else 'まだやめていません'}。\n"
+                       + body.replace("music_urls に入れて start_analysis を呼び直す",
+                                      f"music_urls に入れて restart_analysis（analysis_id={a.id}）を呼び直す")
+                       + "\n（AI へ: start_analysis は呼ばない。" + ("" if was_cancelled else
+                                                                    "前の取得は、ほかの楽曲ページで restart_analysis を呼んだときにやめる。")
+                       + "返信・再生の下限・界隈の確認の指定は引き継ぐので付けなくてよい）")
+        return res
     res["text"] = (f"「{a.title}」の前の取得（{old}）{did}。\n" + res["text"])
     res["cancelled"] = a.id
     return res

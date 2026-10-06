@@ -306,6 +306,11 @@ class Run:
             except Exception:
                 pass
         if not seen:
+            if pages and all(p.get("unavailable") for p in pages):
+                # 日本の地域で使えない楽曲ページ（read_music_page がその文を見た）。取り直しても同じなので、別のページでのやり直し方を書く
+                # （collector_app/jobs.retriable はこの文で取り直さない）
+                raise StepError(f"{UNAVAILABLE_STOP}。ほかの楽曲ページの URL で"
+                                f"『{self.meta.get('title') or self.id}の取得をやめて、このページでやり直して』と頼んでください")
             raise StepError("楽曲ページから動画が1本も見つかりませんでした（URL が違うか、TikTok 側の表示制限）")
         for pg in pages:   # 楽曲ページが作られた日時（番号から）
             pg["created_at"] = iso_time(id_time(pg["url"].rstrip("/").rsplit("-", 1)[-1]))
@@ -664,6 +669,14 @@ class Run:
 # ---------------------------------------------------------------------------
 MUSIC_PAGE_JS = """const g = k => { const e = document.querySelector('[data-e2e="' + k + '"]'); return e ? (e.innerText || '').trim() : null; };
 return {title: g('music-title'), creator: g('music-creator'), video_count_text: g('music-video-count')};"""
+# 日本の地域で使えない楽曲ページ（2026-10-06 ビビデバ。ログインなしで開くと「この楽曲はご利用になれません。このサウンドはお住いの国または地域では
+# ご利用になれません」と出て、題・作者・UGC 数も動画も出ない。一覧の段は「動画が1本も見つかりませんでした」で止まり、取り直しても同じ）。
+# 英語の表示の「This sound isn't available in your country or region」なども
+UNAVAILABLE_RE = re.compile(r"ご利用になれません|ご利用いただけません|isn['’]t available in your|not available in your|"
+                            r"unavailable in your (?:country|region)", re.I)
+PAGE_TEXT_JS = "return document.body ? (document.body.innerText || '').slice(0, 20000) : '';"
+# 使えない楽曲ページで一覧の段が止まったときの文の頭（collector_app/jobs.retriable・proto_runner._acq_view もこの文で見分ける）
+UNAVAILABLE_STOP = "この楽曲ページは日本の地域では使えません（TikTok の地域の制限）"
 
 
 def id_time(i):
@@ -750,9 +763,20 @@ def parse_count(text):
     return int(round(v * mul))
 
 
+def page_unavailable(driver) -> bool:
+    """楽曲ページの本文に、日本の地域では使えないという TikTok の文が出ているか（UNAVAILABLE_RE）。読めなければ False"""
+    try:
+        text = driver.execute_script(PAGE_TEXT_JS)
+    except Exception:
+        return False
+    return isinstance(text, str) and bool(UNAVAILABLE_RE.search(text))
+
+
 def read_music_page(driver, wait: float = 15) -> dict:
     """楽曲ページの題・作者・UGC 数（表示の文字と数）。ページを開いたあとで呼ぶ（要求は増えない）。
-    表示は読み込みのあとから出てくるので、UGC 数が出るまで最大 wait 秒待つ"""
+    表示は読み込みのあとから出てくるので、UGC 数が出るまで最大 wait 秒待つ。
+    題も UGC 数も読めないうちは本文も見て、日本の地域では使えないという文が出ていれば unavailable=True にして待たずに返す
+    （その文が出ているときだけ。読み込みがたまたま遅いだけのページは今までどおり wait 秒まで待つ）"""
     info = {}
     t0 = time.time()
     while True:
@@ -760,7 +784,12 @@ def read_music_page(driver, wait: float = 15) -> dict:
             info = driver.execute_script(MUSIC_PAGE_JS) or {}
         except Exception as e:
             return {"error": f"{type(e).__name__}"}
-        if info.get("video_count_text") or time.time() - t0 > wait:
+        if info.get("video_count_text"):
+            break
+        if not info.get("title") and page_unavailable(driver):
+            info["unavailable"] = True   # 題・UGC 数はこのあとも出ない
+            break
+        if time.time() - t0 > wait:
             break
         time.sleep(1)
     info["video_count"] = parse_count(info.get("video_count_text"))

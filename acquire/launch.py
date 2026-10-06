@@ -65,21 +65,37 @@ def new_analysis(owner: str, song: str, artist: str = "", music_url: str = "", s
     return aid
 
 
-def find_active(owner: str, song: str, music_url: str = ""):
-    """同じ利用者の、同じ曲の取得中・待ちの分析（AI が二重に頼んだときに2つ作らない）"""
+def _same_song(m: dict, song: str, music_urls) -> bool:
+    """同じ曲の分析か: 楽曲ページの URL のどれかが同じか、曲名が同じ（前後の空白・大文字小文字は見ない）"""
+    have = [m.get("music_url")] + list(m.get("music_urls") or [])
+    return any(u and u in have for u in music_urls or []) or \
+        bool(song and str((m.get("song") or {}).get("title") or "").strip().lower() == song.strip().lower())
+
+
+def _mine(owner: str):
+    """同じ利用者の分析の (フォルダ, 目録)"""
     for d in pipeline.ANALYSES_DIR.iterdir() if pipeline.ANALYSES_DIR.exists() else []:
         if not d.is_dir():   # .DS_Store など
             continue
         m = pipeline.read_json(d / "analysis.json") or {}
-        if m.get("owner") != owner:
-            continue
-        st = (m.get("acquisition") or {}).get("status")
-        if st not in ("queued", "running"):
-            continue
-        if (music_url and music_url in ([m.get("music_url")] + list(m.get("music_urls") or []))) or \
-                (song and (m.get("song") or {}).get("title", "").strip().lower() == song.strip().lower()):
+        if isinstance(m, dict) and m.get("owner") == owner:
+            yield d, m
+
+
+def find_active(owner: str, song: str, music_url: str = ""):
+    """同じ利用者の、同じ曲の取得中・待ちの分析（AI が二重に頼んだときに2つ作らない）"""
+    for d, m in _mine(owner):
+        if (m.get("acquisition") or {}).get("status") in ("queued", "running") and _same_song(m, song, [music_url]):
             return d.name
     return None
+
+
+def find_acquired(owner: str, song: str, music_urls=()) -> list:
+    """同じ利用者の、同じ曲（find_active と同じ当て方）の、取得が済んだ分析の ID（新しい順）。
+    レポートがまだかどうかは見ない（proto_runner が仕事の状態で見分ける）"""
+    hits = [(m.get("created_at") or "", d.name) for d, m in _mine(owner)
+            if (m.get("acquisition") or {}).get("status") == "done" and _same_song(m, song, list(music_urls or []))]
+    return [aid for _, aid in sorted(hits, reverse=True)]
 
 
 def ensure_worker() -> str:

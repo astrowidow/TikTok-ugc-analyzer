@@ -59,6 +59,21 @@
     "dir": "{HOME}/analyses/x-sil-b1p",
     "role": "variant",
     "note": "全動画1ページ（先頭20件）＋週ごとはクラスタ上位3本（B、95本）・返信なし"
+   },
+   "ft1": {
+    "dir": "output/fulltest_20261006/v1",
+    "role": "variant",
+    "note": "通し試験 2026-10-06（0.5.8・0から・楽曲ページ2つ 255.9K＋131.8K・必ず＋属性の山の上位を1本1ページ）の第1版。本番（prod）は 131.8K の1ページ。完成した直後の outputs を写したもの"
+   },
+   "ft2": {
+    "dir": "output/fulltest_20261006/v2",
+    "role": "variant",
+    "note": "通し試験 2026-10-06 の掘り下げのあと（第2版）"
+   },
+   "ft3": {
+    "dir": "output/fulltest_20261006/v3",
+    "role": "variant",
+    "note": "通し試験 2026-10-06 の切り直しのあと（第3版）"
    }
   }
  },

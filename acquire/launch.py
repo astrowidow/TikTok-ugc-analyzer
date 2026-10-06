@@ -31,6 +31,7 @@ TASK_NAME = "tiktok-acq"
 # （準備: Chrome を起こしてグリッドで対象を探す。2026-10-06 の実走で 5.5分）
 # 一覧の時間と、一覧が済むまでの本数は、楽曲ページ1つあたり（2026-10-06 の実走: シルエット2ページで一覧 580秒・1,812本、きゃわ2ページで 1,711本）
 LIST_SECONDS = 290
+FAN_SEARCH_SECONDS = 240
 ENRICH_SECONDS_PER_VIDEO = 3.3
 DERIVE_SECONDS = 120
 TYPICAL_VIDEOS = 900
@@ -134,7 +135,8 @@ def _remaining_seconds(m: dict) -> int:
         guess = int(s.get("pool_budget") or 0) or int(float(s["comment_hours"]) * 60 / float(s["min_per_video"]))
     n_pool = ((steps.get("pool") or {}).get("detail") or {}).get("n_pool") or guess
     per = pipeline.minutes_per_comment_video(s)
-    est = {"resolve": 60, "list": LIST_SECONDS * pages, "enrich": n_links * ENRICH_SECONDS_PER_VIDEO, "derive": DERIVE_SECONDS,
+    # resolve: 同じ曲のファンの音源を探す（discover 4ページ・動画40本ほどの音源・UGC 数4つ。pipeline.Run.add_fan_sounds）
+    est = {"resolve": FAN_SEARCH_SECONDS if int(s.get("fan_sounds") or 0) else 60, "list": LIST_SECONDS * pages, "enrich": n_links * ENRICH_SECONDS_PER_VIDEO, "derive": DERIVE_SECONDS,
            "pool": 10, "comments": n_pool * per * 60 + 600,
            "comments_md": 30, "notify": 5}
     total = 0.0

@@ -210,7 +210,7 @@ def ugc_total(a):
                 "partial": False}
     parts = [{"label": "／".join(x for x in (m.get("title"), m.get("creator")) if x) or "楽曲ページ",
               "n": m.get("video_count"), "text": (m.get("video_count_text") or "読めず").replace(" 動画", ""),
-              "url": m.get("url")} for m in pages]
+              "url": m.get("url"), "kind": m.get("kind") or ""} for m in pages]
     return {"n": sum(m["video_count"] for m in got), "text": "＋".join(x["text"] for x in parts), "at": at,
             "parts": parts, "partial": len(got) < len(pages)}
 
@@ -227,7 +227,48 @@ def ugc_parts_line(u) -> str:
     """合計の内訳（楽曲ページが2つ以上のとき）"""
     if not u or not u.get("parts"):
         return ""
-    return "、".join(f"『{x['label']}』{x['text']}" for x in u["parts"])
+    return "、".join(f"{'ファンの音源' if x.get('kind') == 'fan' else ''}『{x['label']}』{x['text']}" for x in u["parts"])
+
+
+def sounds(a) -> list:
+    """音源（楽曲ページ）が2つ以上のときの音源ごとの要約（analysis/build_llm_input.py の llm_input/sounds.json。
+    tag・title・creator・kind（"fan" はファンが上げた同じ曲の音源）・duration・video_count_text）。1つなら []"""
+    v = pr._read_json(a.derived("llm_input", "sounds.json"), [])
+    return v if isinstance(v, list) and len(v) >= 2 else []
+
+
+def sound_name(s: dict) -> str:
+    shown = "／".join(x for x in (s.get("title"), s.get("creator")) if x) or "楽曲ページ"
+    what = ("ファンが上げた同じ曲の音源、" if s.get("kind") == "fan" else "") + (f"{s['duration']}秒" if s.get("duration") else "長さ不明")
+    return f"音源{s['tag']}『{shown}』（{what}）"
+
+
+def sound_lines(a, detail: bool = False) -> list:
+    """音源ごとの行: UGC 数・集めた投稿の本数・最初の投稿・本数のピーク週・再生の最多の投稿。detail なら画面の文字と提案語の上位も。
+    同じ曲でも、切り抜いた部分（音源）ごとに使われ方が違うことがある（2026-10-06 きゃわぽっぴんどぅー: ファンの12秒の音源で自己紹介の波）"""
+    recs = records(a)
+    out = []
+    for s in sounds(a):
+        mine = [r for r in recs.values() if r.get("sound") == s["tag"]]
+        ugc = (s.get("video_count_text") or "読めず").replace(" 動画", "")
+        if not mine:
+            out.append(f"- {sound_name(s)}: UGC {ugc}。集めた投稿なし")
+            continue
+        peak, n_peak = collections.Counter(r["week"] for r in mine).most_common(1)[0]
+        first = min(mine, key=lambda r: r["date"])
+        top = max(mine, key=lambda r: r["plays"])
+        line = (f"- {sound_name(s)}: UGC {ugc}。集めた投稿 {len(mine)}本、最初の投稿 {vline(first)}、"
+                f"本数のピーク週 {peak}（{n_peak}本）、再生の最多 {vline(top)}")
+        if detail:
+            st = collections.Counter(x for r in mine for x in (r.get("sticker_texts") or []))
+            sg = collections.Counter(x for r in mine for x in (r.get("suggested_words") or []))
+            line += ("\n  - 画面上の文字の上位: " + ("、".join(f"{w[:30]}（{n}）" for w, n in st.most_common(5)) or "（なし）") +
+                     "\n  - 提案語の上位: " + ("、".join(f"{w}（{n}）" for w, n in sg.most_common(8)) or "（なし）"))
+        out.append(line)
+    return out
+
+
+SOUNDS_HEAD = "- 音源ごと（動画の「音源A」などは、その投稿が使った音源。集めた本数は手掛かりで、本文に書かない）:"
 
 
 def fmt_count(n) -> str:
@@ -303,7 +344,7 @@ def fmt_plays(n) -> str:
 def vline(r: dict) -> str:
     """動画1本の短い記述（材料用）"""
     au = (r.get("author") or {}).get("id")
-    return f"seq {r['seq']}（@{au}、{r['date']}、再生 {r['plays']:,}）"
+    return f"seq {r['seq']}（@{au}、{r['date']}、再生 {r['plays']:,}{'、音源' + r['sound'] if r.get('sound') else ''}）"
 
 
 def entry(a, r: dict, sheet_of: dict) -> str:
@@ -315,7 +356,8 @@ def entry(a, r: dict, sheet_of: dict) -> str:
         f"- 投稿者: @{au.get('id')}（{au.get('nickname') or '-'}）fol={au.get('followers'):,} videos={au.get('videos')} verified={au.get('verified')}"
         if isinstance(au.get("followers"), int) else f"- 投稿者: @{au.get('id')}（属性取得なし）",
         f"- bio: {au['bio']}" if au.get("bio") else None,
-        f"- 言語={r.get('text_language')} TikTokラベル={r.get('tiktok_labels')} 元音源={r.get('uses_original_sound')} 広告={r.get('is_ad')}",
+        f"- 言語={r.get('text_language')} TikTokラベル={r.get('tiktok_labels')} "
+        + (f"音源={r['sound']}" if r.get("sound") else f"元音源={r.get('uses_original_sound')}") + f" 広告={r.get('is_ad')}",
         f"- 説明文: {r.get('desc') or '(なし)'}",
         f"- タグ: {' '.join('#' + t for t in r['hashtags'])}" if r.get("hashtags") else None,
         f"- メンション: {' '.join('@' + m for m in r['mentions'])}" if r.get("mentions") else None,
@@ -820,7 +862,9 @@ def phase_materials(a) -> dict:
         s = min((s for s, l in labs.items() if l["community"] == k), key=lambda s: recs[s]["date"])
         firsts.append(f"- {k}: {vline(recs[s])}")
     dates = sorted(r["date"] for r in recs.values())
-    return {"n_labeled": len(labs), "candidates": "\n".join(cands[:14]), "weekly_table": "\n".join(rows),
+    sl = sound_lines(a)
+    return {"n_labeled": len(labs), "candidates": "\n".join(cands[:14] + ([SOUNDS_HEAD] + ["  " + x for x in sl] if sl else [])),
+            "weekly_table": "\n".join(rows),
             "firsts": "\n".join(firsts), "first_date": dates[0], "last_date": dates[-1]}
 
 
@@ -1524,8 +1568,9 @@ def common_materials(a, base) -> str:
     total_plays = sum(r["plays"] for r in recs.values())
     if u and u["parts"]:
         head = (f"- **この曲の UGC 数**（同じ曲の楽曲ページ {len(u['parts'])} つの表示の合計、{u['at']} 時点）: {fmt_count(u['n'])}"
-                f"（内訳: {ugc_parts_line(u)}）。記事の数字はこの合計で語る（内訳に触れるなら「原曲と sped up 版などを合わせて」のように、"
-                "読者に分かる言い方で）" + ("。一部のページは数が読めず、合計に入っていない" if u["partial"] else ""))
+                f"（内訳: {ugc_parts_line(u)}）。記事の数字はこの合計で語る（内訳に触れるなら「原曲と sped up 版などを合わせて」"
+                "「公式の音源と、ファンが上げた切り抜きの音源を合わせて」のように、読者に分かる言い方で）"
+                + ("。一部のページは数が読めず、合計に入っていない" if u["partial"] else ""))
     elif u:
         head = f"- **この曲の UGC 数**（楽曲ページの表示、{u['at']} 時点）: {fmt_count(u['n'])}（表示「{u['text']}」）。記事の数字はこれで語る"
     else:
@@ -1535,7 +1580,8 @@ def common_materials(a, base) -> str:
     if rel:
         head += (f"\n- 曲の公開日（楽曲ページが作られた日）: {rel['date']}。これより前の日付の投稿は、あとから音源が付いたものとして"
                  "すべて除いてある。曲がこれより前から使われていたとは書かない")
-    return (head + "\n"
+    sl = sound_lines(a)
+    return (head + "\n" + ("\n".join([SOUNDS_HEAD] + ["  " + x for x in sl]) + "\n" if sl else "") +
             f"- 投稿の期間: {base['period']}\n"
             f"- 経路を調べた手掛かり（**記事の本文に本数を書かない**。付録にサービスが書く）: 楽曲ページに並んだ投稿 {len(recs)}本"
             f"（再生の合計 {fmt_plays(total_plays)}）、そのうち分類した {len(labs)}本、コメントを読んだ {n_comm or len(video_analyses(a))}本\n"
@@ -1731,7 +1777,8 @@ def write_prompt(a, t, base, st):
         cat += [pr._catalog_line("chapter:path_P1 …", "書き終えた拡大経路の章"), pr._catalog_line("synthesis", "界隈ごとの統合"),
                 pr._catalog_line("pathway", "拡散経路の下書き")]
         spec = ("まず `### ここまでの拡大経路をまとめると` で段階の流れを矢印などで短く再掲する。次に `## 2. バズの分岐点とその理由` を立て、"
-                "分岐点（0→1、界隈を越えた瞬間、公式の合流など）を3〜6個、`### 分岐点① …` の形で、それぞれ理由をデータで書く。"
+                "分岐点（0→1、界隈を越えた瞬間、公式の合流、曲の別の部分を切り抜いた音源で新しい使い方が始まった瞬間など）を3〜6個、"
+                "`### 分岐点① …` の形で、それぞれ理由をデータで書く。"
                 "最後に `### 【重要な補足】この曲で起きなかったこと`（よく言われる通説〔知識ベースの J 章〕がこの曲には当てはまらない点など。"
                 "記事に出どころは書かない）。")
         heading, length = heading_of(a, ch), "2,000〜4,000字"
@@ -1757,7 +1804,8 @@ def write_prompt(a, t, base, st):
                 "- 3章: 曲そのものの特徴を、ウェブで調べた曲の情報（作り手・編曲・BPM・ジャンル・歌詞・本人や作り手の言葉）と、使われ方"
                 "（画面の文字・検索候補・尺・元音源の割合）、コメントの言及で書く。音の特徴は、出どころ（調べた情報かコメント）のあることだけを言い切る\n"
                 "- 4章: よく使われた部分（画面の文字・台詞）が曲のどこ（イントロ・Aメロ・サビ・台詞）にあたるかを、調べた歌詞の構成と突き合わせて書き、"
-                "なぜそこが切り出されたかを使われ方で説明する\n"
+                "なぜそこが切り出されたかを使われ方で説明する。音源が2つ以上で、音源（切り抜いた部分）ごとに使われ方が違えば、"
+                "音源ごとに曲のどこで・どう使われたかを書く\n"
                 + era_spec +
                 "調べても分からなかったことには触れない。「音源を分析していない」「ここは人の考察」のような断り書きを書かない。")
         heading, length = heading_of(a, ch), "2,500〜5,000字"
@@ -1837,9 +1885,11 @@ def music_materials(a) -> str:
                 music_q.append(f"- seq {s}: 『{q.get('text', '')[:80]}』（{q.get('likes')} いいね、cid {q.get('cid')}）")
     if not va:   # 界隈ごとのコメント分析の形: コメント全体から、音・曲に触れたもの（いいね順）
         music_q = music_comments(a)
+    sl = sound_lines(a, detail=True)
     return ("#### 音と使われ方のデータ\n"
-            f"- 尺: 中央値 {dur[len(dur) // 2] if dur else '?'}秒（{len(dur)}本）\n"
-            f"- 元の音源（楽曲の公式音源）を使った動画: {sum(1 for r in orig if r['uses_original_sound'])} / {len(orig)}本\n"
+            f"- 尺: 中央値 {dur[len(dur) // 2] if dur else '?'}秒（{len(dur)}本）\n" +
+            ("\n".join([SOUNDS_HEAD] + ["  " + x.replace("\n  -", "\n    -") for x in sl]) + "\n" if sl else
+             f"- 元の音源（楽曲の公式音源）を使った動画: {sum(1 for r in orig if r['uses_original_sound'])} / {len(orig)}本\n") +
             "- TikTok の提案語（検索・コメント由来）の上位: " + "、".join(f"{w}（{n}）" for w, n in sug.most_common(15)) + "\n"
             "- 画面上の文字の上位: " + "、".join(f"{w[:30]}（{n}）" for w, n in stick.most_common(10)) + "\n\n"
             "#### コメントで音・曲・原作に触れた引用（コメント分析から）\n" + ("\n".join(music_q[:20]) or "（なし）"))

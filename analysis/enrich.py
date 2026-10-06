@@ -49,6 +49,13 @@ def g(d, *ks, default=None):
     return d
 
 
+def meta_song_ids(music):
+    """TikTok がその音源を照合した曲の番号（music.tt2dsp の MetaSongId）。公式の音源も、ファンが上げた「オリジナル楽曲 - 〇〇」も、
+    同じ曲なら同じ番号になる（2026-10-06 きゃわぽっぴんどぅー: 公式の2つとファンの音源がどれも 7644122555377502225）"""
+    infos = ((music or {}).get("tt2dsp") or {}).get("tt_to_dsp_song_infos") or []
+    return sorted({str(x["MetaSongId"]) for x in infos if isinstance(x, dict) and x.get("MetaSongId")})
+
+
 def extract(it):
     author = it.get("author") or {}
     astats = it.get("authorStats") or {}
@@ -116,6 +123,7 @@ def extract(it):
             "author": music.get("authorName"),
             "original": music.get("original"),
             "duration": music.get("duration"),
+            "meta_song_ids": meta_song_ids(music),
         },
         "preloaded_comments": it.get("comments") if isinstance(it.get("comments"), list) and len(json.dumps(it.get("comments"))) < 20000 else None,
         "raw_keys": sorted(it.keys()),

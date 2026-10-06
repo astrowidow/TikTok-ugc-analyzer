@@ -139,24 +139,16 @@ class LocalHooks:
             g = given[:max(given_max, limit + given_max - len(found[:limit]))]
             reads += [{**m, "video": v} for v, m in zip(g, self.music_from_videos(g))]
             return {"discover": url, "found": len(found), "reads": reads}
-        import time
         import scraper
+        from acquire import pipeline
         d = scraper.create_headless_driver()
         links = []
         try:
             if url:
-                try:
-                    d.get(url)
-                    t0 = time.time()
-                    while time.time() - t0 < 8:   # 動画の並びは読み込みのあとから出てくる
-                        links = d.execute_script("return Array.from(document.querySelectorAll('a[href*=\"/video/\"]'))"
-                                                 ".map(a => a.href.split('?')[0]);") or []
-                        if len(set(links)) >= limit:
-                            break
-                        time.sleep(1)
+                try:   # 動画の並びは読み込みのあとから出てくる（limit 本そろうか8秒まで待つ）
+                    links = pipeline.discover_links(d, song, limit)
                 except Exception:
                     links = []
-                links = list(dict.fromkeys(links))
             # 読むのは合わせて limit + given_max 本まで（道具の返事が遅くなりすぎないように）。discover で足りなければ、渡された動画で埋める
             targets = list(dict.fromkeys(given[:max(given_max, limit + given_max - len(links[:limit]))] + links[:limit]))
             reads = [{**self._read_music(d, v), "video": v} for v in targets]

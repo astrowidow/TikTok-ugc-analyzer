@@ -65,7 +65,8 @@ class TestRepliesOption(unittest.TestCase):
         r = pr.start_analysis("u1", "テスト", "だれか", music_urls=[URL])
         m = self.meta(r["analysis_id"])
         self.assertFalse(pr.wants_replies(m))
-        self.assertEqual(m["acquisition_settings"], {"chrome_port": "9250"})
+        # 楽曲ページを渡した（music_urls）ので、同じ曲のファンの音源は探さない（fan_sounds 0）
+        self.assertEqual(m["acquisition_settings"], {"chrome_port": "9250", "fan_sounds": 0})
         self.assertNotIn("返信も取ります", r["text"])
 
     def test_replies_true_writes_settings(self):

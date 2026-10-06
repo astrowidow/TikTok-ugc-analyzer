@@ -866,7 +866,9 @@ def _acq_pages(a: Analysis) -> list:
     used = [u for u in (a.meta.get("music_urls") or [a.meta.get("music_url")]) if u]
     seen = {r.get("url"): r for r in (_read_json(ANALYSES_DIR / a.id / "raw" / "music_pages.json", []) or [])
             if isinstance(r, dict)}
-    return [{"url": u, **{k: (seen.get(u) or {}).get(k) for k in ("title", "creator", "video_count_text")}} for u in used]
+    return [{"url": u, **{k: (seen.get(u) or {}).get(k) for k in ("title", "creator", "video_count_text")},
+             **({"kind": "同じ曲のファンの音源（取得のはじめに見つけて足した）"} if (seen.get(u) or {}).get("kind") == "fan" else {})}
+            for u in used]
 
 
 MUSIC_URL_RE = re.compile(r"^https://(www\.)?tiktok\.com/music/[^\s/]+-\d+")
@@ -1028,13 +1030,16 @@ CONFIRM_ONCE = "（途中で1回、界隈の分け方を確認します）"
 CONFIRM_SKIPPED = "（界隈の分け方の確認は省いて、最後まで書きます）"
 
 
-def acquisition_settings_for(replies: bool, min_plays: int | None = None) -> dict | None:
-    """新しい分析の目録に書く取得の設定（取得アプリの設定に、返信・再生の下限の指定を重ねる）"""
+def acquisition_settings_for(replies: bool, min_plays: int | None = None, fan_sounds: bool = True) -> dict | None:
+    """新しい分析の目録に書く取得の設定（取得アプリの設定に、返信・再生の下限の指定を重ねる）。
+    fan_sounds=False（利用者が楽曲ページを渡した）なら、同じ曲のファンの音源を探さない（acquire/pipeline.Run.add_fan_sounds）"""
     s = dict(LOCAL.acquisition_settings() or {}) if LOCAL is not None else {}
     if replies:
         s.update(REPLIES_ON)
     if min_plays is not None:
         s["min_plays_weekly"] = max(0, int(min_plays))
+    if not fan_sounds:
+        s["fan_sounds"] = 0
     return s or None
 
 
@@ -1241,8 +1246,8 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
             if len(active) >= MAX_ACTIVE_PER_USER:
                 raise RunnerError(f"取得中・順番待ちの分析が{len(active)}件あります。終わってから次を頼んでください: "
                                   + ", ".join(a.title for a in active))
-            aid = launch.new_analysis(user_id, song, artist, music_url, acquisition_settings_for(replies, min_plays),
-                                      music_urls=urls)
+            aid = launch.new_analysis(user_id, song, artist, music_url,
+                                      acquisition_settings_for(replies, min_plays, fan_sounds=not user_urls), music_urls=urls)
     if LOCAL is not None and created and pages is None:   # どの楽曲ページで進めるかを見せるため、題・作者・UGC 数を読む（読めなくても進める）
         try:
             info = LOCAL.inspect_music(music_url) or {}
@@ -1308,9 +1313,11 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
             joinable = any(w != UNAVAILABLE_WHY for _u, _i, w in dropped)
             body += (("\n外した楽曲ページ（入れたいときは「それも入れて」と言ってください）:\n" if joinable else "\n外した楽曲ページ:\n") +
                      "\n".join(f"  - {_page_line(u, i)} … {why}" for u, i, why in dropped))
+        fan = ("同じ曲をファンが上げた音源（別の部分の切り抜きなど）も探し、よく使われていれば合わせて取ります。"
+               if created and int((meta_now.get("acquisition_settings") or {}).get("fan_sounds", 1) or 0) else "")
         lines = [head, body + other + warn,
                  "あなたの Mac の UGC Analyzer が、楽曲ページの動画一覧・属性・サムネを取り、コメントを取る動画を数字で決めてコメントを取ります。"
-                 + reply_line,
+                 + fan + reply_line,
                  (f"前に{p['ahead']}件あります。" if p.get("ahead") else ""),
                  "そのあいだ Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）。"]
     else:

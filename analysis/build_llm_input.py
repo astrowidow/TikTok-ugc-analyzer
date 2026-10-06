@@ -36,6 +36,45 @@ ids = [e["music"]["id"] for e in enriched.values() if e.get("music") and e["musi
 if ids:
     SONG_MUSIC_ID = max(set(ids), key=ids.count)
 
+# 音源（楽曲ページ）が2つ以上の分析: 動画ごとにどの音源か（A・B・C…。ページの順）。動画の音源の id で当て、読めなければ見つけたページで。
+# 同じ曲でも、切り抜いた部分（音源）ごとに使われ方が違うことがある（2026-10-06 きゃわぽっぴんどぅー: ファンが上げた12秒の音源で、
+# 2番の「血液型とかMBTIとか」を使う自己紹介の波）。音源ごとの要約は llm_input/sounds.json（flow_w1.sounds）
+RAW = pathlib.Path(args.enriched).parent if args.enriched else d.parent / "raw"
+
+
+def _read_json(p, default):
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+PAGES = [p for p in (_read_json(RAW / "music_pages.json", []) or []) if isinstance(p, dict) and p.get("url")]
+SOUNDS, SOUND_OF_ID, SOUND_OF_PAGE, SOURCE = [], {}, {}, {}
+if len(PAGES) >= 2:
+    if (RAW / "grid_links.jsonl").exists():
+        for line in open(RAW / "grid_links.jsonl", encoding="utf-8"):
+            try:
+                g = json.loads(line)
+            except ValueError:
+                continue
+            SOURCE[str(g.get("video_id"))] = int(g.get("source") or 1)
+    for k, p in enumerate(PAGES, 1):
+        tag = chr(ord("A") + k - 1) if k <= 26 else str(k)
+        mid = p["url"].rstrip("/").split("?")[0].rsplit("-", 1)[-1]
+        durs = [e["music"]["duration"] for e in enriched.values()
+                if str((e.get("music") or {}).get("id")) == mid and (e.get("music") or {}).get("duration")]
+        SOUND_OF_ID[mid], SOUND_OF_PAGE[k] = tag, tag
+        SOUNDS.append({"tag": tag, "url": p["url"], "title": p.get("title"), "creator": p.get("creator"), "kind": p.get("kind") or "",
+                       "duration": p.get("duration") or (max(set(durs), key=durs.count) if durs else None),
+                       "video_count": p.get("video_count"), "video_count_text": p.get("video_count_text")})
+
+
+def sound_of(v, e):
+    if not SOUNDS:
+        return None
+    return SOUND_OF_ID.get(str((e.get("music") or {}).get("id"))) or SOUND_OF_PAGE.get(SOURCE.get(str(v["video_id"]), 1))
+
 
 def compact(v):
     e = enriched.get(v["video_id"]) or {}
@@ -70,6 +109,7 @@ def compact(v):
         "effect_stickers": e.get("effect_stickers") or [],
         "suggested_words": sug[:10],
         "uses_original_sound": ((e.get("music") or {}).get("id") == SONG_MUSIC_ID) if e.get("music") else None,
+        "sound": sound_of(v, e),
         "is_ad": e.get("is_ad"),
         "enriched": bool(e) and "error" not in e,
         "cover_file": e.get("cover_file"),
@@ -81,6 +121,10 @@ records = [compact(v) for v in sorted(videos.values(), key=lambda v: v["seq"])]
 with open(out / "records.jsonl", "w", encoding="utf-8") as f:
     for r in records:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
+if SOUNDS:
+    (out / "sounds.json").write_text(json.dumps(SOUNDS, ensure_ascii=False, indent=1), encoding="utf-8")
+elif (out / "sounds.json").exists():
+    (out / "sounds.json").unlink()
 by_seq = {r["seq"]: r for r in records}
 
 # 同じ層化サンプルを使う（prep_sample.py の出力から seq を拾う）
@@ -97,7 +141,8 @@ def fmt(r):
         f"### seq {r['seq']} | {r['date']} | {r['type']} | 再生 {r['plays']:,} / いいね {r['likes']:,} / コメント {r['comments']:,} / 共有 {r['shares']:,} | 尺 {r['duration_s']}s",
         f"- 投稿者: @{a['id']}（{a['nickname'] or '-'}）fol={a['followers']:,} videos={a['videos']} verified={a['verified']}" if isinstance(a.get("followers"), int) else f"- 投稿者: @{a['id']}（属性取得なし）",
         f"- bio: {a['bio']}" if a.get("bio") else None,
-        f"- 地域={r['location_created']} 言語={r['text_language']} TikTokラベル={r['tiktok_labels']} 元音源={r['uses_original_sound']} 広告={r['is_ad']}",
+        f"- 地域={r['location_created']} 言語={r['text_language']} TikTokラベル={r['tiktok_labels']} "
+        + (f"音源={r['sound']}" if r.get("sound") else f"元音源={r['uses_original_sound']}") + f" 広告={r['is_ad']}",
         f"- 説明文: {r['desc'] or '(なし)'}",
         f"- タグ: {' '.join('#'+t for t in r['hashtags'])}" if r["hashtags"] else None,
         f"- メンション: {' '.join('@'+m for m in r['mentions'])}" if r["mentions"] else None,

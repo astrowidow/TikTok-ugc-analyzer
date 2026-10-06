@@ -818,8 +818,11 @@ def status(user_id: str, ref: str | None = None) -> dict:
         for a in targets:
             av = _acq_view(a)
             if av:
-                items.append({"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": av["state"],
-                              "progress": "取得の段", "message": av["message"], "eta_seconds": av["eta_seconds"]})
+                item = {"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": av["state"],
+                        "progress": "取得の段", "message": av["message"], "eta_seconds": av["eta_seconds"]}
+                if av["state"] != "cancelled":
+                    item["pages"] = _acq_pages(a)
+                items.append(item)
                 continue
             dv = _deepen_view(a)
             if dv:
@@ -851,8 +854,19 @@ def status(user_id: str, ref: str | None = None) -> dict:
                           "progress": _progress(st), "message": msg})
         if not items:
             return {"text": "あなたの分析はまだありません。", "analyses": []}
-        text = "\n".join(f"- {i['title']}（{i['analysis_id']}）: {i['message']} 進み具合 {i['progress']}" for i in items)
+        text = "\n".join(f"- {i['title']}（{i['analysis_id']}）: {i['message']} 進み具合 {i['progress']}"
+                         + "".join(f"\n  - 取っている楽曲ページ: {_page_line(p['url'], p)}" for p in i.get("pages") or [])
+                         for i in items)
         return {"text": text, "analyses": items}
+
+
+def _acq_pages(a: Analysis) -> list:
+    """取得の段の分析が取っている楽曲ページ（題・作者・UGC 数・URL）。受け付けのときに読んだ記録（raw/music_pages.json）から。
+    start_analysis の返事が時間切れで途切れても、status から利用者に伝えられるように（2026-10-06 友達の試し。mcp_proto.START_CUT_RULE）"""
+    used = [u for u in (a.meta.get("music_urls") or [a.meta.get("music_url")]) if u]
+    seen = {r.get("url"): r for r in (_read_json(ANALYSES_DIR / a.id / "raw" / "music_pages.json", []) or [])
+            if isinstance(r, dict)}
+    return [{"url": u, **{k: (seen.get(u) or {}).get(k) for k in ("title", "creator", "video_count_text")}} for u in used]
 
 
 MUSIC_URL_RE = re.compile(r"^https://(www\.)?tiktok\.com/music/[^\s/]+-\d+")

@@ -24,6 +24,7 @@ import os
 import re
 import secrets
 import sys
+import time
 from pathlib import Path
 
 import proto_runner as runner
@@ -46,6 +47,15 @@ USE_RULE = (
     "今後ずっと使う設定・指示書・知識ベースの頼みは、「UGC Analyzer の〜」と名指しがあるか、分析の会話の途中のときだけ。"
 )
 
+# 開始の返事が途切れたとき（2026-10-06 友達の試し: Claude のチャットは道具1回の待ちが約60秒までで、楽曲ページを探す start_analysis が
+# それを超えた。Mac は裏で探し終えて取得を受け付けていたが、AI は「返事が途中で途切れたので、どのページか確認できていない」と答えた）
+START_CUT_RULE = (
+    "start_analysis の返事が時間切れ・エラーで途切れたら、start_analysis を呼び直さずに status を見る"
+    "（Mac は裏で楽曲ページを探し終えて、取得を受け付けていることが多い）。受け付けていれば、status にある楽曲ページ（題・作者・UGC 数・URL）を、"
+    "start_analysis の返事のときと同じように利用者に伝える（「途切れた」「確認できていない」とは言わない）。"
+    "その曲の分析がまだ無ければ、start_analysis を呼び直す。"
+)
+
 INSTRUCTIONS = (
     "UGC Analyzer（TikTok の楽曲 UGC 分析サービス）への接続です。分析の手順・指示書・検査はサービスが持っていて、"
     "あなたは「次の仕事を聞く → 指示書どおりにやる → 返す」を繰り返す係です。\n"
@@ -57,6 +67,7 @@ INSTRUCTIONS = (
     "今後ずっと続く指示の変更は settings（利用者が頼んだときだけ使う）。"
     "\n利用者が「界隈の確認はいらない」「確認なしで最後まで書いて」と頼んだら、そのとき呼ぶ start_analysis か next_task に skip_confirm=true を付ける"
     "（界隈の案で止まらず、案のまま最後まで書く。使った界隈は完了の知らせで伝わる）。"
+    + "\n" + START_CUT_RULE
 )
 
 
@@ -178,6 +189,7 @@ def _build_server(user_of=None, local: bool = False):
         return text
 
     def _call(fn, *args):
+        t0 = time.time()
         try:
             return fn(*args)
         except runner.RunnerError as e:
@@ -185,6 +197,8 @@ def _build_server(user_of=None, local: bool = False):
         except Exception as e:
             logger.exception("道具の実行で例外: %s", fn.__name__)
             raise ToolError(f"サービス側のエラーです（{type(e).__name__}）。少し待って同じ道具を呼び直してください") from e
+        finally:   # 道具ごとにかかった時間（Claude のチャットは道具1回 約60秒まで。超えたかを記録で見られるように）
+            logger.info("道具の中身 %s: %.1f秒", fn.__name__, time.time() - t0)
 
     rule = "\n\n繰り返し方: " + runner.REPEAT_RULE
 
@@ -211,7 +225,7 @@ def _build_server(user_of=None, local: bool = False):
                      "skip_confirm は、利用者が「界隈の確認はいらない」「確認なしで最後まで書いて」と頼んだときだけ true（取得のあと、界隈の案で止まらずに最後まで書く）。"
                      + "返ってきた内容を利用者に短く伝えて止まる（取得を待たない・見に来ない）。"
                      "ただし返事に「このまま書き始めます」とあれば（その曲はもう集め終わっている）、止まらずに、"
-                     "「〇〇の分析を続けて」と言われたときと同じに next_task から進める。" + rule),
+                     "「〇〇の分析を続けて」と言われたときと同じに next_task から進める。" + START_CUT_RULE + rule),
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=True),
     )

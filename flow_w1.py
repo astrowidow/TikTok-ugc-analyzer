@@ -1932,7 +1932,8 @@ def done_materials(a) -> dict:
     res = research(a)
     if res is not None and not res.get("web_search") and not web_added_later(a):
         notes.append("- ウェブ検索: AI のウェブ検索が使えず、曲の情報と TikTok の外の数字は入っていない。3 は「TikTok の中のデータで書き切ってある」と言い換え、"
-                     "ウェブ検索をオンにして「" + a.title + "のレポートの6章に、TikTok の外の数字（YouTube・チャートなど）を調べて足して」と頼めば足せる、と一言添える")
+                     "あとで「" + a.title + "のレポートの6章に、TikTok の外の数字（YouTube・チャートなど）を調べて足して」と頼めば足せる"
+                     "（Claude の入力欄の「＋」に「ウェブ検索」があれば、オンにしてから）、と一言添える")
     note = "\n".join(notes)
     if REPORTS_DIR and links:   # 先頭にフォルダ（2026-10-03 ユーザー「最終の返答に、成果物フォルダや成果物へのリンクを含んで欲しい」）
         links = folder_lines(a) + links + [f"- 週ごとの投稿数と再生（{WEEKLY_CSV}）: 同じフォルダ（Excel で開けます）"]
@@ -2898,7 +2899,8 @@ def memo_md(a, meta: dict, chapters: list) -> str:
                    "あとから直しで足した数字は、本文に添えた出どころを見てください。")
     elif not res.get("web_search"):
         out.append("AI のウェブ検索が使えなかったため、曲の情報と TikTok の外の数字（YouTube・チャートなど）は入っていません。"
-                   "ウェブ検索をオンにして、AI に「" + a.title + "のレポートの6章に、TikTok の外の数字を調べて足して」と頼めば足せます。")
+                   "あとで AI に「" + a.title + "のレポートの6章に、TikTok の外の数字を調べて足して」と頼めば足せます"
+                   "（Claude の入力欄の「＋」に「ウェブ検索」があれば、オンにしてから）。")
     else:
         out += [f"AI が {str(res.get('at', ''))[:10]} にウェブで調べた値です。数字は日々変わるので、公開の前に出どころを開いて確かめると確実です。"
                 "（[W番号] は「レポート（根拠の番号つき）」の本文の印と同じです）", ""]

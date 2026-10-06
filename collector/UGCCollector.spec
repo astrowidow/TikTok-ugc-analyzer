@@ -57,4 +57,8 @@ app = BUNDLE(coll, name="UGC Analyzer.app", icon=str(HERE / "assets" / "AppIcon.
              bundle_identifier="jp.ugc-analyzer.collector", version=VERSION,
              info_plist={"LSUIElement": True, "CFBundleDisplayName": "UGC Analyzer",
                          "CFBundleShortVersionString": VERSION, "LSMinimumSystemVersion": "13.0",
-                         "NSHumanReadableCopyright": "UGC Analyzer"})
+                         "NSHumanReadableCopyright": "UGC Analyzer",
+                         # UGC Analyzer が起こす取得用の Chrome の通信は、Mac から見ると UGC Analyzer の通信。最初に1回
+                         # 「ローカルネットワーク上のデバイスを…」の窓が出る（2026-10-06 友達の試し）。窓に出る理由の文
+                         "NSLocalNetworkUsageDescription":
+                             "TikTok のログインと取得に使う Chrome を UGC Analyzer が動かすために出る確認です。「許可」を押してください。"})

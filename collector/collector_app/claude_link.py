@@ -9,10 +9,9 @@ import json
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
-from . import config
+from . import config, system
 
 CONFIG = Path(os.environ.get("UGC_CLAUDE_CONFIG")
               or Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json")
@@ -95,15 +94,7 @@ def claude_running() -> bool:
     return bool(r.stdout.strip())
 
 
-def restart_claude() -> bool:
-    """Claude デスクトップを終了して開き直す（設定ファイルは起動したときにだけ読まれるため）"""
-    if claude_running():
-        subprocess.run(["/usr/bin/osascript", "-e", 'tell application "Claude" to quit'], capture_output=True)
-        t0 = time.time()
-        while claude_running() and time.time() - t0 < 30:
-            time.sleep(0.5)
-        if claude_running():
-            return False
-        time.sleep(1.0)
-    subprocess.run(["/usr/bin/open", "-a", "Claude"], capture_output=True)
-    return True
+def restart_claude(on_asking=None) -> bool:
+    """Claude デスクトップを終了して開き直す（設定ファイルは起動したときにだけ読まれるため）。
+    作業中なら Claude が終了の確認を出すので、答えてもらうまで見張る（system.relaunch_app）"""
+    return system.relaunch_app("Claude", claude_running, on_asking)

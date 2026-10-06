@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 import rumps
+from PyObjCTools import AppHelper
 
 from . import VERSION, chrome, claude_link, code_link, codex_link, config, jobs, notify, system, worker_entry
 
@@ -614,6 +615,8 @@ class CollectorApp(rumps.App):
         self.ctl = ctl
         self._autolink_at = 0.0
         self._autolinking = False
+        self._restarting = set()       # 開き直している最中の AI のアプリ
+        self._restart_lock = threading.Lock()
         self.status_item = rumps.MenuItem("起動中…")
         self.claude_item = rumps.MenuItem("Claude につなぐ", callback=self.connect_claude)
         self.chatgpt_item = rumps.MenuItem("ChatGPT につなぐ", callback=self.connect_chatgpt)
@@ -761,10 +764,27 @@ class CollectorApp(rumps.App):
             threading.Thread(target=self._restart_claude, daemon=True).start()
 
     def _restart_claude(self):
-        if claude_link.restart_claude():
-            notify.send("Claude を開き直しました", f"Claude で「{START_PHRASE}」と言ってみてください")
-        else:
-            notify.send("Claude を閉じられませんでした", "Claude を自分で終了（⌘Q）して、開き直してください")
+        self._restart_ai("Claude", claude_link.restart_claude, "「このまま終了」", f"Claude で「{START_PHRASE}」と言ってみてください")
+
+    def _restart_ai(self, name: str, restart, button: str, after: str):
+        """AI のアプリを開き直す（裏のスレッドで）。作業中で終了の確認が出たら案内し、答えてもらうまで最長10分待つ（system.relaunch_app）"""
+        with self._restart_lock:
+            if name in self._restarting:   # 開き直しの最中にもう一度押された
+                return
+            self._restarting.add(name)
+        try:
+            ok = restart(on_asking=lambda: notify.send(
+                f"{name} が終了してよいか聞いています",
+                f"{name} の窓に出ている確認で、{button}を押してください（会話は消えません）。閉じたら、UGC Analyzer が自動で開き直します"))
+        finally:
+            with self._restart_lock:
+                self._restarting.discard(name)
+        if ok:
+            notify.send(f"{name} を開き直しました", after)
+        else:   # 通知は見落としやすいので、窓で出す（窓は画面のスレッドで）
+            AppHelper.callAfter(rumps.alert, f"{name} を閉じられませんでした",
+                                f"{name} を自分で終了（{name} を前に出して ⌘Q）してから、もう一度開いてください。"
+                                f"開き直すと、UGC Analyzer が使えるようになります。")
 
     # --- ChatGPT につなぐ（2026-10-04。ChatGPT の Mac アプリの Work の画面で使う） ---
     def connect_chatgpt(self, _):
@@ -792,10 +812,8 @@ class CollectorApp(rumps.App):
             threading.Thread(target=self._restart_chatgpt, daemon=True).start()
 
     def _restart_chatgpt(self):
-        if codex_link.restart_chatgpt():
-            notify.send("ChatGPT を開き直しました", f"ChatGPT の Work で「{START_PHRASE}」と言ってみてください")
-        else:
-            notify.send("ChatGPT を閉じられませんでした", "ChatGPT を自分で終了（⌘Q）して、開き直してください")
+        self._restart_ai("ChatGPT", codex_link.restart_chatgpt, "終了するほう",
+                         f"ChatGPT の Work で「{START_PHRASE}」と言ってみてください")
 
     # --- 指示書（段3） ---
     def _open_prompt_cb(self, name):

@@ -170,7 +170,7 @@ footer p { margin: 0; }
       <li><div>Mac<span>2020年以降の M1・M2・M3・M4 のもの</span></div></li>
       <li><div>Google Chrome</div></li>
       <li><div>Claude か ChatGPT（どちらか1つ）<span>Claude の人は Mac の Claude アプリ（有料プランの Pro 以上が要ります）。ChatGPT の人は Mac の ChatGPT アプリ（macOS 14 以降。有料プランの Plus 以上をおすすめします。無料プランでも動きますが、選べるモデルが軽く、レポートの質がかなり落ちます）</span></div></li>
-      <li><div>TikTok の分析専用のサブアカウント<span>分析のためだけに使う、ふだんとは別の TikTok のアカウントです。ふだんのアカウントは使いません。持っていない人は、手順4で作ります（そのための、ふだん使っていないメールアドレスを1つ用意してください）</span></div></li>
+      <li><div>TikTok の分析専用のサブアカウント<span>分析のためだけに使う、ふだんとは別の TikTok のアカウントです。ふだんのアカウントは使いません。持っていない人は、手順4で作ります（そのための、ふだん使っていないメールアドレスか、ふだんの TikTok に使っていない Google アカウントを1つ用意してください）</span></div></li>
     </ul>
 
     <h3>やること（6つ）</h3>
@@ -215,7 +215,16 @@ footer p { margin: 0; }
         </div>
         <ol class="sub-steps" start="5">
           <li>Mac のパスワード（または指紋）を入れます。もう一度確認が出たら<b>「開く」</b>を押します。</li>
+          <li>開くと、次のように聞かれます。UGC Analyzer が動かす Chrome のための確認です。<b>「許可」</b>を押します。</li>
         </ol>
+        <div class="mock" role="img" aria-label="画面の見本: ローカルネットワーク上のデバイスを見つけることを許可しますか。許可を押す">
+          <p class="mock-cap">画面の見本</p>
+          <div class="dialog">
+            <b>“UGC Analyzer”がローカルネットワーク上のデバイスを見つけることを許可しますか?</b>
+            <div class="btns"><span class="btn">許可しない</span><span class="btn press">許可</span></div>
+          </div>
+          <p class="hint"><em>「許可」</em>を押す</p>
+        </div>
         <p class="muted">このひと手間は最初の1回だけです。次からは、ダブルクリックだけで開きます。</p>
       </div></li>
 
@@ -223,6 +232,7 @@ footer p { margin: 0; }
         <b class="t">TikTok にサブアカウントでログインする</b>
         <p class="muted">UGC Analyzer が開くと、Chrome が自動で立ち上がって TikTok のログイン画面が出ます。そこで、分析専用のサブアカウントでログインします。ふだんのアカウントではログインしないでください。</p>
         <p class="muted"><b>サブアカウントを持っていない人</b>は、同じ画面で「登録」を選び、ふだん使っていないメールアドレスでアカウントを作ってから、ログインします。確認のコードは、そのメールアドレスに届きます。</p>
+        <p class="muted"><b>確認のコードが届かない・「期限切れ」と出て先に進めないとき</b>は、登録の画面で「Google で続ける」を選べば作れます。ふだんの TikTok に使っていない Google アカウントを選んでください（ふだんの TikTok とつながった Google アカウントだと、ふだんのアカウントに入ってしまいます）。</p>
         <p class="key"><b>サブアカウントは、スマホの TikTok アプリで作ったりログインしたりしないでください。</b>ふだんのアカウントと同じスマホに入れないためです。</p>
       </div></li>
 
@@ -237,29 +247,38 @@ footer p { margin: 0; }
             <div class="btns"><span class="btn">あとで自分で</span><span class="btn press">開き直す</span></div>
           </div>
         </div>
+        <p class="muted">Claude で作業中のものがあると、Claude が次のように聞いてきます。<b>「このまま終了」</b>を押します（話していた会話は消えません）。Claude が閉じると、UGC Analyzer が自動で開き直します。開かないときは、Claude を自分で開いてください。</p>
+        <div class="mock" role="img" aria-label="画面の見本: Claudeはまだ作業中です。このまま終了を押す">
+          <p class="mock-cap">画面の見本（Claude で作業中のものがあるときだけ）</p>
+          <div class="dialog">
+            <b>Claudeはまだ作業中です</b>
+            <p>Claudeは1件のセッションで作業中です。今終了すると、その作業が中断されます。</p>
+            <div class="btns"><span class="btn press">このまま終了</span><span class="btn">Claudeの作業完了を待つ</span><span class="btn">キャンセル</span></div>
+          </div>
+          <p class="hint"><em>「このまま終了」</em>を押す</p>
+        </div>
       </div></li>
 
-      <li id="websearch"><div>
-        <b class="t">モデルを選び、Claude の人はウェブ検索をオンにする</b>
+      <li id="model"><div>
+        <b class="t">モデルを選ぶ</b>
         <p class="muted">分析は長く複雑な仕事なので、賢いモデルを選んでください。入力欄のまわりにあるモデルの選び（ChatGPT は Work の画面の入力欄の下）で選びます。</p>
         <ul class="check">
           <li><div>Claude の人<span><b>Opus 5.5</b>、推論の強さは <b>Medium 以上</b></span></div></li>
           <li><div>ChatGPT の人<span><b>GPT-6.1 Sol</b>、推論の強さは <b>Medium 以上</b>（Plus 以上で選べます）。もっと確実にしたいときは GPT-6 Astra（Plus では利用枠の減りが速くなります）</span></div></li>
         </ul>
         <p class="muted">運営は Claude の Opus 5.5・推論の強さ Extra high で使っています。軽いモデルや弱い推論にすると、利用枠の減りは小さくなりますが、レポートの質は落ちます。</p>
-        <p class="muted">Claude の人は、もう1つ。入力欄の左下の<b>「＋」</b>を押して、<b>「ウェブ検索」</b>（英語の画面では Web search）にチェックが付いているか見ます。付いていなければ押してオンにします。AI が曲の情報（作詞・作曲など）や、YouTube の再生数・チャートといった TikTok の外の数字を調べて、レポートに入れるためです。</p>
-        <p class="muted">ウェブ検索は会話ごとの切り替えです。新しい会話で分析を頼むときや「続けて」を送るときも、送る前に同じように確かめてください。「＋」の中に「ウェブ検索」が無いときは、そのままで大丈夫です（Claude が自分で調べます）。ChatGPT の人と、Code タブで頼む人は、この手順はいりません。</p>
       </div></li>
     </ol>
 
     <h3>これで準備はおしまい</h3>
     <p>画面右上のメニューバーにいる<b>割れた音符のアイコン</b>が UGC Analyzer です。Mac を起動すると自動で立ち上がります。</p>
+    <p class="muted" id="menubar"><b>アイコンが見当たらないとき</b>は、りんごマーク →<b>「システム設定」</b>→ 左の列の<b>「メニューバー」</b>を開き、<b>「メニューバーに追加することを許可」</b>の一覧で「UGC Analyzer」をオンにします。オンなのに出ないときは、メニューバーがいっぱいで入りきっていません。同じ一覧で、使っていないアプリをオフにして場所を空けてください。</p>
     <p class="key"><b>ChatGPT の人へ</b>：話しかけるのは ChatGPT アプリの <b>Work</b> の画面です。ふだんの Chat の画面や、ブラウザの chatgpt.com では UGC Analyzer につながりません。</p>
   </section>
 
   <section id="ask">
     <h2>分析を頼む</h2>
-    <p class="sub">Claude（または ChatGPT）を開いて、こう送ります。〇〇は曲名、△△はアーティスト名です。送る前に、<a href="#websearch">モデルと、ウェブ検索（Claude の人）</a>を確かめてください（ウェブ検索は会話ごとの切り替えです）。</p>
+    <p class="sub">Claude（または ChatGPT）を開いて、こう送ります。〇〇は曲名、△△はアーティスト名です。送る前に、<a href="#model">モデル</a>を確かめてください。</p>
 
     <div class="say">
       <span class="label">Claude・ChatGPT に送る</span>
@@ -379,6 +398,8 @@ footer p { margin: 0; }
     <h2>困ったとき</h2>
     <p class="sub">まずは画面右上の割れた音符のアイコンを押して、いちばん上の行を見てください。今何をしているかが出ています（例:「取得中: きゃわぽっぴんどぅー — コメントを取る 35/80本・残り約30分」）。</p>
     <dl class="qa">
+      <div><dt>画面右上に割れた音符のアイコンが無い</dt><dd>りんごマーク →「システム設定」→「メニューバー」→「メニューバーに追加することを許可」で「UGC Analyzer」をオン。オンなのに出なければ、同じ一覧で使っていないアプリをオフにする（<a href="#menubar">これで準備はおしまい</a>）。今の様子は、Claude（ChatGPT）に「〇〇はどうなってる？」と聞いても分かります</dd></div>
+      <div><dt>「開き直す」を押しても何も起きない</dt><dd>Claude の窓を前に出して、「Claudeはまだ作業中です」と出ていたら「このまま終了」を押す。出ていなければ、Claude を ⌘Q で終了してから開く</dd></div>
       <div><dt>「UGC Analyzer で〜」と送ったのに、AI がふつうに答えるだけ</dt><dd>割れた音符 →「Claude につなぐ」（ChatGPT の人は「ChatGPT につなぐ」）→ Claude（ChatGPT）を開き直す。ChatGPT の人は Work の画面で送っているかも確かめる</dd></div>
       <div><dt>いちばん上の行が「止まっています」</dt><dd>割れた音符 →「止まった取得を続きから再開」</dd></div>
       <div><dt>いちばん上の行が「TikTok のログイン待ち」</dt><dd>割れた音符 →「TikTok にログイン」で開いた Chrome で、サブアカウントでログインし直す</dd></div>
@@ -386,7 +407,7 @@ footer p { margin: 0; }
       <div><dt>「電池で動いています」と知らせが出た</dt><dd>電源につなぐ</dd></div>
       <div><dt>Mac や Claude（ChatGPT）を閉じてしまった</dt><dd>開くだけで OK。書いている途中だったら、もう一度「〇〇の分析を続けて」</dd></div>
       <div><dt>レポートのリンクをなくした</dt><dd>割れた音符 →「レポートのフォルダを開く」</dd></div>
-      <div><dt>完成の知らせに「ウェブ検索が使えなかった」と出た</dt><dd>入力欄の「＋」→「ウェブ検索」をオンにして、「〇〇のレポートの6章に、TikTok の外の数字（YouTube・チャートなど）を調べて足して」と送る</dd></div>
+      <div><dt>完成の知らせに「ウェブ検索が使えなかった」と出た</dt><dd>「〇〇のレポートの6章に、TikTok の外の数字（YouTube・チャートなど）を調べて足して」と送る。Claude の入力欄の「＋」に「ウェブ検索」があれば、オンにしてから送る</dd></div>
     </dl>
     <p style="margin:16px 0 0">それでも直らなければ、運営に LINE してください。割れた音符 →「そのほか」→「取得の記録を開く」で出た画面の写真を一緒に送ってもらえると早いです。</p>
   </section>

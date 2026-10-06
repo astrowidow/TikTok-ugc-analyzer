@@ -186,6 +186,40 @@ def release_single_instance() -> None:
         _lock_fd = None
 
 
+# --- AI のアプリを開き直す（道具の設定は、Claude・ChatGPT が起動したときにだけ読まれる） ---
+QUIT_ASK_AFTER = 8    # 終了を頼んでから、確認の窓が出ているとみなすまで（秒）
+QUIT_WAIT_MAX = 600   # 確認の窓に答えてもらうのを待つ上限（秒）
+
+
+def relaunch_app(name: str, running, on_asking=None, wait_max: float = QUIT_WAIT_MAX) -> bool:
+    """アプリを終了して開き直す。閉じなければ False。
+    Claude は Code タブや Cowork のセッションが動いていると、終了の前に「Claudeはまだ作業中です」の窓を出し
+    （ボタンは「このまま終了」「Claudeの作業完了を待つ」「キャンセル」）、その窓は Claude の窓にくっついて出る。
+    Claude が後ろにいると窓が見えず、30秒で待つのをやめていた前の作りでは「開き直すを押しても何も起きない」に見えた（2026-10-06 友達の試し）。
+    そこで、前に出してから終了を頼み、閉じるまで最長 wait_max 秒見張って、閉じたら開き直す（「作業完了を待つ」を選んでも開き直せる）。
+    すぐ閉じなければ on_asking() を1回呼ぶ（利用者への案内）"""
+    if running():
+        try:   # 確認の窓が出ると、終了の頼みの返事が遅れることがある。待たずに見張りへ移る
+            subprocess.run(["/usr/bin/osascript", "-e", f'tell application "{name}" to activate',
+                            "-e", "with timeout of 5 seconds", "-e", f'tell application "{name}" to quit', "-e", "end timeout"],
+                           capture_output=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            pass
+        t0 = time.time()
+        asked = False
+        while running():
+            if not asked and time.time() - t0 > QUIT_ASK_AFTER:
+                asked = True
+                if on_asking:
+                    on_asking()
+            if time.time() - t0 > wait_max:
+                return False
+            time.sleep(0.5)
+        time.sleep(1.0)
+    subprocess.run(["/usr/bin/open", "-a", name], capture_output=True)
+    return True
+
+
 # --- スリープと復帰 ---
 _observer = None
 

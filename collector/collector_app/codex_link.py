@@ -19,11 +19,10 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 import tomllib
 from pathlib import Path
 
-from . import config
+from . import config, system
 
 CODEX_HOME = Path(os.environ.get("UGC_CODEX_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 CONFIG = CODEX_HOME / "config.toml"
@@ -228,15 +227,7 @@ def chatgpt_running() -> bool:
     return bool(r.stdout.strip())
 
 
-def restart_chatgpt() -> bool:
-    """ChatGPT を終了して開き直す（道具の設定は起動したときに読まれるため）"""
-    if chatgpt_running():
-        subprocess.run(["/usr/bin/osascript", "-e", 'tell application "ChatGPT" to quit'], capture_output=True)
-        t0 = time.time()
-        while chatgpt_running() and time.time() - t0 < 30:
-            time.sleep(0.5)
-        if chatgpt_running():
-            return False
-        time.sleep(1.0)
-    subprocess.run(["/usr/bin/open", "-a", "ChatGPT"], capture_output=True)
-    return True
+def restart_chatgpt(on_asking=None) -> bool:
+    """ChatGPT を終了して開き直す（道具の設定は起動したときに読まれるため）。
+    終了の確認が出たら、答えてもらうまで見張る（system.relaunch_app）"""
+    return system.relaunch_app("ChatGPT", chatgpt_running, on_asking)

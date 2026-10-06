@@ -101,13 +101,20 @@ def _output_section(text: str):
     return m.start(), (m.end() + nxt.start()) if nxt else len(text)
 
 
+def _outside_output(text: str) -> str:
+    """「### 出力の形」の節を除いた本文（その節は読むときに初期のものへ差し替わるので、そこにだけある印は確かめない）"""
+    sec = _output_section(text)
+    return text if not sec else text[:sec[0]] + text[sec[1]:]
+
+
 def problems(name: str, text: str, group: str = GROUP) -> list:
-    """利用者の指示書が使えない理由（空なら使える）"""
+    """利用者の指示書が使えない理由（空なら使える）。差し込みの印は「出力の形」の節の外だけを見る
+    （write.md の {{length}}・{{heading}} のように節の中にだけある印を消しても、本文の編集まで捨てない。2026-10-06 通し試験）"""
     default = default_text(name, group)
     errs = []
     if not text.strip():
         return ["中身が空です"]
-    missing = sorted(placeholders(default) - placeholders(text))
+    missing = sorted(placeholders(_outside_output(default)) - placeholders(_outside_output(text)))
     if missing:
         errs.append("差し込みの印が消えています: " + "、".join("{{" + m + "}}" for m in missing))
     if _output_section(default) and not _output_section(text):

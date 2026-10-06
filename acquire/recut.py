@@ -17,7 +17,6 @@
 
   python -m acquire.recut plan <分析フォルダ>   … 今の界隈（全部）に当てはめると何を取るかだけ出す
 """
-import csv
 import importlib.util
 import json
 import sys
@@ -56,18 +55,8 @@ def fetch_cost(d: Path) -> dict:
             "min_per_video": float(pipeline.minutes_per_comment_video(s)), "page_min": float(deepen.EST["page_min"])}
 
 
-def unreachable(d: Path) -> set:
-    """前の取得で楽曲ページの一覧に見つからなかった動画（本線・掘り下げ・切り直しの要約と差し替えの記録から）。探し直すと数分かかるので外す"""
-    out = set()
-    for p in sorted((Path(d) / "fetch_log").glob("*summary*.json")):
-        out |= {str(v) for v in (pipeline.read_json(p, {}) or {}).get("missing") or []}
-    for p in sorted((Path(d) / "fetch_log").glob("substitutions*.tsv")):
-        lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")]
-        if not lines:
-            continue
-        rows = csv.DictReader(lines, delimiter="\t")
-        out |= {str(r.get("pool_video")) for r in rows if r.get("pool_video")}
-    return out
+# 前の取得で楽曲ページの一覧に見つからなかった動画。掘り下げ（acquire/deepen.py の candidates）と同じ範囲を外すので、そちらに置いた
+unreachable = deepen.unreachable
 
 
 def picks(recs: list, floor: int, rule: dict | None = None) -> dict:

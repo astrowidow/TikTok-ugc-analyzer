@@ -15,6 +15,7 @@ proto_runner.py（接続口の核: 状態・計測・道具）が、analysis.jso
 完成後の直し（revise）は、revise → finish（その章）→ assemble → verify → done を末尾に足す。
 完成後の界隈の掘り下げ（deepen、2026-10-06〜。docs/DEEPEN_COMMUNITY.md）は、取り足しの取得（acquire/deepen.py）のあと、
 dcomments → outline_revise →（書き直し）→ review →（直し・仕上げ）→ assemble → verify → export → done を末尾に足す。
+前の版は dcomments を受け付けたときに outputs/history/deepen_r<回>/ に写す。
 完成後の界隈の切り直し（recut、2026-10-06〜。docs/RECUT_COMMUNITY.md）は、recut（分類軸を利用者の指示どおりに直す）を末尾に足し、
 受け付けたら label×（顔ぶれが変わりうる界隈の動画だけ）→ recut_check［service: 新しい界隈の必ず読みたい動画にコメントがあるか。
 無ければ取り足しを積む（acquire/recut.py）］→ phases → plan（以降はふつうの流れ）を足す。前の版は outputs/history/recut_r<回>/。
@@ -22,6 +23,7 @@ dcomments → outline_revise →（書き直し）→ review →（直し・仕�
 まとめ、執筆の前に参考記事・構成案を足した（ユーザー）。前の形で始めた分析は、前の形のまま最後まで回る（reps・comments・synthesis を残してある）。
 """
 import collections
+import copy
 import csv
 import datetime
 import json
@@ -60,8 +62,11 @@ DEFAULTS = {
     "deepen_full_reads": "6〜8",  # 全部読む動画の本数（前回は2〜4本）
 }
 # 読者（Web の記事）に見せない作業の言葉。執筆と仕上げの検査で止める（2026-10-03 ユーザー）
-READER_RE = re.compile(r"用語集|知識ベース|文体ガイド|因果パターン|過去レポート|過去記事のカード|カードの|カードに|"
-                       r"今回集めた|集めた動画|グリッド|ラベル付き|ラベルを付け|ラベル上|\d+\s*本中")
+# 「再生を集めた動画」「注目を集めた動画」はふつうの言い方なので止めない。カードは過去記事のカード（kb:cards）の話だけ
+# （「メッセージカードに想いを書いて」のような動画の中身は止めない。2026-10-06 通し試験）
+READER_RE = re.compile(r"用語集|知識ベース|文体ガイド|因果パターン|過去レポート|過去記事のカード|記事の?カード|"
+                       r"カード(?:によれば|によると|に載|の記事)|"
+                       r"今回集めた|(?<!を)集めた動画|グリッド|ラベル付き|ラベルを付け|ラベル上|\d+\s*本中")
 CHAPTER_TITLES = {"intro": "冒頭・本楽曲に着目すべき理由・分析方針", "branch": "拡大経路のまとめ・バズの分岐点とその理由",
                   "music": "楽曲の音楽的特徴・楽曲構成・時代背景", "result": "バズった結果・今回のヒットの核・再現性のある要素"}
 REPORT_ORDER_FIXED = ["branch", "music", "result"]
@@ -517,7 +522,8 @@ def render(a, t: dict, st: dict) -> dict:
             **base, "community": k, "instruction": t["params"]["instruction"],
             "change": change or "（掘り下げた分析に「前回からの変化」が無い。read の synthesis で読む）",
             "outline": outline_md(o, chs) if o else "（構成案は無い。前の形の分析。章の今の原稿を read の chapter:<id> で読んで決める）",
-            "chapters": "\n".join(f"- {'★' if c_ in star else '　'}`{c_}`: {first_line(a.outputs('chapters', f'{c_}.md'))}" for c_ in chs)})
+            "chapters": "\n".join(f"- {'★' if c_ in star else '　'}`{c_}`: {first_line(a.outputs('chapters', f'{c_}.md'))}" for c_ in chs),
+            "settings": _settings(a, ["focus"], t)})
 
     elif typ == "review":
         pm = t["params"]
@@ -550,7 +556,8 @@ def render(a, t: dict, st: dict) -> dict:
                 pr._catalog_line("pathway", "拡散経路の下書き")]
         lines = [f"- `{c_}`: {heading_of(a, c_)}（{CHAPTER_TITLES.get(c_) or '拡大経路の段階'}）" for c_ in chapter_order(a, st)]
         text = pr._fill(tpl("outline.md"), {**base, "n_refs": cfg(a)["n_refs"], "chapters": "\n".join(lines),
-                                             "materials": outline_materials(a, base)})
+                                             "materials": outline_materials(a, base),
+                                             "settings": _settings(a, ["focus"], t)})   # レポートの重点は、主張を決める構成案から効かせる
 
     elif typ == "write":
         text, cat = write_prompt(a, t, base, st)
@@ -592,7 +599,10 @@ def render(a, t: dict, st: dict) -> dict:
             mat["summary"] = deepen_summary(a, t["params"]["deepen"]) + "\n\n" + mat["summary"]
         if t["params"].get("recut"):
             mat["summary"] = recut_summary(a, t["params"]["recut"]) + "\n\n" + mat["summary"]
-        if not t["params"].get("deepen") and not t["params"].get("recut") and confirm_skipped_summary(a):
+        # 界隈の確認を省いたことは、最初の完了の知らせでだけ伝える（あとの直しの完了では繰り返さない。切り直しのあとは利用者が決めた界隈）
+        first_done = next((x for x in st.get("tasks") or [] if x.get("kind") == "done"), None)
+        is_first = first_done is None or first_done.get("task_id") == t.get("task_id")
+        if not t["params"].get("deepen") and not t["params"].get("recut") and is_first and confirm_skipped_summary(a):
             mat["summary"] = confirm_skipped_summary(a) + "\n\n" + mat["summary"]
         text = pr._fill(tpl("done.md"), {**base, **mat})
 
@@ -963,8 +973,9 @@ def deepen_materials(a, t, st) -> dict:
 
 
 def md_section(md: str, heading: str) -> str:
-    """Markdown の「#### 見出し」の節の中身（次の同じ深さか浅い見出しの手前まで）"""
-    m = re.search(rf"(?m)^{re.escape(heading)}\s*$", md)
+    """Markdown の「#### 見出し」の節の中身（次の同じ深さか浅い見出しの手前まで）。見出しは前方一致
+    （「#### 前回からの変化（3点）」も拾う。受け取りの検査が部分一致なので合わせる）"""
+    m = re.search(rf"(?m)^{re.escape(heading)}[^\n]*$", md)
     if not m:
         return ""
     nxt = re.search(r"(?m)^#{1,4} ", md[m.end():])
@@ -1019,6 +1030,19 @@ def recut_last_round(a) -> int:
 def recut_prev_dir(a, n) -> Path:
     """n 回目の切り直しの前の版の写し"""
     return a.outputs("history", f"recut_r{n}")
+
+
+def keep_version(a, kind: str, n, replace: bool = False) -> Path:
+    """書き直す前の版（outputs の全部。prompts・history・ZIP の作業場は除く）を outputs/history/<kind>_r<n>/ に写す。
+    切り直し（recut）と掘り下げ（deepen）の受け付けで使う。replace=False なら、もう写してあれば写し直さない（同じ回の2回目は後の版になるため）"""
+    prev = a.outputs("history", f"{kind}_r{n}")
+    if prev.exists():
+        if not replace:
+            return prev
+        shutil.rmtree(prev)
+    top = a.outputs()
+    shutil.copytree(top, prev, ignore=lambda d, names: [x for x in names if Path(d) == top and x in ("history", "prompts", "_zip")])
+    return prev
 
 
 def _labels_at(p: Path) -> dict:
@@ -1097,11 +1121,7 @@ def accept_recut(a, t, raw, st) -> list:
                 ex.setdefault(keep[k], []).extend(x for x in v if x not in ex.get(keep[k], []))
         tax["examples"] = ex
     # 前の版を写してから、作り直すものを片付ける（参考記事・直しの記録・Excel 用 ZIP は残す）
-    prev = recut_prev_dir(a, n)
-    if prev.exists():
-        shutil.rmtree(prev)
-    top = a.outputs()
-    shutil.copytree(top, prev, ignore=lambda d, names: [x for x in names if Path(d) == top and x in ("history", "prompts", "_zip")])
+    keep_version(a, "recut", n, replace=True)
     for dd in RECUT_CLEAR_DIRS:
         shutil.rmtree(a.outputs(dd), ignore_errors=True)
     for f in RECUT_CLEAR_FILES:
@@ -1170,7 +1190,12 @@ def recut_short_targets(a, n) -> str:
 
 def recut_fetched_note(a, n) -> str:
     rec = recut_record(a, n)
+    # 読むべき動画のうち、前の取得で「動画が無い・コメントが無い・開けない」や一覧に見つからなかったもの（取りに行かなかった）
+    lost = sum(len(v.get("unreachable") or []) for v in (rec.get("check") or {}).values())
+    lost_s = f"読むべき動画のうち {lost}本は、削除済み・楽曲ページの一覧に見つからないなどで取りに行けなかった" if lost else ""
     if not rec.get("acq_round"):
+        if lost:
+            return f"要らなかった（取りに行ける読むべき動画には、もうコメントがあった。{lost_s}）"
         return "要らなかった（切り直した界隈の、読むべき動画にはコメントがあった）"
     job = deepen_job(a, rec["acq_round"])
     res = job.get("result") or {}
@@ -1181,6 +1206,8 @@ def recut_fetched_note(a, n) -> str:
         s += f"。楽曲ページの一覧で見つからなかった動画 {res['unreachable']}本は取れていない"
     if res.get("blocked") or res.get("error"):
         s += "。取得は途中で止まった（取れた分だけ使った）"
+    if lost:
+        s += f"。ほかに、{lost_s}"
     return s
 
 
@@ -1370,27 +1397,34 @@ def write_prompt(a, t, base, st):
     phmap = {p["id"]: p for p in ph}
     cat = []
     first_write = t["params"].get("first", False)
+    # 利用者の設定「著者の文体ガイドを使わない」のときは、文体ガイド（kb:style）を読ませず、指示書の「著者の文体で」も外す
+    # （用語集は分析の言葉なので読む。2026-10-06 通し試験: 設定の欄と指示が食い違っていた）
+    guide = style_guide_on(a)
+    style = ("→ `kb:style`", "と文体", "と文体ガイド（`kb:style`）", ", kb:style", "・文体ガイド") if guide else ("", "", "", "", "")
     if a.outputs("outline.json").exists():   # 構成案のある形（2026-10-03〜）: 過去記事は構成案の前に読んだ
         if first_write:
-            kb = ("### 最初に読むもの（執筆の最初の仕事だけ）\n\n著者の分析の言語と文体を身につける: read の `kb:glossary`（全ページ）→ `kb:style`。"
+            kb = (f"### 最初に読むもの（執筆の最初の仕事だけ）\n\n著者の分析の言語{style[1]}を身につける: read の `kb:glossary`（全ページ）{style[0]}。"
                   "内容を会話に書き写さない。以降の執筆の仕事では読み直さなくてよい（必要なら読み直してよい）。")
-            cat += [pr._catalog_line("kb:glossary", "著者の用語集（A〜J 章）"), pr._catalog_line("kb:style", "文体ガイド（章立て・定型）")]
+            cat += [pr._catalog_line("kb:glossary", "著者の用語集（A〜J 章）")]
+            if guide:
+                cat.append(pr._catalog_line("kb:style", "文体ガイド（章立て・定型）"))
         else:
-            kb = "著者の用語集（`kb:glossary`）と文体ガイド（`kb:style`）は最初の執筆の仕事で読んだ。必要なら read で読み直してよい。"
-            cat.append(pr._catalog_line("kb:glossary, kb:style", "用語集・文体ガイド（読み直すとき）"))
+            kb = f"著者の用語集（`kb:glossary`）{style[2]}は最初の執筆の仕事で読んだ。必要なら read で読み直してよい。"
+            cat.append(pr._catalog_line(f"kb:glossary{style[3]}", f"用語集{style[4]}（読み直すとき）"))
         cat.append(pr._catalog_line("outline", "構成案の全体"))
     elif first_write:
         kb = ("### 最初に読むもの（執筆の最初の仕事だけ）\n\n"
-              "著者の分析の言語を身につける: read の `kb:readme` → `kb:glossary`（全ページ）→ `kb:style` → `kb:cards`（全ページ）。\n"
+              f"著者の分析の言語を身につける: read の `kb:readme` → `kb:glossary`（全ページ）{style[0] + ' ' if guide else ''}→ `kb:cards`（全ページ）。\n"
               f"`kb:cards` から、この楽曲に近い過去レポート（同じ型のバズ・似た界隈・似た経路）を**最大{c['extra_past_reports']}本**選び、"
               "`note:<file の .md を除いた名前>` で全文を読む（軸の提案で読んだ `past:1`・`past:2` も読み直してよい）。"
               "選んだ理由は書かなくてよい。内容を会話に書き写さない。\n以降の執筆の仕事では読み直さなくてよい（必要なら読み直してよい）。")
         for nm, d in (("kb:readme", "知識ベースの説明"), ("kb:glossary", "用語集（A〜J 章）"), ("kb:style", "文体ガイド（章立て・定型）"),
                       ("kb:cards", "過去レポート82本のカード（1行1本）"), ("note:<名前>", "過去レポートの全文")):
-            cat.append(pr._catalog_line(nm, d))
+            if guide or nm != "kb:style":
+                cat.append(pr._catalog_line(nm, d))
     else:
-        kb = "著者の用語集（`kb:glossary`）と文体ガイド（`kb:style`）は最初の執筆の仕事で読んだ。必要なら read で読み直してよい。"
-        cat.append(pr._catalog_line("kb:glossary, kb:style", "用語集・文体ガイド（読み直すとき）"))
+        kb = f"著者の用語集（`kb:glossary`）{style[2]}は最初の執筆の仕事で読んだ。必要なら read で読み直してよい。"
+        cat.append(pr._catalog_line(f"kb:glossary{style[3]}", f"用語集{style[4]}（読み直すとき）"))
     common = common_materials(a, base)
     if ch.startswith("path_"):
         p = phmap[ch[5:]]
@@ -1469,8 +1503,7 @@ def write_prompt(a, t, base, st):
             cat.append(pr._catalog_line(f"prev:{ch}", "前の版（界隈を切り直す前）のこの章"))
     if t["params"].get("rewrite"):   # 界隈の掘り下げの書き直し（前の原稿を生かす）
         k = t["params"].get("community")
-        kb = ("この章は書き終えてある。文体・言い回しは前の原稿に合わせる。用語集（`kb:glossary`）と文体ガイド（`kb:style`）は、"
-              "必要なら read で読む。")
+        kb = f"この章は書き終えてある。文体・言い回しは前の原稿に合わせる。用語集（`kb:glossary`）{style[2]}は、必要なら read で読む。"
         spec = (f"**書き直し（界隈 `{k}` の掘り下げ）**: 前の原稿を read の `chapter:{ch}` で読み、次の点を直した**章の全文**を出す: "
                 f"{t['params'].get('why') or '掘り下げた分析に合わせる'}\n"
                 f"掘り下げた分析は read の `synthesis` の `### {k}`（利用者の頼み: {t['params'].get('instruction', '')}）。"
@@ -1483,8 +1516,19 @@ def write_prompt(a, t, base, st):
     text = pr._fill(tpl("write.md"), {**base, "chapter_title": title, "i": t["params"]["i"], "n": t["params"]["n"],
                                       "kb_block": kb, "chapter_spec": spec, "materials": materials, "heading": heading,
                                       "plan": plan_block(a, ch, st),
+                                      "voice": "**枠組みと文体で**" if guide else "**枠組みで**（文体は下の「利用者の設定」のとおり）",
+                                      "tone": "著者の後期のトーン（著者本人）" if guide else "下の「利用者の設定」のとおり（著者の文体ガイドには合わせない）",
                                       "length": length, "settings": _settings(a, ["style", "focus"], t)})
     return text, cat
+
+
+def style_guide_on(a) -> bool:
+    """利用者の設定で、著者の文体ガイドを使うか（既定は使う）"""
+    try:
+        cur = user_settings.get(a.owner) if a.owner else user_settings.DEFAULT
+    except user_settings.SettingsError:
+        return True
+    return bool((cur.get("style") or {}).get("use_guide", True))
 
 
 def music_materials(a) -> str:
@@ -1597,6 +1641,8 @@ def done_materials(a) -> dict:
 # ---------------------------------------------------------------------------
 def check_examples(tax: dict, sample_seqs: set, strict=True) -> list:
     errs = []
+    if not isinstance(tax, dict) or not isinstance(tax.get("community"), dict):
+        return []   # 分類軸の形の誤りは check_taxonomy が返す
     ex = tax.get("examples")
     if not isinstance(ex, dict):
         return ["`examples`（界隈ごとの代表例の seq）を入れてください"] if strict else []
@@ -1606,6 +1652,9 @@ def check_examples(tax: dict, sample_seqs: set, strict=True) -> list:
         if not seqs:
             if strict:
                 errs.append(f"`examples` に界隈 `{k}` の代表例（2〜4本の seq）がありません")
+            continue
+        if not isinstance(seqs, list):
+            errs.append(f"`examples.{k}` は seq の配列にしてください（例: [12, 40]。受け取った: {json.dumps(seqs, ensure_ascii=False)[:40]}）")
             continue
         bad = [s for s in seqs if not isinstance(s, int) or s not in sample_seqs]
         if bad:
@@ -1646,7 +1695,8 @@ def check_chapter(a, md: str, heading: str) -> list:
     return errs
 
 
-INTERNAL_RE = re.compile(r"seq\s*\d+|\bcid\b|\bP\d\b|records\.jsonl|本データ|先行工程", re.I)
+# 段階の ID（P1〜）は日本語に挟まれても拾う（\b は日本語の文字も語の文字とみなすので「P2の」「段階P2では」を見逃していた）
+INTERNAL_RE = re.compile(r"seq\s*\d+|\bcid\b|(?<![A-Za-z0-9])P\d(?![A-Za-z0-9])|records\.jsonl|本データ|先行工程", re.I)
 
 
 def check_finished(a, md: str, allowed_urls: set) -> list:
@@ -1676,7 +1726,61 @@ def check_finished(a, md: str, allowed_urls: set) -> list:
     return errs[:20]
 
 
+def _seq_int(v):
+    """seq を数字に寄せる（AI が "12" と文字列で書いても受け取る）。数字でなければ None"""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v.strip())
+    return None
+
+
+_TYPE_NAMES = {"str": "文字列", "list": "配列", "dict": "オブジェクト", "int": "数字", "float": "数字", "NoneType": "null", "bool": "真偽値"}
+
+
+def _shape_hint(e: Exception) -> str:
+    """検査が落ちた例外から、出力のどこの形が違うかの手掛かり（AI に返す）"""
+    msg = str(e)
+    if isinstance(e, KeyError):
+        return f"{msg} が無い"
+    m = re.search(r"'(\w+)' object", msg)
+    if m and m.group(1) in _TYPE_NAMES:
+        return f"オブジェクト・配列・文字列の別が違う所に{_TYPE_NAMES[m.group(1)]}が入っている（{type(e).__name__}: {msg[:80]}）"
+    return f"{type(e).__name__}: {msg[:80]}"
+
+
 def accept(a, t: dict, raw: str, st: dict) -> list:
+    """AI の出力を検査して取り込む（だめなら理由の一覧で差し戻す）。形の違う出力で検査そのものが落ちたときも、例外にせず差し戻す
+    （例外だと道具は「サービス側のエラー」と返し、AI は同じ出力で呼び直して同じ所で落ち続ける。2026-10-06 通し試験）"""
+    saved = copy.deepcopy(st)
+    try:
+        return _accept(a, t, raw, st)
+    except pr.RunnerError:
+        raise
+    except Exception as e:   # noqa: BLE001
+        # 途中で足した仕事・書き換えた params は戻す（差し戻しでも submit は仕事の列を書き戻すため）。t は同じものを使い続ける
+        for i, x in enumerate(saved.get("tasks") or []):
+            if x.get("task_id") == t.get("task_id"):
+                t.clear()
+                t.update(x)
+                saved["tasks"][i] = t
+        st.clear()
+        st.update(saved)
+        try:
+            import traceback
+            a.log(event="accept_error", task_id=t.get("task_id"), error=f"{type(e).__name__}: {e}",
+                  where=traceback.format_exc(limit=-3)[-600:])
+        except Exception:   # 記録できなくても差し戻しは返す
+            pass
+        return [f"出力の形が指示書の「出力の形」と違うため、検査できませんでした（{_shape_hint(e)}）。"
+                "オブジェクト（{…}）・配列（[…]）・文字列・数字の別と、配列の各要素の形を「出力の形」の例に合わせて出し直してください"]
+
+
+def _accept(a, t: dict, raw: str, st: dict) -> list:
     typ = t["type"]
     if typ in ("axes", "confirm"):
         sample = set(axes_sample(a))
@@ -1693,6 +1797,9 @@ def accept(a, t: dict, raw: str, st: dict) -> list:
             return [err + "（{\"user_answer\": \"利用者の言葉\", \"taxonomy\": {...}} の形）"]
         if not isinstance(obj, dict) or not str(obj.get("user_answer", "")).strip():
             return ["user_answer（利用者の答えをそのまま）を入れてください"]
+        if obj.get("taxonomy") and not isinstance(obj["taxonomy"], dict):
+            return ["taxonomy は分類軸の全体（{\"community\": {...}, \"format\": {...}, ...} のオブジェクト）にしてください。"
+                    "利用者の答えで分類軸を直さないなら、taxonomy は省く"]
         prop = pr._taxonomy(a, confirmed=False)
         tax = obj.get("taxonomy") or prop
         errs = pr.check_taxonomy(tax, need_region=False) + check_examples(tax, sample, strict=False)
@@ -1801,6 +1908,8 @@ def accept(a, t: dict, raw: str, st: dict) -> list:
             errs.append("具体例の引用（cid つき）がありません。コメントが少なくて引用できないなら「根拠薄」と書く")
         if errs:
             return errs
+        # 掘り下げで書き直す前の版（note 用の章・REPORT.md・NOTE_BODY.md も）を outputs/history/deepen_r<回>/ に残す（完了の知らせで「前の版は残してある」と伝える）
+        keep_version(a, "deepen", t["params"]["round"])
         keep_history(a, a.outputs("synthesis", f"{k}.md"), f"r{t['params']['round']}")
         pr._write_text(a.outputs("synthesis", f"{k}.md"), md + "\n")
         return []
@@ -1822,9 +1931,11 @@ def accept(a, t: dict, raw: str, st: dict) -> list:
         n = cfg(a)["n_refs"]
         if not isinstance(refs, list) or len(refs) != n:
             return [f"references を {n} 本の配列にしてください"]
+        if not all(isinstance(r, dict) for r in refs):
+            return ["references の各要素は {\"file\": \"kb:cards の file\", \"why\": \"選んだ理由\"} のオブジェクトにしてください（file の文字列だけにしない）"]
         ok = {c_["file"]: c_ for c_ in cards(a)}
         errs = []
-        files = [str((r or {}).get("file", "")).strip() for r in refs]
+        files = [str(r.get("file", "")).strip() for r in refs]
         for f in files:
             if f not in ok:
                 errs.append(f"{f} は選べるカードにありません（kb:cards の file。分析する曲を扱った記事は選べない）")
@@ -1876,12 +1987,7 @@ def accept(a, t: dict, raw: str, st: dict) -> list:
             if not isinstance(cl, list) or not cl:
                 errs.append(f"`{c_.get('id')}` の claims（主張と根拠）を1個以上")
                 continue
-            for x in cl:
-                for e in (x or {}).get("evidence") or []:
-                    if isinstance(e, dict) and "seq" in e and e["seq"] not in recs:
-                        errs.append(f"`{c_.get('id')}` の根拠に存在しない seq {e['seq']}")
-                    if isinstance(e, dict) and "cid" in e and str(e["cid"]) not in known:
-                        errs.append(f"`{c_.get('id')}` の根拠に入力に無い cid {e['cid']}")
+            errs += _check_evidence(a, c_.get("id"), cl, recs, known)
         if errs:
             return errs[:20]
         pr._write_json(a.outputs("outline.json"), obj)
@@ -1916,6 +2022,9 @@ def accept(a, t: dict, raw: str, st: dict) -> list:
             return [err]
         if not isinstance(obj, dict) or not obj.get("title") or not obj.get("editor_notes_md"):
             return ["title と editor_notes_md を入れてください"]
+        if not all(isinstance(obj.get(k), str) for k in ("title", "editor_notes_md")) or \
+                not isinstance(obj.get("changes_md") or "", str):
+            return ["title・editor_notes_md（・changes_md）は文字列にしてください（editor_notes_md は Markdown の文字列）"]
         pr._write_json(a.outputs("note_meta.json"), obj)
         return []
 
@@ -1923,9 +2032,14 @@ def accept(a, t: dict, raw: str, st: dict) -> list:
         obj, err = pr._parse_json(raw)
         if err:
             return [err]
-        ch = (obj or {}).get("chapter")
+        if not isinstance(obj, dict):
+            return ["{\"chapter\": \"<章の id>\", \"markdown\": \"直した章の全文\", \"note_to_user\": \"...\"} のオブジェクト1つにしてください"
+                    "（配列にしない。複数の章に当たる指示なら、いちばん当たる章を1つ）"]
+        ch = obj.get("chapter")
         if ch not in chapter_order(a, st):
             return [f"chapter は章の一覧の id から: {chapter_order(a, st)}"]
+        if not isinstance(obj.get("markdown"), str):
+            return ["markdown は直した章の全文（Markdown の文字列）にしてください"]
         ph = phases(a)
         heading = "## 1. バズの拡大経路" if ch == f"path_{ph[0]['id']}" else heading_of(a, ch)
         errs = check_chapter(a, obj.get("markdown") or "", heading)
@@ -1974,13 +2088,29 @@ def _rewrite_tasks(a, st, t, items: list, label: str) -> list:
             for i, x in enumerate(items, 1)]
 
 
-def _check_evidence(a, cid_: str, claims) -> list:
+def _check_evidence(a, cid_: str, claims, recs=None, known=None) -> list:
+    """構成案の claims（主張と根拠）の検査。根拠の seq は数字に寄せて書き戻す（"12" と文字列で書いても受け取る）"""
     errs = []
-    recs, known = records(a), all_cids(a)
+    recs = records(a) if recs is None else recs
+    known = all_cids(a) if known is None else known
     for x in claims:
-        for e in (x or {}).get("evidence") or []:
-            if isinstance(e, dict) and "seq" in e and e["seq"] not in recs:
-                errs.append(f"`{cid_}` の根拠に存在しない seq {e['seq']}")
+        if not isinstance(x, dict):
+            errs.append(f"`{cid_}` の claims の各要素は {{\"claim\": \"主張\", \"evidence\": [...]}} のオブジェクトにしてください"
+                        f"（受け取った: {json.dumps(x, ensure_ascii=False)[:40]}）")
+            continue
+        ev = x.get("evidence") or []
+        if not isinstance(ev, list):
+            errs.append(f"`{cid_}` の evidence は配列（[{{\"seq\": 12}}, {{\"cid\": \"…\"}}]）にしてください")
+            continue
+        for e in ev:
+            if isinstance(e, dict) and "seq" in e:
+                s = _seq_int(e["seq"])
+                if s is None:
+                    errs.append(f"`{cid_}` の根拠の seq は数字にしてください: {json.dumps(e['seq'], ensure_ascii=False)[:20]}")
+                elif s not in recs:
+                    errs.append(f"`{cid_}` の根拠に存在しない seq {s}")
+                else:
+                    e["seq"] = s
             if isinstance(e, dict) and "cid" in e and str(e["cid"]) not in known:
                 errs.append(f"`{cid_}` の根拠に入力に無い cid {e['cid']}")
     return errs
@@ -1996,6 +2126,7 @@ def accept_outline_revise(a, t, raw, st) -> list:
     chs = chapter_order(a, st)
     errs = []
     plans = [c_ for c_ in obj.get("chapters") or [] if isinstance(c_, dict)]
+    recs, known = records(a), all_cids(a)
     for c_ in plans:
         if c_.get("id") not in chs:
             errs.append(f"chapters の id は章の一覧から: {c_.get('id')}（{chs}）")
@@ -2004,7 +2135,7 @@ def accept_outline_revise(a, t, raw, st) -> list:
         if not isinstance(cl, list) or not cl:
             errs.append(f"`{c_['id']}` の claims（主張と根拠）を1個以上")
             continue
-        errs += _check_evidence(a, c_["id"], cl)
+        errs += _check_evidence(a, c_["id"], cl, recs, known)
     rw = [x for x in obj.get("rewrite") or [] if isinstance(x, dict)]
     ids = [x.get("chapter") for x in rw]
     if not rw:
@@ -2025,7 +2156,7 @@ def accept_outline_revise(a, t, raw, st) -> list:
     keep_history(a, a.outputs("outline.json"), f"deepen-r{pm['round']}")
     by = {c_["id"]: c_ for c_ in plans}
     have = {c_.get("id") for c_ in old.get("chapters") or []}
-    o = {**old, "thesis": obj["thesis"].strip(),
+    o = {**old, "thesis": str(obj["thesis"]).strip(),
          "chapters": [by.get(c_.get("id"), c_) for c_ in old.get("chapters") or []] + [c_ for c_ in plans if c_["id"] not in have]}
     pr._write_json(a.outputs("outline.json"), o)
     pr._write_text(a.outputs("outline.md"), outline_md(o, chs) + "\n")
@@ -2114,28 +2245,45 @@ def accept_phases(a, obj) -> list:
         if not p.get("name"):
             errs.append(f"P{i} の name がありません")
         for kk in ("start", "end"):
-            if not date_re.match(str(p.get(kk, ""))):
-                errs.append(f"P{i} の {kk} は YYYY-MM-DD にしてください")
-        bad = [s for s in p.get("reps") or [] if s not in labs]
+            v = str(p.get(kk, ""))
+            try:
+                ok = bool(date_re.match(v)) and bool(datetime.date.fromisoformat(v))
+            except ValueError:
+                ok = False
+            if not ok:
+                errs.append(f"P{i} の {kk} は YYYY-MM-DD（ある日付）にしてください")
+        reps = p.get("reps") or []
+        if not isinstance(reps, list):
+            errs.append(f"P{i} の reps は seq の配列にしてください（例: [12, 40]）")
+            continue
+        seqs = [_seq_int(s) for s in reps]   # "12" と文字列で書いても受け取る
+        bad = [s for s, n in zip(reps, seqs) if n is None or n not in labs]
         if bad:
             errs.append(f"P{i} の reps にラベルの付いていない seq: {bad[:5]}")
+        else:
+            p["reps"] = seqs
     if errs:
         return errs[:20]
     if ph[0]["start"] > dates[0]:
         errs.append(f"最初の段階の start は {dates[0]} 以前にしてください")
     if ph[-1]["end"] < dates[-1]:
         errs.append(f"最後の段階の end は {dates[-1]} 以降にしてください")
+    for p in ph:   # 1つ目の段階も（前は2つ目以降しか見ず、中身の無い段階 P1 とその章ができた）
+        if p["start"] > p["end"]:
+            errs.append(f"{p['id']} の start が end より後です")
     for p, q in zip(ph, ph[1:]):
         nxt = (datetime.date.fromisoformat(p["end"]) + datetime.timedelta(days=1)).isoformat()
         if q["start"] != nxt:
             errs.append(f"{q['id']} の start は {p['id']} の end の翌日（{nxt}）にしてください")
-        if q["start"] > q["end"]:
-            errs.append(f"{q['id']} の start が end より後です")
-    if not obj.get("pathway_md"):
-        errs.append("pathway_md（拡散経路の下書き）を書いてください")
+    if not isinstance(obj.get("pathway_md"), str) or not obj["pathway_md"].strip():
+        errs.append("pathway_md（拡散経路の下書き。Markdown の文字列）を書いてください")
+    ov = obj.get("overlooked") or []
+    if not isinstance(ov, list):
+        errs.append("overlooked は seq の配列にしてください（無ければ []）")
     if errs:
         return errs
-    pr._write_json(a.outputs("phases.json"), {"phases": ph, "overlooked": [s for s in obj.get("overlooked") or [] if s in recs]})
+    ov = [n for n in (_seq_int(s) for s in ov) if n in recs]
+    pr._write_json(a.outputs("phases.json"), {"phases": ph, "overlooked": ov})
     pr._write_text(a.outputs("pathway.md"), obj["pathway_md"].strip() + "\n")
     return []
 
@@ -2370,17 +2518,27 @@ def service_assemble(a, st: dict) -> dict:
 # 「seq N … 〇〇万再生」の照合。カンマ入りの数字（1,420万）を読み、ほかの動画（seq M）をまたいで数字を拾わない
 # （2026-10-06: 掘り下げの試験で、元の版から同じ誤報3件が「数字の一部は運営が確認中」として利用者に出ていた）
 PLAY_RE = re.compile(r"seq\s*(\d+)(?:(?!seq\s*\d)[^。\n]){0,60}?(?<![\d,.万億])(\d[\d,]*(?:\.\d+)?)\s*(万|億)?\s*(?:回)?再生")
-# 「seq N、@投稿者、日付、再生 4,100,000」の形（執筆の指示どおりの書き方。前はこちらを照合していなかった。本番2曲の写しで 75・88 件、ずれ0）
-PLAY_RE_PRE = re.compile(r"seq\s*(\d+)(?:(?!seq\s*\d)[^。\n]){0,60}?再生\s*(\d[\d,]*(?:\.\d+)?)\s*(万|億)?")
+# 「seq N、@投稿者、日付、再生 4,100,000」の形（執筆の指示どおりの書き方。前はこちらを照合していなかった。本番2曲の写しで 75・88 件、ずれ0）。
+# 「再生数 50万」「再生回数50万回」「再生数は50万」も同じ形として照合する（2026-10-06 通し試験）
+PLAY_RE_PRE = re.compile(r"seq\s*(\d+)(?:(?!seq\s*\d)[^。\n]){0,60}?再生(?:回?数)?\s*(?:は|[:：])?\s*(\d[\d,]*(?:\.\d+)?)\s*(万|億)?")
+# 数字のあとの「突破・超え・以上」は下限（本文の数字 ≦ データなら一致）、「近く・弱」などは目安（データが本文の数字の少し下）
+PLAY_BOUND_RE = re.compile(r"\s*(?:回)?\s*(?:再生)?\s*(?:を|が|に)?\s*(?:(突破|超え|超|越え|以上|オーバー)|(近く|近い|弱|足らず|手前|迫))")
 # 数字のすぐあとに動画の「（seq M …）」が続くなら、その数字は M のもの（書き方「30.9万回再生（seq 28 …）」）。前の seq N の数字として照合しない
 # （2026-10-06: きゃわの事例で、正しい本文から4〜6件の誤報が出て、完了の知らせに「数字の一部は運営が確認中」と出ていた）
 FOLLOW_SEQ = re.compile(r"[^。、\n（(]{0,12}[（(]\s*seq\s*(\d+)")   # 数字と（seq M）の間は読点なし・12字まで（「〜まで伸びています（seq 39」）
 PLAY_RE_POST = re.compile(r"(?<![\d,.万億])(\d[\d,]*(?:\.\d+)?)\s*(万|億)?\s*(?:回)?再生" + FOLLOW_SEQ.pattern)   # 「23万6,600回」の末尾だけは拾わない
 
 
-def play_claims(text: str) -> list:
+def play_bound(text: str, pos: int):
+    """数字（と万・億）のすぐあとの言い方: "low"（突破・超え・以上＝下限）・"about"（近く・弱など＝目安）・None（ちょうどの数）"""
+    m = PLAY_BOUND_RE.match(text, pos)
+    return None if not m else "low" if m.group(1) else "about"
+
+
+def play_claims(text: str, bounds: bool = False) -> list:
     """本文が書いた動画の再生数を (seq, 数字の文字, 万・億, 抜き出し) で返す。3つの書き方:
-    「seq N … 〇〇回再生」・「seq N、…、再生 数字」・「〇〇回再生（seq N …）」"""
+    「seq N … 〇〇回再生」・「seq N、…、再生 数字」・「〇〇回再生（seq N …）」。
+    bounds=True なら、5つ目に数字のあとの言い方（play_bound: 下限・目安・None）を足す"""
     out = {}
     for m in PLAY_RE.finditer(text):
         f = FOLLOW_SEQ.match(text, m.end())
@@ -2388,20 +2546,28 @@ def play_claims(text: str) -> list:
             continue   # 数字は、あとに続く動画のもの（PLAY_RE_POST で照合する）
         if "再生" in text[m.end(1):m.start(2)]:
             continue   # seq N の再生数は（ ）の中で言い終えている。あとの数字は別の話（「〜と、100万回再生を超える投稿が続く」）
-        out[m.start(2)] = (int(m.group(1)), m.group(2), m.group(3), m.group(0))
+        out[m.start(2)] = (int(m.group(1)), m.group(2), m.group(3), m.group(0), play_bound(text, m.end(3) if m.group(3) else m.end(2)))
     for m in PLAY_RE_PRE.finditer(text):
-        out[m.start(2)] = (int(m.group(1)), m.group(2), m.group(3), m.group(0))
+        out[m.start(2)] = (int(m.group(1)), m.group(2), m.group(3), m.group(0), play_bound(text, m.end(3) if m.group(3) else m.end(2)))
     for m in PLAY_RE_POST.finditer(text):
-        out[m.start(1)] = (int(m.group(3)), m.group(1), m.group(2), m.group(0))
-    return [out[k] for k in sorted(out)]
+        out[m.start(1)] = (int(m.group(3)), m.group(1), m.group(2), m.group(0), play_bound(text, m.end(2) if m.group(2) else m.end(1)))
+    return [out[k] if bounds else out[k][:4] for k in sorted(out)]
 
 
-def play_mismatch(num: str, unit_word, real: int) -> bool:
-    """本文の数字が実データとずれているか。6% か、書いた桁の丸めの幅（「2万」なら±5千、「30.9万」なら±500）の大きいほうまでは一致とみなす"""
+def play_mismatch(num: str, unit_word, real: int, bound=None) -> bool:
+    """本文の数字が実データとずれているか。6% か、書いた桁の丸めの幅（「2万」なら±5千、「30.9万」なら±500）の大きいほうまでは一致とみなす。
+    bound="low"（「100万回再生を突破」）は本文の数字がデータ以下なら一致、bound="about"（「100万近く」「100万弱」）は
+    データが本文の数字の8割から数字まで（丸めの幅を含む）なら一致"""
     digits = num.replace(",", "")
     unit = 10000 if unit_word == "万" else 100000000 if unit_word == "億" else 1
     step = 10 ** -len(digits.split(".")[1]) if "." in digits else 1
-    return abs(float(digits) * unit - real) > max(0.06 * real, step * unit / 2)
+    claimed = float(digits) * unit
+    tol = max(0.06 * real, step * unit / 2)
+    if bound == "low":
+        return claimed - real > tol
+    if bound == "about":
+        return real - claimed > tol or real < 0.8 * claimed - tol
+    return abs(claimed - real) > tol
 
 
 def service_verify(a, st: dict) -> dict:
@@ -2417,11 +2583,11 @@ def service_verify(a, st: dict) -> dict:
     for c_ in sorted(cids):
         if c_ not in known:
             errors.append(f"入力に無い cid: {c_}")
-    for s, num, unit, snip in play_claims(rep):
+    for s, num, unit, snip, bound in play_claims(rep, bounds=True):
         if s not in recs:
             continue
         real = recs[s]["plays"]
-        if real and play_mismatch(num, unit, real):
+        if real and play_mismatch(num, unit, real, bound):
             warnings.append(f"seq {s} の再生数: 本文 {snip[-24:]} ／ データ {real:,}")
     note = a.outputs("NOTE_BODY.md").read_text(encoding="utf-8") if a.outputs("NOTE_BODY.md").exists() else ""
     if note:

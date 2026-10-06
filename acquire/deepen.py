@@ -101,6 +101,21 @@ def _can_continue(r: dict) -> bool:
     return bool(r.get("has_more")) and int(r.get("cap") or 40) < EST["more_cap"] and int(r.get("top_list") or 0) >= n > 0
 
 
+def unreachable(d: Path) -> set:
+    """前の取得で楽曲ページの一覧に見つからなかった動画（本線・掘り下げ・切り直しの要約と差し替えの記録から）。探し直すと数分かかるので外す。
+    掘り下げ（candidates）と切り直し（acquire/recut.py の plan）で同じ範囲を外す"""
+    out = set()
+    for p in sorted((Path(d) / "fetch_log").glob("*summary*.json")):
+        out |= {str(v) for v in (pipeline.read_json(p, {}) or {}).get("missing") or []}
+    for p in sorted((Path(d) / "fetch_log").glob("substitutions*.tsv")):
+        lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")]
+        if not lines:
+            continue
+        rows = csv.DictReader(lines, delimiter="\t")
+        out |= {str(r.get("pool_video")) for r in rows if r.get("pool_video")}
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 決める
 # ---------------------------------------------------------------------------
@@ -113,6 +128,7 @@ def candidates(d: Path, community: str, min_plays: int | None = None) -> dict:
     tried = {}
     for p in sorted((d / "raw" / "deepen").glob("r*.jsonl")) if (d / "raw" / "deepen").exists() else []:
         tried.update(_rows(p))
+    lost = unreachable(d)   # 前の取得（本線・掘り下げ・切り直し）で一覧に見つからなかった動画。新しく取る・続きを取るの両方から外す
     src = _sources(d)
     floor = min_plays_of(d) if min_plays is None else int(min_plays)
     new, more = [], []
@@ -124,12 +140,20 @@ def candidates(d: Path, community: str, min_plays: int | None = None) -> dict:
         vid = str(r["video_id"])
         plays = int(r.get("plays") or 0)
         item = {"video_id": vid, "seq": s, "plays": plays, "date": r.get("date"), "week": r.get("week"), "page": src.get(vid, 1)}
+        t = tried.get(vid) or {}
         if vid in ok:
+            # 続きも、前の掘り下げで「動画が無い・コメントが無い・開けない」だった動画、一覧に見つからなかった動画、
+            # 上限120件で取り直しても増えなかった動画（ok の行が原本に足されず、上限40件の行のまま残る）は外す
+            if (t.get("status") in GONE or vid in lost
+                    or (t.get("status") == "ok" and int(t.get("cap") or 0) >= EST["more_cap"])):
+                if _can_continue(ok[vid]):
+                    skipped["gone"] += 1
+                continue
             if _can_continue(ok[vid]):
                 more.append({**item, "cap": EST["more_cap"], "kind": "more", "had": len(ok[vid].get("comments") or [])})
             continue
         if (not r.get("enriched") or r.get("comments") == 0 or (last.get(vid) or {}).get("status") in GONE
-                or (tried.get(vid) or {}).get("status") in GONE):
+                or t.get("status") in GONE or vid in lost):
             skipped["gone"] += 1
             continue
         if plays < floor:
@@ -373,14 +397,21 @@ def prep(d: Path) -> str:
             head = rd.fieldnames
             rows = list(rd)
     head = list(head or ["video_id", "seq", "cap", "priority", "reasons"])
-    have = {r["video_id"] for r in rows}
+    by_vid = {r["video_id"]: r for r in rows}
+    marked = set()
     for r in _jsonl(d / "raw" / "comments.jsonl"):
         reason = str(r.get("pool_reason") or "")
-        if reason.startswith(("deepen:", "recut:")) and str(r["video_id"]) not in have:
-            what = "界隈の切り直し" if reason.startswith("recut:") else "界隈の掘り下げ"
-            rows.append({"video_id": str(r["video_id"]), "reasons": f"{what}で取り足した（{reason.split(':')[2]}）",
-                         "priority": "3"})
-            have.add(str(r["video_id"]))
+        vid = str(r["video_id"])
+        if not reason.startswith(("deepen:", "recut:")) or vid in marked:
+            continue
+        what = "界隈の切り直し" if reason.startswith("recut:") else "界隈の掘り下げ"
+        mark = f"{what}で取り足した（{reason.split(':')[2]}）"
+        if vid in by_vid:   # プールに載っていた動画（週ごとの動画は cap 0 で載る。1ページの取り方 0.5.4〜）にも印を足す
+            p = by_vid[vid]
+            p["reasons"] = ",".join(x for x in (p.get("reasons") or "", mark) if x)
+        else:
+            rows.append({"video_id": vid, "reasons": mark, "priority": "3"})
+        marked.add(vid)
     with open(pool_all, "w", encoding="utf-8", newline="\n") as f:
         w = csv.DictWriter(f, fieldnames=head, delimiter="\t", extrasaction="ignore")
         w.writeheader()

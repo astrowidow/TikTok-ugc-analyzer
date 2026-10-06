@@ -60,8 +60,8 @@ class LocalHooks:
 
     def app_state(self) -> dict:
         st = config.load_state()
-        return {"running": app_running(),
-                "login_wanted": worker_entry.need_login_flag().exists() or not st.get("logged_in_at")}
+        return {"running": app_running(),   # 係がもういない古いログイン待ちの印は見ない（login_waiting が消す）
+                "login_wanted": worker_entry.login_waiting() or not st.get("logged_in_at")}
 
     def inspect_many(self, urls: list) -> list:
         """楽曲ページを順に開いて、題・作者・UGC 数を読む（1つの Chrome で。1本あたり数秒）"""
@@ -234,11 +234,8 @@ def _with_music_url(m: dict) -> dict:
 
 
 def app_running() -> bool:
-    try:
-        pid = int(config.PID_FILE.read_text().strip())
-    except (FileNotFoundError, ValueError):
-        return False
-    return system._alive(pid)   # noqa: SLF001
+    """メニューバーのアプリが動いているか（app.pid の錠と、番号のプロセスが本当にアプリか。番号が生きているかだけでは見ない）"""
+    return system.app_running()
 
 
 def build():

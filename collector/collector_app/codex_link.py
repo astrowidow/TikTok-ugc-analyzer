@@ -89,11 +89,13 @@ def _s(v: str) -> str:
     return json.dumps(v, ensure_ascii=False)   # TOML の基本文字列（JSON と同じ書き方）
 
 
-def _block() -> str:
+def _block(disabled: bool = False) -> str:
     e = entry()
     lines = [MARK, f"[mcp_servers.{SERVER_NAME}]", f"command = {_s(e['command'])}",
              "args = [" + ", ".join(_s(a) for a in e["args"]) + "]",
              f"startup_timeout_sec = {STARTUP_TIMEOUT_SEC}", f"tool_timeout_sec = {TOOL_TIMEOUT_SEC}"]
+    if disabled:   # 利用者が ChatGPT の設定で切ったもの（切ったまま書き直す）
+        lines.append("enabled = false")
     if e.get("env"):
         lines += ["", f"[mcp_servers.{SERVER_NAME}.env]"] + [f"{k} = {_s(v)}" for k, v in e["env"].items()]
     for t in TOOLS:
@@ -121,7 +123,7 @@ def _load() -> dict:
         return {}
     try:
         return tomllib.loads(CONFIG.read_text(encoding="utf-8"))
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as e:
         raise LinkError(f"ChatGPT（Codex）の設定ファイルが読めません（壊れている可能性）: {e}") from e
 
 
@@ -165,12 +167,18 @@ def _backup() -> str:
     return str(b)
 
 
-def connect() -> str:
-    """設定ファイルに道具の節を足し（前の節は置き換える）、スキルを置く。控えの場所を返す（元の設定ファイルが無ければ空）"""
-    old = CONFIG.read_text(encoding="utf-8") if CONFIG.exists() else ""
-    _load()   # 読めない設定ファイルには書き足さない
+def connect(enable: bool = False) -> str:
+    """設定ファイルに道具の節を足し（前の節は置き換える）、スキルを置く。控えの場所を返す（元の設定ファイルが無ければ空）。
+    前の節が ChatGPT の設定で切られていれば（enabled = false）、切ったまま書き直す（アプリを新しくしたときに勝手に戻さない）。
+    enable はメニューの「ChatGPT につなぐ」を押したとき（利用者がつなぎ直したい）"""
+    try:
+        old = CONFIG.read_text(encoding="utf-8") if CONFIG.exists() else ""
+    except (OSError, UnicodeDecodeError) as e:   # UTF-8 でない・読めない設定ファイルには書き足さない
+        raise LinkError(f"ChatGPT（Codex）の設定ファイルが読めません（UTF-8 でない・壊れている可能性）: {e}") from e
+    prev = (_load().get("mcp_servers") or {}).get(SERVER_NAME)   # 読めない設定ファイルには書き足さない
+    disabled = not enable and isinstance(prev, dict) and prev.get("enabled") is False
     base = _strip(old)
-    new = (base + "\n\n" if base else "") + _block()
+    new = (base + "\n\n" if base else "") + _block(disabled)
     try:
         cur = (tomllib.loads(new).get("mcp_servers") or {}).get(SERVER_NAME) or {}
     except tomllib.TOMLDecodeError as e:

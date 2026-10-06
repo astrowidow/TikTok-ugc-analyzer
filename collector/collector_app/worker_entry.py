@@ -60,7 +60,7 @@ def main() -> int:
 
     def ensure_chrome(port, plog):
         c = chrome_mod.Chrome(int(port), config.PROFILE_DIR, log)
-        if not c.listening():
+        if not c.has_tab():   # 動いていない・窓が閉じられた（Mac の Chrome は窓0でも口が開いたまま）
             plog(f"    取得用の Chrome を最小化で起動します（ポート {port}）")
             c.ensure(minimized=True)
         if c.logged_in():

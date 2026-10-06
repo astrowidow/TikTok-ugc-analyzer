@@ -63,15 +63,17 @@ def find(ref: str | None) -> Path | None:
 
 
 def _app_running() -> bool:
+    """メニューバーのアプリが動いているか（AI の道具と同じ判定。残った app.pid の番号の使い回しを動いているとみなさない）"""
+    from . import system
+    return system.app_running()
+
+
+def _app_started_at() -> float:
+    """アプリが起動した時刻（app.pid は起動のときに書く）。読めなければ 0"""
     try:
-        pid = int(config.PID_FILE.read_text().strip())
-    except (OSError, ValueError):
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
+        return config.PID_FILE.stat().st_mtime
     except OSError:
-        return False
+        return 0.0
 
 
 def _login_flag() -> bool:
@@ -188,8 +190,9 @@ def wait(ref: str | None, limit_h: float = LIMIT_H, poll_s: float = POLL_S, awak
         failed_seen = (failed_seen or time.time()) if st == "failed" else None
         stop = None
         if not _app_running():
-            # 止まった取得は、アプリを開き直しても自動では取り直さない（起動のときの状態を「前から」とみなす）
-            stop = (1, _failed_line(d, title, m) if st == "failed" else
+            # アプリは起動すると、取り直してよい止まった取得（jobs.retriable）を30秒〜5分後に続きから取り直す（0.6.1〜）。
+            # 取り直さない失敗だけ、メニューの再開を案内する
+            stop = (1, _failed_line(d, title, m) if st == "failed" and not jobs.retriable(m) else
                     ("止まりました: この Mac の UGC Analyzer が動いていません。利用者に「アプリケーションフォルダの UGC Analyzer を開いてください。"
                      "済んだところの続きから取ります」と伝えて止まってください"))
         elif _login_wanted():
@@ -200,7 +203,8 @@ def wait(ref: str | None, limit_h: float = LIMIT_H, poll_s: float = POLL_S, awak
             # 取り直さない失敗・回数切れ・アプリを開き直す前からの失敗は、メニューの再開を待つ
             if _others_busy(d):
                 others_at = time.time()
-            since = max(_ts((m.get("acquisition") or {}).get("failed_at")) or failed_seen, others_at)
+            # アプリを開き直した直後は、起動から数える（起動の30秒後に取り直す。0.6.1〜）
+            since = max(_ts((m.get("acquisition") or {}).get("failed_at")) or failed_seen, others_at, _app_started_at())
             if not jobs.retriable(m) or time.time() - since > STALL_S:
                 stop = (1, _failed_line(d, title, m))
         if stop is None:

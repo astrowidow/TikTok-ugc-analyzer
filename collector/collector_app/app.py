@@ -136,6 +136,9 @@ class Controller:
         for m in jobs.analyses():
             self.known[m["analysis_id"]] = (m.get("acquisition") or {}).get("status")
             self.known_deepen[(m["analysis_id"], (m.get("deepen") or {}).get("round"))] = (m.get("deepen") or {}).get("status")
+            # 自動の取り直しを待つ間にアプリが開き直された（取り直しの予定はメモリにしか無い）。開いたら取り直しを続ける
+            if (m.get("acquisition") or {}).get("status") == "failed" and jobs.retriable(m):
+                self._schedule_retry(m, restarted=True)
         self._watch_prompts(first=True)
         self._kb_refresh_text()
         threading.Thread(target=self._loop, name="collector", daemon=True).start()
@@ -247,7 +250,8 @@ class Controller:
                 continue
             acq = m.get("acquisition") or {}
             wpid = self.worker.pid()
-            if wpid and acq.get("pid") == wpid and self.worker.running():
+            # 係は1つで分析を順に取る。やめた分析が止まったあと、同じ係がもう別の分析を取っていれば、その係は止めない
+            if wpid and acq.get("pid") == wpid and self.worker.running() and not self._busy_with_other(aid, wpid):
                 self.worker.stop(f"利用者がやめた（{aid}）")
             if acq.get("status") != "cancelled":
                 from acquire import pipeline
@@ -259,6 +263,17 @@ class Controller:
             flag.unlink(missing_ok=True)
             self.log.info("取得をやめました（利用者の頼み）: %s", aid)
             notify.send(f"「{m.get('title') or aid}」の取得をやめました", "別の楽曲ページでやり直します")
+
+    @staticmethod
+    def _busy_with_other(aid: str, pid) -> bool:
+        """同じ係（PID）が、ほかの分析を取っている最中か（取得の段か、掘り下げ・切り直しの取り足し）"""
+        for o in jobs.analyses():
+            if o["analysis_id"] == aid:
+                continue
+            for part in (o.get("acquisition") or {}, o.get("deepen") or {}):
+                if part.get("status") == "running" and part.get("pid") == pid:
+                    return True
+        return False
 
     def _tick(self):
         self._handle_cancels()
@@ -276,8 +291,9 @@ class Controller:
             else:
                 self.status_text = self._idle_text("（試験: Chrome なし）")
             return
-        # 取得の係がコメントの段でログイン切れに気づいた（worker_entry.py が印を置いて待っている）
-        if worker_entry.need_login_flag().exists() and not self.login_wanted:
+        # 取得の係がコメントの段でログイン切れに気づいた（worker_entry.py が印を置いて待っている）。
+        # 印を置いた係がもういない（止められた・落ちた）なら、印は古いものとして消える（login_waiting）
+        if not self.login_wanted and worker_entry.login_waiting():
             config.save_state(logged_in_at=None)
             self.login_wanted, self.login_presented = True, False
         if self.login_wanted or not st.get("logged_in_at"):
@@ -314,12 +330,18 @@ class Controller:
             self.chrome_relaunch_noted = False
             self.status_text = "取得を始めます…"
             return
-        # 仕事が無い
-        self.status_text = self._idle_text()
+        # 仕事が無い。自動では取り直さない止まった取得があれば、1行目に出す（友達向けの紙「『止まっています』と出ていたら」）
+        failed = [m for m in jobs.analyses() if (m.get("acquisition") or {}).get("status") == "failed"]
+        if failed:
+            line = jobs.describe(failed[-1])
+            line = line if len(line) <= 70 else line[:69] + "…"   # 止まった理由が長いとメニューの幅が広がりすぎる
+            self.status_text = line + ("" if "続きから再開" in line else "（メニューの「止まった取得を続きから再開」）")
+        else:
+            self.status_text = self._idle_text()
         if self.chrome.listening():
             self.idle_since = self.idle_since or time.time()
-            if time.time() - self.idle_since > CHROME_IDLE_QUIT and self.chrome.window_state() == "minimized":
-                self.chrome.quit()   # 使わない間は取得用の Chrome を閉じておく（Dock のアイコンも消える）
+            if time.time() - self.idle_since > CHROME_IDLE_QUIT and self.chrome.window_state() in ("minimized", "closed"):
+                self.chrome.quit()   # 使わない間は取得用の Chrome を閉じておく（Dock のアイコンも消える。窓だけ閉じられたものも）
         else:
             self.idle_since = None
 
@@ -333,8 +355,8 @@ class Controller:
 
     def _login_flow(self):
         """捨て垢のログインを待つ。ログインは利用者が自分で、取得用の Chrome の画面でする"""
-        if not self.chrome.listening():
-            self.chrome.ensure(url=chrome.LOGIN_URL, minimized=False)
+        # Chrome が閉じている・窓だけ閉じられている（タブが0）なら開く。開いたら、ログインの画面を出し直す
+        if self.chrome.ensure(url=chrome.LOGIN_URL, minimized=False):
             self.login_presented = False
         if not self.login_presented:
             if self.chrome.logged_in():   # すでにログイン済み（前にログインしたプロファイル）
@@ -350,6 +372,9 @@ class Controller:
             config.save_state(logged_in_at=time.strftime("%Y-%m-%d %H:%M:%S"))
             self.login_wanted = False
             self.login_presented = False
+            # 係のログイン待ちの印もここで消す（係が気づいて消すのは最大10秒後。その間に見張りが印を見て、
+            # ログインの流れをもう一度回し「準備OK」を2回出していた）。係は10秒おきにログインを確かめて続ける
+            worker_entry.need_login_flag().unlink(missing_ok=True)
             self.chrome.minimize()
             self.log.info("TikTok のログインを確かめました")
             if ai_where():
@@ -388,16 +413,32 @@ class Controller:
                 if "ログイン" in err:
                     config.save_state(logged_in_at=None)
                 if jobs.retriable(m):
-                    # Chrome が閉じられた・つながらない、はすぐ取り直す。それ以外（TikTok 側など）は少し空ける
-                    quick = any(k in err for k in ("Chrome", "WebDriver", "接続できません", "session", "Session"))
-                    wait = 30 if quick else RETRY_WAIT
-                    self.pending_retry[aid] = time.time() + wait
-                    if not quick:
+                    wait = self._schedule_retry(m)
+                    if wait > 30:
                         notify.send(f"「{title}」の取得が止まりました",
                                     f"{wait // 60}分後に続きから取り直します（{err[:60]}）")
                 else:
                     notify.send(f"「{title}」の取得が止まりました",
                                 f"{err[:80]}。メニューの「止まった取得を続きから再開」で続きから取れます")
+
+    def _schedule_retry(self, m: dict, restarted: bool = False) -> int:
+        """止まった取得を、少し待ってから続きから取り直す予定に入れる。待つ秒数を返す。
+        Chrome が閉じられた・つながらない、はすぐ取り直す。それ以外（TikTok 側など）は少し空ける。
+        restarted（アプリを開き直したとき）は、止まった時刻から数えて待ち、少なくとも30秒はネットがつながるのを待つ"""
+        err = (m.get("acquisition") or {}).get("error") or ""
+        quick = any(k in err for k in ("Chrome", "WebDriver", "接続できません", "session", "Session"))
+        wait = 30 if quick else RETRY_WAIT
+        when = time.time() + wait
+        if restarted:
+            try:
+                import datetime
+                failed_at = datetime.datetime.fromisoformat((m.get("acquisition") or {}).get("failed_at")).timestamp()
+                when = max(time.time() + 30, failed_at + wait)
+            except (TypeError, ValueError):
+                pass
+            self.log.info("止まっていた取得を、続きから取り直す予定に入れました（アプリを開き直した）: %s", m["analysis_id"])
+        self.pending_retry[m["analysis_id"]] = when
+        return wait
 
     def _check_deepen(self, m: dict):
         """完成後の界隈の掘り下げの取り足し（acquire/deepen.py）が終わったら知らせる"""
@@ -435,11 +476,11 @@ class Controller:
 
     def _keep_chrome(self):
         """コメントの段で取得用の Chrome が閉じられたら、すぐ最小化で開き直す（2026-10-02 ユーザー）。
-        取りかけの1本は失敗になるが、係が続きから取り直す（止まった場合はアプリが30秒後に続きから）"""
-        if self.chrome.listening():
-            return
-        self.log.info("取得中に取得用の Chrome が閉じられたので、最小化で開き直します")
-        self.chrome.ensure(minimized=True)
+        取りかけの1本は失敗になるが、係が続きから取り直す（止まった場合はアプリが30秒後に続きから）。
+        窓を赤い×で閉じただけ（Chrome は動いたままタブが0）も、閉じられたとみなして窓を開き直す"""
+        if not self.chrome.ensure(minimized=True):
+            return   # 開いていて、窓もある
+        self.log.info("取得中に取得用の Chrome（の窓）が閉じられたので、最小化で開き直しました")
         if not self.chrome_relaunch_noted:
             self.chrome_relaunch_noted = True
             notify.send("取得用の Chrome を開き直しました",
@@ -734,7 +775,7 @@ class CollectorApp(rumps.App):
                         "ChatGPT の Mac アプリ（https://openai.com/chatgpt/download/）を入れて、ログインしてから、もう一度押してください。")
             return
         try:
-            backup = codex_link.connect()
+            backup = codex_link.connect(enable=True)   # 押したのは利用者。ChatGPT の設定で切ってあっても入れ直す
         except codex_link.LinkError as e:
             rumps.alert("ChatGPT につなげませんでした", str(e))
             return
@@ -833,14 +874,14 @@ class CollectorApp(rumps.App):
     # --- 取得用の Chrome ---
     def show_chrome(self, _):
         def go():
-            if not self.ctl.chrome.listening():
+            if not self.ctl.chrome.has_tab():   # 窓だけ閉じられている（タブが0）ときも、出せる画面は無い
                 notify.send("取得用の Chrome は閉じています", "コメントを取る段と、ログインのときだけ開きます")
                 return
             self.ctl.chrome.show()
         threading.Thread(target=go, daemon=True).start()
 
     def hide_chrome(self, _):
-        threading.Thread(target=lambda: self.ctl.chrome.listening() and self.ctl.chrome.minimize(), daemon=True).start()
+        threading.Thread(target=lambda: self.ctl.chrome.has_tab() and self.ctl.chrome.minimize(), daemon=True).start()
 
     def login(self, _):
         threading.Thread(target=self.ctl.request_login, daemon=True).start()
@@ -885,6 +926,23 @@ class CollectorApp(rumps.App):
         rumps.quit_application()
 
 
+def version_notice(st: dict, log) -> None:
+    """アプリを新しくしたあと初めて開いたとき（版が変わった）、開いている Claude（ChatGPT）を開き直すよう1回だけ知らせる。
+    AI の道具（--mcp）は Claude（ChatGPT）が起こしたまま動き続けるので、開き直すまで前の版の中身のまま
+    （.app を置き換えたあとは、前の版の道具が部品を読めずに止まることもある）。st は起動したときの state.json"""
+    if st.get("app_version") == VERSION:
+        return
+    config.save_state(app_version=VERSION)
+    if not st.get("first_run_done"):
+        return   # 初めて入れた（前の版は無い）
+    names = [name for _, name, link, _, is_running in AI_LINKS
+             if link.status() == "connected" and getattr(link, is_running)()]
+    log.info("版が変わりました: %s → %s（開いている AI: %s）", st.get("app_version") or "前の版", VERSION, "、".join(names) or "なし")
+    if names:
+        notify.send(f"{config.APP_NAME} を {VERSION} にしました",
+                    f"{'と'.join(names)} を開き直してください。開き直すと、新しい版の UGC Analyzer が使えます（話している途中の会話は保存されています）")
+
+
 def run():
     log = config.logger()
     code = config.setup_env()
@@ -901,7 +959,10 @@ def run():
                         "ダウンロードした場所のままだと、Mac を起動したときに自動で立ち上がらず、Claude や ChatGPT からも呼べません")
         else:
             if not st.get("first_run_done"):
-                system.set_login_item(True)   # 初回は「ログイン時に起動」を入れておく（メニューで外せる）
+                # 初回は「ログイン時に起動」を入れておく（メニューで外せる）。初回の印はここで立てる
+                # （.dmg の窓・ダウンロードのまま開いた1回目で立てると、アプリケーションから開いたときに入らない）
+                system.set_login_item(True)
+                config.save_state(first_run_done=True)
             system.refresh_login_item()
             if claude_link.status() == "outdated":   # アプリの場所が変わった（入れ直した）ら、Claude の設定も直す
                 try:
@@ -920,9 +981,9 @@ def run():
                     ch = code_link.ensure()
                     if ch:
                         log.info("Code タブ用の作業フォルダ（%s）を、今のアプリに合わせて整えました: %s", code_link.FOLDER, "、".join(ch))
-                except OSError as e:
+                except Exception as e:   # 作業フォルダの中身が想定と違っても、アプリの起動は止めない（記録だけ）
                     log.warning("Code タブ用の作業フォルダを整えられませんでした: %s", e)
-    config.save_state(first_run_done=True)
+            version_notice(st, log)
     ctl = Controller(code, log)
     system.watch_sleep(ctl.on_sleep, ctl.on_wake)
     app = CollectorApp(ctl)

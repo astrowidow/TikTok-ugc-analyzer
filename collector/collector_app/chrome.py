@@ -42,6 +42,8 @@ def find_binary():
 
 
 class Chrome:
+    REOPEN_GRACE = 1.5   # タブが0に見えたら、窓を開き直す前に見直すまでの秒
+
     def __init__(self, port: int, profile: Path, log):
         self.port = port
         self.profile = profile
@@ -56,10 +58,27 @@ class Chrome:
         except OSError:
             return False
 
-    def ensure(self, url: str = HOME_URL, minimized: bool = True, timeout: float = 30) -> None:
-        """待ち受けていなければ起動する。minimized なら起動後すぐ Dock にしまう"""
+    def has_tab(self) -> bool:
+        """起動していて、タブ（窓）があるか。Mac の Chrome は最後の窓を赤い×で閉じても終わらず、
+        DevTools の口は開いたままタブだけが0になる（2026-10-06 に使い捨てのプロファイルで確かめた）"""
+        return self.listening() and self._page_target() is not None
+
+    def ensure(self, url: str = HOME_URL, minimized: bool = True, timeout: float = 30) -> bool:
+        """待ち受けていなければ起動する。起動していても窓が閉じられて（タブが0）いれば、窓を開き直す。
+        minimized なら開いたあとすぐ Dock にしまう。起動した・開き直したら True"""
         if self.listening():
-            return
+            try:
+                if self._pages():
+                    return False
+                # 起こした直後（口が開いてから最初のタブが出るまで。実機で 0.2〜0.3 秒）をタブ0と見誤って重ねて開かないよう、
+                # 少しおいて見直す
+                time.sleep(self.REOPEN_GRACE)
+                if self._pages():
+                    return False
+            except Exception:
+                return False   # 口が一時的に答えない。開いたままとみなす（タブを重ねて開かない）
+            self._reopen_window(url, minimized, timeout)
+            return True
         exe = find_binary()
         if not exe:
             raise ChromeError("Google Chrome が見つかりません。先に Google Chrome を入れてください")
@@ -79,6 +98,23 @@ class Chrome:
         if minimized:
             time.sleep(1.0)
             self.minimize()
+        return True
+
+    def _reopen_window(self, url: str, minimized: bool, timeout: float) -> None:
+        """窓が全部閉じられた Chrome に、窓（タブ）を1つ開く（Target.createTarget。窓が無ければ新しい窓になる）"""
+        self.log.info("取得用の Chrome の窓が閉じられていたので、開き直します（ポート %s）", self.port)
+        self._browser_cmd("Target.createTarget", {"url": url})
+        t0 = time.time()
+        while self._page_target() is None:
+            if time.time() - t0 > timeout:
+                raise ChromeError("取得用の Chrome の窓を開き直せませんでした")
+            time.sleep(0.3)
+        if minimized:
+            time.sleep(1.0)
+            try:
+                self.minimize()
+            except Exception as e:   # しまえなくても取得はできる（次に描画の確かめで分かる）
+                self.log.info("開き直した窓を Dock にしまえませんでした: %s", e)
 
     def quit(self) -> None:
         if not self.listening():
@@ -111,9 +147,13 @@ class Chrome:
     def _json(self, path: str):
         return requests.get(f"http://127.0.0.1:{self.port}{path}", timeout=5).json()
 
+    def _pages(self) -> list:
+        """開いているタブ（type=page）。口に届かなければ例外"""
+        return [t for t in self._json("/json/list") if t.get("type") == "page"]
+
     def _page_target(self):
         try:
-            pages = [t for t in self._json("/json/list") if t.get("type") == "page"]
+            pages = self._pages()
         except Exception:
             return None
         return pages[0] if pages else None
@@ -148,7 +188,10 @@ class Chrome:
         return self._browser_cmd("Browser.getWindowForTarget", {"targetId": t["id"]})["windowId"]
 
     def window_state(self) -> str:
+        """normal・minimized など。窓が全部閉じられていれば closed、確かめられなければ ?"""
         try:
+            if not self._pages():
+                return "closed"
             wid = self._window_id()
             return self._browser_cmd("Browser.getWindowBounds", {"windowId": wid})["bounds"].get("windowState", "?")
         except Exception:

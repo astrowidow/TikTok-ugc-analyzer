@@ -7,11 +7,15 @@
 2. ちょいとり（acquisition_settings の trial_links / trial_pool / trial_cap）: 一覧とプールを小さく切る
    （2026-10-02 ユーザー「ちょいとりは5分で終わる規模に」）。要求の速さは変えない
 
+止められたとき（SIGTERM）は finally を走らせてから終わる（ログイン待ちの印を残さない。2026-10-06 通し試験 R1-2）。
+
 本線のファイルは変えない（合流するときに、本線に入れるかを決める）。
 
   <アプリ> -m collector_app.worker_entry
 """
 import json
+import os
+import signal
 import sys
 import time
 
@@ -25,7 +29,31 @@ def need_login_flag():
     return config.LOCK_DIR / "need_login.json"
 
 
+def login_waiting() -> bool:
+    """係がいまログインを待っているか（印があり、印を置いた係が生きている）。
+    係が SIGKILL などで消えて残った印は、古いものとして消す（残ると、アプリがログイン待ちに戻り続けて係を起こさない）"""
+    flag = need_login_flag()
+    try:
+        info = json.loads(flag.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True   # 書きかけ。少し待てば読める
+    pid = info.get("pid") if isinstance(info, dict) else None
+    if pid is None:   # 前の形（PID なし）: 係が生きていれば、その係の印とみなす
+        from acquire import worker
+        pid = worker.worker_pid()
+    from .jobs import _alive   # 回収されていない子（ゾンビ）は死んだものとみなす
+    if _alive(pid):
+        return True
+    flag.unlink(missing_ok=True)
+    return False
+
+
 def main() -> int:
+    # 止められたら（スリープの前・アプリの終了・「取得をやめて」。jobs.Worker.stop の SIGTERM）、SystemExit にして
+    # finally を走らせる。走らないと、ログイン待ちの印（need_login.json）と係の印（acq_worker.json）が残る
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
     config.setup_env()
     from acquire import pipeline, worker
     log = config.logger()
@@ -38,7 +66,7 @@ def main() -> int:
         if c.logged_in():
             return
         flag = need_login_flag()
-        flag.write_text(json.dumps({"since": pipeline.now()}), encoding="utf-8")
+        flag.write_text(json.dumps({"since": pipeline.now(), "pid": os.getpid()}), encoding="utf-8")
         plog("    TikTok のログインが切れています。アプリがログインの画面を出すので、ログインされるまで待ちます")
         t0 = time.time()
         try:

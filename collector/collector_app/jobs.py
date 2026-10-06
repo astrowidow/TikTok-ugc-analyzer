@@ -226,9 +226,9 @@ MAX_RETRIES = 3
 
 
 def retriable(m: dict) -> bool:
-    """自動で取り直してよいか（見つからない・URL が違う、のように取り直しても同じものと、回数切れは除く）"""
+    """自動で取り直してよいか（見つからない・URL が違う・全部曲の公開より前、のように取り直しても同じものと、回数切れは除く）"""
     err = (m.get("acquisition") or {}).get("error") or ""
-    if any(k in err for k in ("見つかりませんでした", "URL を教えて", "1本も見つかりませんでした")):
+    if any(k in err for k in ("見つかりませんでした", "URL を教えて", "1本も見つかりませんでした", "曲の公開より前の日付でした")):
         return False
     return int((m.get("collector") or {}).get("retries") or 0) < MAX_RETRIES
 

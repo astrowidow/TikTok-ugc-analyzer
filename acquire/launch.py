@@ -29,7 +29,8 @@ from acquire import pipeline, worker  # noqa: E402
 TASK_NAME = "tiktok-acq"
 # 見込み（シルエット規模）。一覧5分・属性 1本3.3秒・派生2分・コメントはコメントを取る本数×1本の見込み（pipeline.minutes_per_comment_video）＋準備10分
 # （準備: Chrome を起こしてグリッドで対象を探す。2026-10-06 の実走で 5.5分）
-LIST_SECONDS = 300
+# 一覧の時間と、一覧が済むまでの本数は、楽曲ページ1つあたり（2026-10-06 の実走: シルエット2ページで一覧 580秒・1,812本、きゃわ2ページで 1,711本）
+LIST_SECONDS = 290
 ENRICH_SECONDS_PER_VIDEO = 3.3
 DERIVE_SECONDS = 120
 TYPICAL_VIDEOS = 900
@@ -109,14 +110,15 @@ def _remaining_seconds(m: dict) -> int:
     acq = m.get("acquisition") or {}
     steps = acq.get("steps") or {}
     s = {**pipeline.DEFAULTS, **(m.get("acquisition_settings") or {})}
-    n_links = ((steps.get("list") or {}).get("detail") or {}).get("links") or TYPICAL_VIDEOS
+    pages = max(1, len(pipeline.music_urls_of(m)))   # 楽曲ページが2つ以上なら、一覧も属性もページの数だけ
+    n_links = ((steps.get("list") or {}).get("detail") or {}).get("links") or TYPICAL_VIDEOS * pages
     if s.get("comment_plan", "page") == "page":
         guess = TYPICAL_COMMENT_VIDEOS
     else:
         guess = int(s.get("pool_budget") or 0) or int(float(s["comment_hours"]) * 60 / float(s["min_per_video"]))
     n_pool = ((steps.get("pool") or {}).get("detail") or {}).get("n_pool") or guess
     per = pipeline.minutes_per_comment_video(s)
-    est = {"resolve": 60, "list": LIST_SECONDS, "enrich": n_links * ENRICH_SECONDS_PER_VIDEO, "derive": DERIVE_SECONDS,
+    est = {"resolve": 60, "list": LIST_SECONDS * pages, "enrich": n_links * ENRICH_SECONDS_PER_VIDEO, "derive": DERIVE_SECONDS,
            "pool": 10, "comments": n_pool * per * 60 + 600,
            "comments_md": 30, "notify": 5}
     total = 0.0
@@ -131,14 +133,40 @@ def _remaining_seconds(m: dict) -> int:
             done_n = pipeline.comments_ok(pipeline.ANALYSES_DIR / m["analysis_id"])
             if done_n:
                 e = min(e, max(0, n_pool - done_n) * per * 60 + 300)
-        elif st.get("status") == "running" and st.get("started_at"):
+        elif st.get("status") == "running" and step == "enrich":
+            # 属性は1本ごとに raw/enriched.jsonl へ1行足す（analysis/enrich.py。続きから取ると済んだ動画は飛ばす）。済んだ行数から残りを見る
             try:
-                el = (datetime.datetime.now().astimezone() - datetime.datetime.fromisoformat(st["started_at"])).total_seconds()
+                with open(pipeline.ANALYSES_DIR / m["analysis_id"] / "raw" / "enriched.jsonl", encoding="utf-8") as f:
+                    done_n = sum(1 for _ in f)
+            except OSError:
+                done_n = 0
+            e = max(60.0, (n_links - done_n) * ENRICH_SECONDS_PER_VIDEO)
+        elif st.get("status") == "running" and (st.get("resumed_at") or st.get("started_at")):
+            # 続きから始めた段は、始め直した時刻から測る（最初に始めた時刻から測ると、止まっていた間も引いて「1分」になる）
+            try:
+                el = (datetime.datetime.now().astimezone()
+                      - datetime.datetime.fromisoformat(st.get("resumed_at") or st["started_at"])).total_seconds()
                 e = max(60.0, e - el)
             except Exception:
                 pass
         total += e
     return int(total)
+
+
+def _deepen_seconds(m: dict) -> int:
+    """完成後の取り足し（acquire/deepen.py。界隈の掘り下げ・切り直し）の残りの見込み。前にいる分析の待ちに足す"""
+    from acquire import deepen
+    dp = m.get("deepen") or {}
+    if dp.get("status") not in ("queued", "running"):
+        return 0
+    e = float(dp.get("est_min") or deepen.EST["budget_min"]) * 60
+    if dp.get("status") == "running" and not deepen.queued(m) and dp.get("started_at"):   # 係が取っている最中
+        try:
+            el = (datetime.datetime.now().astimezone() - datetime.datetime.fromisoformat(dp["started_at"])).total_seconds()
+            e = max(60.0, e - el)
+        except Exception:
+            pass
+    return int(e)
 
 
 def progress(analysis_id: str) -> dict:
@@ -150,9 +178,12 @@ def progress(analysis_id: str) -> dict:
         return {"status": st or "none", "error": acq.get("error")}
     q = worker.queue()
     ahead_ids = q[:q.index(analysis_id)] if analysis_id in q else []
-    # いま係が処理中の分析（PID が生きている running）は待ち行列の先頭より前にいる
+    # いま係が処理中の分析（PID が生きている running。取得の段か、完成後の取り足し）は待ち行列の先頭より前にいる
+    def running(om):
+        return ((om.get("acquisition") or {}).get("status") == "running"
+                or (om.get("deepen") or {}).get("status") == "running")
     active = [d.name for d in pipeline.ANALYSES_DIR.iterdir()
-              if d.is_dir() and ((pipeline.read_json(d / "analysis.json") or {}).get("acquisition") or {}).get("status") == "running"
+              if d.is_dir() and running(pipeline.read_json(d / "analysis.json") or {})
               and d.name not in q and d.name != analysis_id]
     if analysis_id in q:
         ahead_ids = active + ahead_ids
@@ -160,7 +191,7 @@ def progress(analysis_id: str) -> dict:
     wait = 0
     for other in ahead_ids:
         om = pipeline.read_json(pipeline.ANALYSES_DIR / other / "analysis.json", {}) or {}
-        wait += _remaining_seconds(om)
+        wait += _remaining_seconds(om) + _deepen_seconds(om)   # 取得の段が済んだ分析は、取り足しの分だけ待つ
     own = _remaining_seconds(m)
     step = acq.get("step")
     res = {"status": st, "ahead": ahead, "wait_seconds": wait, "own_seconds": own, "eta_seconds": wait + own,

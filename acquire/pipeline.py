@@ -166,7 +166,10 @@ class Run:
                 st = (self.meta.get("acquisition") or {}).get("steps", {}).get(step) or {}
                 if st.get("status") == "done":
                     continue
-                self._mark(step, {"status": "running", "started_at": st.get("started_at") or now()})
+                values = {"status": "running", "started_at": st.get("started_at") or now()}
+                if st.get("started_at"):   # 続きから: 始め直した時刻（残りの見込みはここから測る。acquire/launch.py）
+                    values["resumed_at"] = now()
+                self._mark(step, values)
                 self.update(lambda m: m["acquisition"].update({"step": step}))
                 self.log(f"--- {STEP_LABELS[step]}（{step}）")
                 t0 = time.time()
@@ -219,11 +222,7 @@ class Run:
     def music_urls(self) -> list:
         """取得する楽曲ページ（1つ目が主）。同じ曲の配信版・sped up 版などで複数あるときは、全部から一覧を集めて合わせる
         （2026-10-04 ユーザー「2つ以上の楽曲ページを参照させたい場合もある」）"""
-        m = self.meta
-        urls = [u for u in (m.get("music_urls") or []) if u]
-        if m.get("music_url") and m["music_url"] not in urls:
-            urls.insert(0, m["music_url"])
-        return urls
+        return music_urls_of(self.meta)
 
     def link_sources(self) -> dict:
         """動画 ID → どの楽曲ページ（1〜）のグリッドで見つけたか（コメントは見つけたページのグリッドから取る）"""
@@ -477,6 +476,7 @@ class Run:
         head, body = lines[0], lines[1:]
         vi = head.split("\t").index("video_id")
         ci = head.split("\t").index("cap")
+        label_only = [r for r in body if int(r.split("\t")[ci] or 0) <= 0]
         body = [r for r in body if int(r.split("\t")[ci] or 0) > 0]   # コメントを取らない動画（cap 0）では楽曲ページを開かない
         out = []
         for k, url in enumerate(urls, 1):
@@ -484,22 +484,61 @@ class Run:
             if not mine:
                 continue
             pk = self.p("derived", f"pool_p{k}.tsv")
-            pk.write_text("\n".join([head, *mine]) + "\n", encoding="utf-8")
+            # cap 0 の行は全ページのプールに残す（spatest は開かず、差し替え先にもしない。抜くと週ごとの動画を差し替え先に選ぶ）
+            pk.write_text("\n".join([head, *mine, *label_only]) + "\n", encoding="utf-8")
             sfx = "" if k == 1 else f"_p{k}"   # 1ページ目は前と同じ名前（進み具合の表示がそのまま読める）
             out.append((url, pk, self.p("fetch_log", f"comments_summary{sfx}.json"),
                         self.p("fetch_log", f"substitutions{sfx}.tsv")))
         return out
 
+    def pool_left(self, pool: Path) -> int:
+        """そのプールで、コメントを取る動画のうちまだ取っていないものの数（取れた動画と、差し替えで取った動画の元を除く。
+        spatest の pool_targets と同じ数え方）"""
+        done = set()
+        p = self.p("raw", "comments.jsonl")
+        if p.exists():
+            with open(p, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(r, dict) or r.get("status") != "ok":
+                        continue
+                    done.add(str(r.get("video_id")))
+                    reason = str(r.get("pool_reason") or "")
+                    if reason.startswith("substitute_for:"):
+                        done.add(reason.split(":", 1)[1])
+        return sum(1 for r in comment_rows(pool) if r["video_id"] not in done)
+
     def step_comments(self):
         s = self.settings()
+        cm = (self.meta.get("acquisition") or {}).get("steps", {}).get("comments") or {}
+        # ブロックのあと空けている途中で係が止められていた（ふたを閉じた・アプリを閉じた）: 落とした速さと空ける時刻を引き継ぐ
+        if cm.get("slowed_to"):
+            s.update({k: cm["slowed_to"][k] for k in ("calls_per_min", "max_calls_per_min") if k in cm["slowed_to"]})
+        try:
+            wait_left = (datetime.datetime.fromisoformat(cm["blocked_until"]) - datetime.datetime.now().astimezone()).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            wait_left = 0
+        if wait_left > 0:
+            self.log(f"    ブロックのあと空けている途中で止まっていたので、あと{int(wait_left // 60) + 1}分空けてから、"
+                     f"要求の間隔を平均{s['calls_per_min']}回/分にして続きを取ります")
+            time.sleep(wait_left)
         ensure_chrome(s["chrome_port"], self.log)
         from acquire import spatest
-        spent = float(((self.meta.get("acquisition") or {}).get("steps", {}).get("comments") or {}).get("active_hours") or 0)
+        spent = float(cm.get("active_hours") or 0)
         deadline = float(s.get("comment_deadline_hours") or 0)
         retries = 0
         blocked = False
         pages = self.comment_pages()
         for k, (url, pool, summary, subs) in enumerate(pages, 1):
+            if not self.pool_left(pool):
+                # 取り終えたページ（続きから取るとき）は spatest に渡さない。渡すと、探す動画が0本でもグリッドを上限まで（約5分）送り、
+                # そのページの要約も空で上書きする
+                self.log(f"    楽曲ページ {k}/{len(pages)} のコメントは取り終えているので飛ばします（{url}）" if len(pages) > 1
+                         else "    コメントを取る動画は取り終えています")
+                continue
             if len(pages) > 1:
                 self.log(f"    楽曲ページ {k}/{len(pages)} のグリッドから取ります（コメントを取る動画 {len(comment_rows(pool))}本、{url}）")
             while True:
@@ -549,6 +588,10 @@ class Run:
                     self.unlock()
                     # 止まったら、元の速さ（実績の長い 1.8回/分・60秒に2回）に落として続きを取る（2026-10-05 に3回/分へ上げたときの安全網）
                     s["calls_per_min"], s["max_calls_per_min"] = s["fallback_calls_per_min"], s["fallback_max_calls_per_min"]
+                    # 空けている途中で係が止められても、続きから始めたときに空けと落とした速さを引き継ぐ（step_comments の頭で読む）
+                    until = datetime.datetime.now().astimezone() + datetime.timedelta(minutes=float(s["blocked_wait_min"]))
+                    self._mark("comments", {"blocked_until": until.isoformat(timespec="seconds"), "slowed_to": {
+                        "calls_per_min": s["calls_per_min"], "max_calls_per_min": s["max_calls_per_min"]}})
                     self.log(f"    ブロックを検知したので {s['blocked_wait_min']}分空けてから、要求の間隔を平均{s['calls_per_min']}回/分に落として"
                              f"続きを取ります（{retries}回目）")
                     time.sleep(float(s["blocked_wait_min"]) * 60)
@@ -643,6 +686,14 @@ def release_time(urls: list):
     return min(ts) if ts else None
 
 
+def music_urls_of(m: dict) -> list:
+    """analysis.json の中身から、取得する楽曲ページ（1つ目が主。Run.music_urls と同じ。見込み（acquire/launch.py）にも使う）"""
+    urls = [u for u in (m.get("music_urls") or []) if u]
+    if m.get("music_url") and m["music_url"] not in urls:
+        urls.insert(0, m["music_url"])
+    return urls
+
+
 def summary_files(d: Path) -> list:
     """コメント取得の要約（1ページ目は comments_summary.json、2ページ目からは comments_summary_p2.json …）"""
     return sorted((d / "fetch_log").glob("comments_summary*.json"))
@@ -665,12 +716,24 @@ def minutes_per_comment_video(s: dict) -> float:
 
 
 def comments_ok(d: Path) -> int:
-    """コメントが取れた動画の数（楽曲ページごとの要約を合わせる。要約がまだ無ければ原本の行数）"""
+    """コメントが取れた動画の数。原本（raw/comments.jsonl）の status=ok の動画を重ねずに数える
+    （要約はその走行の分だけで、続きから取り直すたびに上書きされる。原本は走行をまたいで足されていく）。
+    原本がまだ無ければ、楽曲ページごとの要約を合わせる"""
+    raw = d / "raw" / "comments.jsonl"
+    if raw.exists():
+        ok = set()
+        with open(raw, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get("status") == "ok":
+                    ok.add(str(r.get("video_id")))
+        return len(ok)
     n = 0
     for p in summary_files(d):
         n += sum(1 for r in (read_json(p, {}) or {}).get("rows", []) if r.get("status") == "ok")
-    if not n and (d / "raw" / "comments.jsonl").exists():
-        n = sum(1 for _ in open(d / "raw" / "comments.jsonl", encoding="utf-8"))
     return n
 
 

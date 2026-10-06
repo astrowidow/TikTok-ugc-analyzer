@@ -11,6 +11,7 @@ import datetime
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 import traceback
@@ -24,6 +25,24 @@ from acquire import deepen, pipeline  # noqa: E402
 
 GUARD = tiktok_lock.LOCK_DIR / "acq_worker.json"
 LOG_FILE = BASE_DIR / "logs" / "acq-worker.log"
+# 取得の段を回すプロセスのコマンドに入っている文字（係・アプリの係の入口・運営が手で回すパイプライン）
+OUR_COMMANDS = ("acquire.worker", "acquire/worker", "acquire.pipeline", "acquire/pipeline", "collector_app.worker_entry")
+
+
+def busy(pid) -> bool:
+    """running の分析を、いま取っている最中のプロセスがあるか（PID が生きていて、取得の部品のプロセス）。
+    止まった分析の PID がたまたま別のプロセスに使い回されていると、生きているかだけでは見分けられない
+    （running のまま待ち行列に入らず、続きが取られない）。Windows は前と同じく生きているかだけを見る"""
+    if not tiktok_lock.pid_alive(pid or -1):
+        return False
+    if sys.platform == "win32" or pid == os.getpid():
+        return True
+    try:
+        cmd = subprocess.run(["ps", "-o", "command=", "-p", str(int(pid))], capture_output=True, text=True,
+                             timeout=5).stdout
+    except Exception:
+        return True   # 確かめられないときは前と同じ（生きていれば取っている最中）
+    return any(k in cmd for k in OUR_COMMANDS)
 
 
 def worker_pid():
@@ -57,7 +76,7 @@ def queue() -> list:
         m = pipeline.read_json(d / "analysis.json")
         acq = (m or {}).get("acquisition") or {}
         st = acq.get("status")
-        if st == "queued" or (st == "running" and not tiktok_lock.pid_alive(acq.get("pid") or -1)):
+        if st == "queued" or (st == "running" and not busy(acq.get("pid"))):
             items.append((1, acq.get("queued_at") or "", d.name))
         elif m and deepen.queued(m):
             items.append((0, (m.get("deepen") or {}).get("queued_at") or "", d.name))

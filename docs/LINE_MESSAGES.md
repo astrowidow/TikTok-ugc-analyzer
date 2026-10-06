@@ -24,7 +24,7 @@
 > 使い方はこのページにまとめています。上から順に進めれば、20分ほどでひとりで入れられます（つまずきやすいところは画面の見本つき）:
 > https://claude.ai/artifact/Tp343YwoMtSrFWKuJcCLmC
 >
-> アプリはこちらからダウンロードしてください（押すとすぐ落ちてきます。登録やログインは要りません）:
+> アプリはこちらからダウンロードしてください:
 > https://github.com/astrowidow/TikTok-ugc-analyzer/releases/latest/download/UGC-Analyzer.dmg
 >
 > TikTok は、ふだんのアカウントとは別の、分析専用のサブアカウントでログインします。持っていなければ、ページの手順4で作れます。

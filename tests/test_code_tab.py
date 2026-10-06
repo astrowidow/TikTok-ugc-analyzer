@@ -15,15 +15,18 @@ class TestWaiter(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
-        self.saved = (config.ANALYSES_DIR, config.PID_FILE, config.LOCK_DIR)
+        self.saved = (config.ANALYSES_DIR, config.PID_FILE, config.LOCK_DIR, config.STATE_FILE)
         config.ANALYSES_DIR, config.PID_FILE, config.LOCK_DIR = base / "analyses", base / "app.pid", base / "locks"
+        # 本物の state.json を読まない（この Mac がログイン済みかどうかで結果が変わらないように。2026-10-06 通し試験）
+        config.STATE_FILE = base / "state.json"
+        config.STATE_FILE.write_text(json.dumps({"logged_in_at": "2026-10-06 00:00:00"}), encoding="utf-8")
         config.LOCK_DIR.mkdir(parents=True)
         config.PID_FILE.write_text(str(os.getpid()))   # アプリが動いている扱い
         self.d = config.ANALYSES_DIR / "a20990101-0000-wait"
         self.d.mkdir(parents=True)
 
     def tearDown(self):
-        config.ANALYSES_DIR, config.PID_FILE, config.LOCK_DIR = self.saved
+        config.ANALYSES_DIR, config.PID_FILE, config.LOCK_DIR, config.STATE_FILE = self.saved
         self.tmp.cleanup()
 
     def meta(self, acq="done", deepen=None):

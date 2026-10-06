@@ -28,8 +28,10 @@ UGC Analyzer が自動で作り、アプリを新しくすると書き直す。
 
 ## 待つところで止まらずに続ける（Code タブだけの使い方）
 
-道具の返事が待ちになったら（next_task の kind が wait のとき、start_analysis・deepen の返事に「その間 AI は待てないため」の一文があるとき）:
+道具の返事が待ちになったら（next_task の kind が wait のとき、start_analysis・deepen・restart_analysis の返事に「その間 AI は待てないため」の一文があるとき）:
 
+0. 取得をやめた分析の返事と、「./ugc-wait は走らせない」とある返事（ログイン待ち・アプリが動いていない・取得が止まった。利用者が何かするまで進まない）は、
+   1〜3 をせずに、その返事のとおり利用者に伝えて止まる
 1. 利用者には「集め終わったら、このまま自動で続けます（終わる見込みの時刻）。Mac と Claude は開いたままにしてください」と1〜2文で伝える。
    「〇〇の分析を続けて」と頼む一文は伝えない（利用者が頼まなくても続けるため）。どの楽曲ページで進めるかなど、ほかに伝えることは道具の説明のとおり
 2. Bash で `./ugc-wait <分析 ID>` を **裏で（run_in_background）** 走らせて、そこで止まる。待っている間に status や next_task を何度も呼ばない
@@ -67,15 +69,28 @@ def _settings_path() -> Path:
 
 
 def _settings() -> dict:
+    """今の settings.local.json。無い・読めない・辞書でない（[] など）ときは空から作り直す
+    （そのままだとアプリの起動のたびに落ちる。Claude Code も辞書でない設定は読めない）"""
     try:
-        return json.loads(_settings_path().read_text(encoding="utf-8"))
+        s = json.loads(_settings_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    return s if isinstance(s, dict) else {}
+
+
+def _list(v) -> list:
+    """許可・道具の一覧。形が違う（文字列・辞書など）ときは空とみなす"""
+    return list(v) if isinstance(v, list) else []
+
+
+def _perm(s: dict) -> dict:
+    p = s.get("permissions")
+    return p if isinstance(p, dict) else {}
 
 
 def _settings_current(s: dict) -> bool:
-    allow = (s.get("permissions") or {}).get("allow") or []
-    return all(a in allow for a in ALLOW) and SERVER in (s.get("enabledMcpjsonServers") or [])
+    allow = _list(_perm(s).get("allow"))
+    return all(a in allow for a in ALLOW) and SERVER in _list(s.get("enabledMcpjsonServers"))
 
 
 def status() -> str:
@@ -85,7 +100,7 @@ def status() -> str:
         try:
             if p.read_text(encoding="utf-8") != text:
                 return "outdated"
-        except OSError:
+        except (OSError, ValueError):   # 無い・UTF-8 でない（利用者が別の文字コードで保存した）
             return "outdated"
     return "connected" if _settings_current(_settings()) else "outdated"
 
@@ -98,7 +113,7 @@ def ensure() -> list:
         p = FOLDER / rel
         try:
             same = p.read_text(encoding="utf-8") == text
-        except OSError:
+        except (OSError, ValueError):   # 無い・UTF-8 でない（書き直す。そのままだとアプリの起動のたびに落ちる）
             same = False
         if not same:
             tmp = p.with_name(p.name + ".tmp")
@@ -108,10 +123,11 @@ def ensure() -> list:
             changed.append(rel)
     s = _settings()
     if not _settings_current(s):
-        perm = s.setdefault("permissions", {})
-        perm["allow"] = list(perm.get("allow") or []) + [a for a in ALLOW if a not in (perm.get("allow") or [])]
-        s["enabledMcpjsonServers"] = list(s.get("enabledMcpjsonServers") or []) + \
-            ([SERVER] if SERVER not in (s.get("enabledMcpjsonServers") or []) else [])
+        perm = s["permissions"] = _perm(s)
+        allow = _list(perm.get("allow"))
+        perm["allow"] = allow + [a for a in ALLOW if a not in allow]
+        servers = _list(s.get("enabledMcpjsonServers"))
+        s["enabledMcpjsonServers"] = servers + ([SERVER] if SERVER not in servers else [])
         p = _settings_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + ".tmp")

@@ -52,6 +52,14 @@ pagetest.py との違いはナビゲーション方式**だけ**。対照実験�
                      （止めるとページが失敗を覚え、その動画を開いても取り直さない。2026-10-05 の試験で0件になった）
   --remount-on-stall 開き直しを最初からはせず、底で止まって続きがあるのに増えないときだけ開き直す
                      （開き直しは先読みのデータで描かれた欄のためのもの。--only-open-video なら先読みは無い）
+
+--- 2026-10-06 通し試験の直し（要求の間隔の設定は変えない。決めた決まりをきちんと効かせる・余計な待ちを省く）---
+  要求の数え方   開く瞬間に飛ぶ要求（その動画の1ページ目と隣の先読み）を、送った時刻に見込みで数え、届いた応答はそのぶん差し引く
+                 （note_hits・settle_ahead）。1本1ページの取り方では数える所を一度も通らず、平均・60秒の上限・止まったあとの
+                 落とし方が効いていなかった（きゃわの本番で要求121回に api_calls 0）。harvest でも数え残しを数える
+  先読み済みの動画 1ページ目が先読みで届いていて上限に届いている動画は、開いたあと来ない要求を待たない
+                 （約33秒の空待ちを省く。行の prefetched は1ページ目が先読みで届いていたか）
+  総数           先読みで届いた動画の総数・続きの有無を harvest で控える（meta_of。総数が None になっていた）
 """
 import argparse
 import collections
@@ -393,7 +401,9 @@ class SpaCollector:
         self.early = 0
         # --only-open-video: フックが送らなかった1ページ目（累計）
         self.drops = []
-        self.noted_hits = 0          # 開いた瞬間に数えた要求の数（ブラウザ側の記録の件数）
+        self.noted_hits = 0          # ブラウザ側の記録（届いた応答）のうち、要求として数え済みの件数（harvest で0に戻る）
+        self.ahead = 0               # 開く瞬間に見込みで数えた要求のうち、まだ応答を見ていない数（note_hits で差し引く）
+        self.meta_of = {}            # 動画ごとの本体の応答が申告している総数・続きの有無（harvest で控える。api_meta の代わり）
         self.trigger_dists = []      # 次のページを呼んだときの底までの距離
         self.grid_ids = []           # 楽曲ページのグリッドの並び（隣の先読みの見込みに使う）
         self.allow = set()           # 取る予定の動画（--only-open-video で先読みを止めない動画）
@@ -601,6 +611,8 @@ class SpaCollector:
         # リセットせず、溜めてから進む。直前の動画にいる間に先読みされた
         # この動画のコメントが、ここで pool に入る（1ページ目が無料で手に入る）
         self.harvest()
+        # 前の動画で見込みで数えた要求のうち、ここまでに応答が届かなかった分（見込み外れ）は捨てる（届いた分は harvest で差し引いた）
+        self.ahead = 0
         drops_before = len(self.drops)
         early_before = self.early
         req_before = len(self.req_log)
@@ -611,11 +623,24 @@ class SpaCollector:
         nb = self.neighbor_of(vid) if self.a.only_open_video else None
         need = 1 if (self.a.only_open_video and nb is not None and nb not in self.allow) else 2
         self.pace_wait(need=need)
+        # この動画の1ページ目が、前の動画にいる間に先読みでもう届いている（ページは取り直さないので、開いても要求は飛ばない。
+        # 2026-10-06 きゃわの本番で21本、アイコンを押しても25秒間1回も飛ばなかった）
+        have_own = bool(self.gather(vid))
 
         how, err = self.open_video(href)
         if err:
             return {"video_id": vid, "status": "open_failed", "detail": err,
                     "seconds": round(time.time() - t0, 1)}
+        # 開く瞬間に飛ぶ要求（この動画の1ページ目と隣の先読み）を、送った時刻で数える（2026-10-06）。
+        # 届いた応答だけで数えると、1本1ページの取り方では数える所を一度も通らず（きゃわの本番で要求121回に api_calls 0）、
+        # 間隔の決まり（平均と60秒の上限、止まったあとの落とし方）が効いていなかった。閉じるときにまだ届いていない隣の先読みも
+        # 漏らさないよう、見込みで先に数え、届いた応答はそのぶん差し引く（note_hits）。見込みより多く届いた分はそのとき足す
+        side = need - 1                      # 隣の先読み（取らない動画なら、フックが送らないので0）
+        if side and nb is not None and self.gather(nb):
+            side = 0                         # 隣の1ページ目ももう届いている（取り直さない）
+        self.ahead = (0 if have_own else 1) + side
+        if self.ahead:
+            self.note_call(self.ahead)
 
         st = self.wait_for(lambda s: s.get("desc") and (s.get("icon") or s.get("hits")), 45)
         t_load = time.time() - t0
@@ -629,23 +654,25 @@ class SpaCollector:
 
         if st.get("empty"):
             raise Blocked("コメントAPIが空応答（HTTP 200 / 0バイト）を返した")
-        self.noted_hits = 0
-        if st.get("hits"):
-            self.note_call(st["hits"])   # 開いた瞬間の自動読み込みも1回に数える
-            self.noted_hits = st["hits"]
+        self.note_hits(st.get("hits", 0))   # 見込みより多く届いた分だけ足す
 
         # モーダルが最初からコメントを読んでいるか（＝アイコンのクリックが不要か）
         auto = st.get("hits", 0) > 0
-        if not auto:
+        # 1ページ目がもう手元にあって上限に届いている（先読みで届いた・1本1ページ）なら、来ない要求を待たず、アイコンも押さない。
+        # 2026-10-06 まで、ここで8秒待ってからアイコンを押して25秒待っていた（きゃわの本番で21本が1本約35秒、計約11分）
+        skip_wait = not auto and have_own and self.reached_cap(vid)
+        if not auto and not skip_wait:
             st = self.wait_for(lambda s: s.get("hits", 0) > 0, self.a.auto_wait)
             auto = st.get("hits", 0) > 0
+            self.note_hits(st.get("hits", 0))
         clicked_icon = False
-        if not auto and st.get("icon"):
+        if not auto and not skip_wait and st.get("icon"):
             els = self.d.find_elements(By.CSS_SELECTOR, '[data-e2e="comment-icon"]')
             if els:
                 self.d.execute_script("arguments[0].click();", els[0])
                 clicked_icon = True
                 st = self.wait_for(lambda s: s.get("hits", 0) > 0, 25)
+                self.note_hits(st.get("hits", 0))
 
         # コメントパネルを開き直す。
         # 先読みされたデータで描画されたパネルは読み込み位置の状態を持たないらしく、
@@ -684,7 +711,11 @@ class SpaCollector:
         meta = self.api_meta(vid) or meta_pre or {}
         st = self.page_state()
         st["hits"] = st.get("hits", 0) + hits_pre
-        self.harvest()
+        self.harvest()     # 数え残し（見込みより多く届いた分）もここで数える
+        if not meta:
+            # 1ページ目が前の動画にいる間に先読みで届いた動画は、ブラウザ側の記録にもう無い。harvest で控えた分を使う
+            # （2026-10-06 まで総数が None になり、AI に渡す資料に「コメント総数 None」と出ていた。きゃわで135本中45本）
+            meta = self.meta_of.get(str(vid)) or {}
         comments = self.gather(vid)
         reply_rows = self.gather(vid, "reply")
         if st.get("bad"):
@@ -702,6 +733,7 @@ class SpaCollector:
             "fetched": len(comments), "seconds": round(time.time() - t0, 1),
             "load_seconds": round(t_load, 1), "click": how, "spa": spa,
             "doc": doc_now, "auto_comments": auto, "clicked_icon": clicked_icon,
+            "prefetched": have_own,     # 1ページ目が先読みでもう届いていた（開いても要求は飛ばない。2026-10-06）
             "scrolls": scrolls, "api_calls": st.get("hits", 0),
             # ブラウザ側ではなく取得済みコメントから数える。
             # 動画を閉じた後だとDOMが消えていて読めないため（記録がNoneになっていた）
@@ -740,6 +772,7 @@ class SpaCollector:
         self.d.execute_script("arguments[0].click();", els[0])   # 閉じる
         time.sleep(self.a.remount_pause)
         self.pace_wait()
+        self.settle_ahead()
         self.d.execute_script("arguments[0].click();", els[0])   # 開き直す
         time.sleep(self.a.remount_pause)
         self.remounted += 1
@@ -827,6 +860,30 @@ class SpaCollector:
         self.call_times.extend([now] * max(n, 1))
         self.pending_spacing = self.next_spacing()
 
+    def note_hits(self, hits):
+        """ブラウザ側の記録の件数（届いた応答。harvest までの累計）のうち、まだ数えていない分を要求として数える。
+        開く瞬間に見込みで数えた分（self.ahead）は、応答が届いたらそのぶん差し引く（二重に数えない）。数えた本数を返す"""
+        new = int(hits or 0) - self.noted_hits
+        if new <= 0:
+            return 0
+        self.noted_hits += new
+        used = min(new, self.ahead)
+        self.ahead -= used
+        if new > used:
+            self.note_call(new - used)
+        return new - used
+
+    def settle_ahead(self, hits=None):
+        """開く瞬間の見込みの残りを片付ける。こちらが次の要求を送らせる直前（次のページ・開き直し・返信）に呼ぶ。
+        それまでに届いた分は差し引き、届かなかった分（隣の先読みの見込み外れ）は捨てる。
+        捨てないと、このあと送らせた要求の応答を差し引いてしまい、送った時刻が間隔の記録に残らない"""
+        if not self.ahead:
+            return
+        if hits is None:
+            hits = self.page_state().get("hits", 0)
+        self.note_hits(hits)
+        self.ahead = 0
+
     def reached_cap(self, vid) -> bool:
         """この動画のコメント（本体）が、送らなくても上限に届いているか。ブラウザに届いた分と、先読みで溜めた分を cid で重ねて数える。
         上限が1ページ（PAGE_CAP 以下）なら、件数ではなく「1ページでも届いたか」で見る（1ページ目が19件のこともある。2026-10-06 の実走）"""
@@ -850,11 +907,8 @@ class SpaCollector:
         steps = 0
         stall = 0
         nudges = 0
-        last_hits = -1
-        # 開いた瞬間の要求は collect_one で数え済み。今までは最初の1段でもう一度数えていた（開き直しの60秒待ちに隠れていた）。
-        # 開き直しを最初にしない走り方では、数え直すと「直近60秒に2回」に引っかかるので、数え済みから始める
-        if self.a.only_open_video or self.a.prescroll or self.a.remount_on_stall:
-            last_hits = self.noted_hits
+        # 開いた瞬間の要求は collect_one で数え済み（見込みと note_hits）。ここでは数え済みの件数（self.noted_hits）から増えた分だけ数える。
+        # 2026-10-06 まで、開き直しを最初にする走り方では最初の1段で開いた瞬間の分をもう一度数えていた（どの走り方でも数え直さないように揃えた）
         last_got = -1
         prev_dist = None
         while steps < self.a.max_steps:
@@ -875,6 +929,9 @@ class SpaCollector:
                 if self.a.scroll_log:
                     self.log("    スクロール容器が見つからない（DivCommentMain なし）")
                 break
+            # 開く瞬間の見込みは、ここまでの待ち（間隔ぶん）でもう届いている。この段で呼んだ次のページの応答はまだ記録に無い
+            # （JS は送りの直後に返る）ので、ここで片付ければ、このあと届く次のページを差し引かずに数えられる
+            self.settle_ahead(st.get("hits", 0))
             steps += 1
             if self.a.scroll_log and steps % self.a.scroll_log == 0:
                 self.log(f"    {steps:>3}段 位置{st['top']}/{st['h']} 底={st['atBottom']} "
@@ -908,11 +965,10 @@ class SpaCollector:
                 self.log(f"    この動画への要求が{st['mine']}回に達したので打ち切り"
                          f"（{st['got']}件）")
                 break
-            if st["hits"] > last_hits and self.a.api_gap:
+            if st["hits"] > self.noted_hits and self.a.api_gap:
                 time.sleep(self.a.api_gap)   # 次ページが来た直後は間を空ける
-            if st["hits"] > last_hits:
-                self.note_call(st["hits"] - max(last_hits, 0))
-                last_hits = st["hits"]
+            if st["hits"] > self.noted_hits:
+                self.note_hits(st["hits"])
                 if prev_dist is not None:
                     self.trigger_dists.append(prev_dist)   # 次のページを呼んだときの底までの距離（--prescroll の幅の目安）
             prev_dist = st.get("dist")
@@ -991,9 +1047,19 @@ class SpaCollector:
                 prev = self.page_state_of.get(r["aweme"])
                 if prev is None or cur > prev[0]:
                     self.page_state_of[r["aweme"]] = (cur, r.get("has_more"))
+                # 総数・続きの有無（いちばん後に届いた本体の応答。api_meta と同じ）。先読みで届いた動画は、
+                # 開いたときにはブラウザ側の記録から消えているので、ここで控える
+                try:
+                    total = json.loads(r.get("body") or "{}").get("total")
+                except Exception:
+                    total = None
+                self.meta_of[r["aweme"]] = {"total": total, "has_more": r.get("has_more"), "cursor": r.get("resp_cursor")}
+        # 消す前に、まだ数えていない応答を要求として数える（閉じる直前に届いた分・前の動画のあとに届いた分）
+        self.note_hits(len(recs))
         self.coalesced = self.d.execute_script(
             "return (window.__cap||{}).coalesced || 0;") or self.coalesced
         self.d.execute_script("window.__capReset && window.__capReset();")
+        self.noted_hits = 0
         # 要求の記録は残す。同じ cursor を何度も要求していないかの監視に使う
         for r in recs:
             self.req_log.append({k: v for k, v in r.items() if k != "body"})
@@ -1024,6 +1090,7 @@ class SpaCollector:
         # 本体の収集直後はパネルが最下部にある。返信を持つコメントは上方にあり、
         # 仮想リストなので画面外の項目にはボタンが存在しない。
         # 最上部へ戻さないと1件も見つからない（実測: 10本中8本で0件だった）
+        self.settle_ahead()
         self.d.execute_script(
             "const m=document.querySelector('[class*=\"DivCommentMain\"]');"
             "if(m) m.scrollTop = 0;"
@@ -1102,6 +1169,7 @@ class SpaCollector:
 
     def collect_reply_targets(self, vid, targets):
         """選んだコメントの返信欄だけを開く。ページのUIを押すだけで、要求はページに任せる"""
+        self.settle_ahead()
         self.d.execute_script(
             "const m=document.querySelector('[class*=\"DivCommentMain\"]');"
             "if(m) m.scrollTop = 0;"
@@ -1157,7 +1225,8 @@ class SpaCollector:
                 raise Blocked("コメントAPIが空応答（HTTP 200 / 0バイト）を返した")
             n = st.get("replies", 0)
             if n > last:
-                self.note_call()
+                # 届いた応答の件数で数える（harvest でも同じ件数で数えるので、ここで1回ずつ数えると二重になる）
+                self.note_hits(st.get("hits", 0))
                 last = n
                 end = time.time() + 4      # 続けて届くことがあるので少し待つ
         return last
@@ -1274,7 +1343,8 @@ class SpaCollector:
                     covered.add(r["pool_reason"].split(":", 1)[1])
                     self.why[r["video_id"]] = r["pool_reason"]
         want = [v for v in info if v not in done and v not in covered]
-        grid = self.collect_links(10 ** 9, want_ids=want)
+        # 取る動画が残っていなければ、グリッドを送らない（2026-10-06 まで、全部取得済みでも --collect-scrolls 回ぶん送っていた）
+        grid = self.collect_links(10 ** 9, want_ids=want) if want else []
         pos, by_id = {}, {}
         for i, h in enumerate(grid):
             v = vid_of(h)
@@ -1283,7 +1353,7 @@ class SpaCollector:
                 by_id[v] = h
         found = [v for v in want if v in pos]
         missing = [v for v in want if v not in pos]
-        used = set(info) | set(done) | label_only   # 差し替え先はプールの外から（前と同じ）
+        used = set(info) | set(done) | label_only | self.whole_pool_ids()   # 差し替え先はプールの外から（前と同じ）
         subs = []
         for v in sorted(missing, key=lambda v: (info[v].get("priority") or "2", -int(info[v].get("plays") or 0))):
             wk = info[v].get("week")
@@ -1319,6 +1389,22 @@ class SpaCollector:
         first = sorted([v for v in found if (info[v].get("priority") or "2") == "1"], key=lambda v: pos[v])
         rest = sorted([v for v in found if (info[v].get("priority") or "2") != "1"] + picks, key=lambda v: pos[v])
         return [by_id[v] for v in first + rest]
+
+    def whole_pool_ids(self) -> set:
+        """--pool が楽曲ページごとに分けたプール（acquire/pipeline.py の comment_pages が書く derived/pool_p<k>.tsv）なら、
+        同じフォルダの pool.tsv（分ける前の全部）の動画。差し替え先はプールの外から選ぶので、ほかのページの動画と、
+        コメントを取らない動画（cap 0。ページごとのプールに入っていないことがある）もここで外す（2026-10-06）"""
+        p = self.a.pool or ""
+        if not re.fullmatch(r"pool_p\d+\.tsv", os.path.basename(p)):
+            return set()
+        whole = os.path.join(os.path.dirname(p), "pool.tsv")
+        if not os.path.exists(whole):
+            return set()
+        try:
+            with open(whole, encoding="utf-8") as f:
+                return {r["video_id"] for r in csv.DictReader(f, delimiter="\t") if r.get("video_id")}
+        except Exception:
+            return set()
 
     def load_done(self):
         """既に取得できている動画を出力ファイルから読み出す。

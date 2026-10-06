@@ -1,8 +1,9 @@
 """候補プール（コメントを取る動画）を、AI を使わず数字と属性の規則で決める（docs/BLUEPRINT.md 第3章）。
 
 analysis/pool_verify.py（2026-09-30 の検証）を本番の規則に直したもの。シルエット固有の部分を汎用化した:
-  - 本人: 楽曲ページの音源の作者名（enriched の music.author。最多の音源 ID のもの）を正規化し、
-          投稿者の unique_id か表示名に含む動画
+  - 本人: 楽曲ページの音源の作者名（enriched の music.author。最多の音源 ID のもの。「A × B」なら A・B それぞれ）を正規化し、
+          投稿者の unique_id か表示名が、それと同じか「作者名＋区切り」で始まる動画（認証マークが無くフォロワー1万未満は外す。
+          2026-10-06 まで部分一致だった。artist_accounts）
   - 公式企画のタグ: 本人のアカウントが使ったタグのうち「曲名を含むが曲名そのものではない」もの
           （シルエットでは みんなでシルエット / silhouettetogether）。そのタグを使った認証アカウントは公式扱い
 「再生数で一括に切らない」: 最初期・本人と公式・週ごと（地域ごと・TikTok のカテゴリラベルごと）に入れる。
@@ -80,17 +81,66 @@ def song_info(enriched: dict) -> dict:
             "author": authors[mid].most_common(1)[0][0]}
 
 
+# 作者名が複数のアーティストのとき（「A × B」「A & B」「A, B」「A feat. B」）の区切り。分けてそれぞれ照合する
+AUTHOR_SEP = re.compile(r"\s*(?:[×&,、]|\b(?:feat|ft)\.|\bfeat\b)\s*", re.I)
+# 認証マークの無いアカウントは、フォロワーがこれ未満なら本人にしない（名前に本人名を入れたファンのまとめ・切り抜き）。
+# 2026-10-06 きゃわ（a20261006-0407-60f4）: ilife_lyrics・ilife_short などフォロワー233〜449のアカウントが本人になっていた
+ARTIST_MIN_FOLLOWERS = 10_000
+
+
+def artist_names(author_name) -> list:
+    """音源の作者名を、照合に使う名前（norm 済み・3文字以上）に分ける"""
+    parts = AUTHOR_SEP.split(unicodedata.normalize("NFKC", author_name or ""))
+    out = []
+    for p in parts:
+        k = norm(p)
+        if len(k) >= 3 and k not in out:
+            out.append(k)
+    return out
+
+
+def starts_with_name(name, key) -> bool:
+    """投稿者の unique_id か表示名が、本人名（norm 済み）と同じか「本人名＋区切り」で始まるか。
+    名前の中の記号は飛ばして照合する（KANA-BOON → kanaboon）。区切りは終わり・記号や空白・英数と日本語の境目
+    （ilife_official・iLiFE!【あいらいふ】・Ado公式）。ado1024・adorable_cat・tornado_dance のように、
+    英数が続くものや途中に含むだけのものは本人にしない"""
+    s = unicodedata.normalize("NFKC", name or "").lower()
+    got = ""
+    for i, ch in enumerate(s):
+        if not ch.isalnum():
+            continue
+        got += ch
+        if got == key:
+            nx = s[i + 1:i + 2]
+            return not nx or not nx.isalnum() or ch.isascii() != nx.isascii()
+        if not key.startswith(got):
+            return False
+    return False
+
+
 def artist_accounts(alive, enriched, author_name) -> set:
-    """音源の作者名を投稿者名に含むアカウント（unique_id）"""
-    key = norm(author_name)
-    if len(key) < 3:
+    """音源の作者のアカウント（unique_id）。投稿者の unique_id か表示名が、作者名（「A × B」なら A・B それぞれ）と同じか
+    「作者名＋区切り」で始まるもの。「作者名＋区切り」で始まるだけのアカウント（ilife_aruru のようにファン・まとめもありうる）は、
+    認証マークが無くフォロワー ARTIST_MIN_FOLLOWERS 未満なら外す。名前がぴったり同じアカウントは、フォロワーが少なくても本人
+    （認証の無い小さなアーティストの本人を外さない）。2026-10-06 まで部分一致で、短い名前（Ado → tornado_dance）やファンのアカウントまで本人になっていた"""
+    keys = artist_names(author_name)
+    if not keys:
         return set()
-    out = set()
+    acc = {}
     for v in alive:
         a = enriched[v["video_id"]]["author"]
-        if key in norm(a.get("unique_id")) or key in norm(a.get("nickname")):
-            out.add(a.get("unique_id"))
-    return out
+        uid = a.get("unique_id")
+        if not any(starts_with_name(a.get("unique_id"), k) or starts_with_name(a.get("nickname"), k) for k in keys):
+            continue
+        x = acc.setdefault(uid, {"verified": False, "followers": None, "exact": False})
+        x["verified"] = x["verified"] or bool(a.get("verified"))
+        x["exact"] = x["exact"] or any(norm(a.get("unique_id") or "") == k or norm(a.get("nickname") or "") == k for k in keys)
+        f = a.get("follower_count")
+        if f is not None:
+            x["followers"] = max(x["followers"] or 0, int(f))
+    # フォロワー数が分からないアカウントは外さない（前と同じ）
+    return {u for u, x in acc.items()
+            if x["exact"] or x["verified"] or x["followers"] is None or x["followers"] >= ARTIST_MIN_FOLLOWERS}
 
 
 def campaign_tags(alive, enriched, artists, titles) -> set:

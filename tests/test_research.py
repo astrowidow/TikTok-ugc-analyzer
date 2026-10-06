@@ -153,7 +153,9 @@ class TestPlanAndWrite(Base):
         self.assertIn("[W2] YouTube の MV の再生数", res)
         self.assertNotIn("Spotify のチャートに入った記録は見つからなかった", res)   # 見つからなかったものは本文の材料に渡さない
         self.assertIn("[W3] @user3", flow_w1.render(self.a, get("write", "path_P1"), st)["text"])
-        self.assertNotIn("No.—", flow_w1.render(self.a, get("write", "intro"), st)["text"])
+        intro = flow_w1.render(self.a, get("write", "intro"), st)["text"]
+        self.assertNotIn("No.—", intro)
+        self.assertIn("「こんにちは、山本です！」と執筆クレジットは書かない", intro)
         o = flow_w1.render(self.a, get("outline"), st)
         self.assertIn("台詞の口パクが新しい", o["text"])
         self.assertIn("research", "".join(o["catalog"]))
@@ -170,6 +172,10 @@ class TestPlanAndWrite(Base):
         self.assertTrue(any("W9" in e for e in errs), errs)
         errs = flow_w1.check_chapter(self.a, music_md(f"（{F1}）"), h)
         self.assertTrue(any("記事の名前" in e for e in errs), errs)
+        for who in ("こんにちは、山本です！", "執筆：スイ・山本慶太朗（株式会社ハイトリンク）", "弊社では分析をしております。", "【お仕事大募集中！】"):
+            with self.subTest(who=who):
+                errs = flow_w1.check_chapter(self.a, music_md(who), h)
+                self.assertTrue(any("著者の名乗り" in e for e in errs), errs)
 
     def test_outline_web_evidence(self):
         self.research()
@@ -184,6 +190,7 @@ class TestPlanAndWrite(Base):
         self.assertEqual(flow_w1.check_finished(self.a, body, allowed), [])
         self.assertTrue(any("内部の印" in e for e in flow_w1.check_finished(self.a, body + "[W2]", allowed)))
         self.assertTrue(any("空けておく" in e for e in flow_w1.check_finished(self.a, body + "ここでは扱えません。", allowed)))
+        self.assertTrue(any("著者の名乗り" in e for e in flow_w1.check_finished(self.a, "こんにちは、山本です！\n" + body, allowed)))
 
 
 class TestMemoAndNames(Base):

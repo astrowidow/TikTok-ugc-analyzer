@@ -169,7 +169,7 @@ footer p { margin: 0; }
     <ul class="check">
       <li><div>Mac<span>2020年以降の M1・M2・M3・M4 のもの</span></div></li>
       <li><div>Google Chrome</div></li>
-      <li><div>Claude か ChatGPT（どちらか1つ）<span>Claude の人は Mac の Claude アプリ（有料プランの Pro 以上が要ります）。ChatGPT の人は Mac の ChatGPT アプリ（macOS 14 以降。無料プランでも動きますが、レポートの質がかなり落ちるので、有料プランをおすすめします）</span></div></li>
+      <li><div>Claude か ChatGPT（どちらか1つ）<span>Claude の人は Mac の Claude アプリ（有料プランの Pro 以上が要ります）。ChatGPT の人は Mac の ChatGPT アプリ（macOS 14 以降。有料プランの Plus 以上をおすすめします。無料プランでも動きますが、選べるモデルが軽く、レポートの質がかなり落ちます）</span></div></li>
       <li><div>TikTok の分析専用のサブアカウント<span>分析のためだけに使う、ふだんとは別の TikTok のアカウントです。ふだんのアカウントは使いません。持っていない人は、手順4で作ります（そのための、ふだん使っていないメールアドレスを1つ用意してください）</span></div></li>
     </ul>
 
@@ -240,8 +240,14 @@ footer p { margin: 0; }
       </div></li>
 
       <li id="websearch"><div>
-        <b class="t">Claude の人は、ウェブ検索をオンにする</b>
-        <p class="muted">Claude の入力欄の左下の<b>「＋」</b>を押して、<b>「ウェブ検索」</b>（英語の画面では Web search）にチェックが付いているか見ます。付いていなければ押してオンにします。AI が曲の情報（作詞・作曲など）や、YouTube の再生数・チャートといった TikTok の外の数字を調べて、レポートに入れるためです。</p>
+        <b class="t">モデルを選び、Claude の人はウェブ検索をオンにする</b>
+        <p class="muted">分析は長く複雑な仕事なので、賢いモデルを選んでください。入力欄のまわりにあるモデルの選び（ChatGPT は Work の画面の入力欄の下）で選びます。</p>
+        <ul class="check">
+          <li><div>Claude の人<span><b>Opus 5.5</b>、推論の強さは <b>Medium 以上</b></span></div></li>
+          <li><div>ChatGPT の人<span><b>GPT-6.1 Sol</b>、推論の強さは <b>Medium 以上</b>（Plus 以上で選べます）。もっと確実にしたいときは GPT-6 Astra（Plus では利用枠の減りが速くなります）</span></div></li>
+        </ul>
+        <p class="muted">運営は Claude の Opus 5.5・推論の強さ Extra high で使っています。軽いモデルや弱い推論にすると、利用枠の減りは小さくなりますが、レポートの質は落ちます。</p>
+        <p class="muted">Claude の人は、もう1つ。入力欄の左下の<b>「＋」</b>を押して、<b>「ウェブ検索」</b>（英語の画面では Web search）にチェックが付いているか見ます。付いていなければ押してオンにします。AI が曲の情報（作詞・作曲など）や、YouTube の再生数・チャートといった TikTok の外の数字を調べて、レポートに入れるためです。</p>
         <p class="muted">ウェブ検索は会話ごとの切り替えです。新しい会話で分析を頼むときや「続けて」を送るときも、送る前に同じように確かめてください。「＋」の中に「ウェブ検索」が無いときは、そのままで大丈夫です（Claude が自分で調べます）。ChatGPT の人と、Code タブで頼む人は、この手順はいりません。</p>
       </div></li>
     </ol>
@@ -253,7 +259,7 @@ footer p { margin: 0; }
 
   <section id="ask">
     <h2>分析を頼む</h2>
-    <p class="sub">Claude（または ChatGPT）を開いて、こう送ります。〇〇は曲名、△△はアーティスト名です。Claude の人は、送る前に<a href="#websearch">ウェブ検索がオン</a>になっているかを確かめてください（会話ごとの切り替えです）。</p>
+    <p class="sub">Claude（または ChatGPT）を開いて、こう送ります。〇〇は曲名、△△はアーティスト名です。送る前に、<a href="#websearch">モデルと、ウェブ検索（Claude の人）</a>を確かめてください（ウェブ検索は会話ごとの切り替えです）。</p>
 
     <div class="say">
       <span class="label">Claude・ChatGPT に送る</span>

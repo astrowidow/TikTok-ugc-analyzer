@@ -173,7 +173,7 @@ footer p { margin: 0; }
       <li><div>TikTok の分析専用のサブアカウント<span>分析のためだけに使う、ふだんとは別の TikTok のアカウントです。ふだんのアカウントは使いません。持っていない人は、手順4で作ります（そのための、ふだん使っていないメールアドレスを1つ用意してください）</span></div></li>
     </ul>
 
-    <h3>やること（5つ）</h3>
+    <h3>やること（6つ）</h3>
     <ol class="steps">
       <li><div>
         <b class="t">Claude（または ChatGPT）を Mac に入れて、ログインする</b>
@@ -238,6 +238,12 @@ footer p { margin: 0; }
           </div>
         </div>
       </div></li>
+
+      <li id="websearch"><div>
+        <b class="t">Claude の人は、ウェブ検索をオンにする</b>
+        <p class="muted">Claude の入力欄の左下の<b>「＋」</b>を押して、<b>「ウェブ検索」</b>（英語の画面では Web search）にチェックが付いているか見ます。付いていなければ押してオンにします。AI が曲の情報（作詞・作曲など）や、YouTube の再生数・チャートといった TikTok の外の数字を調べて、レポートに入れるためです。</p>
+        <p class="muted">ウェブ検索は会話ごとの切り替えです。新しい会話で分析を頼むときや「続けて」を送るときも、送る前に同じように確かめてください。「＋」の中に「ウェブ検索」が無いときは、そのままで大丈夫です（Claude が自分で調べます）。ChatGPT の人と、Code タブで頼む人は、この手順はいりません。</p>
+      </div></li>
     </ol>
 
     <h3>これで準備はおしまい</h3>
@@ -247,7 +253,7 @@ footer p { margin: 0; }
 
   <section id="ask">
     <h2>分析を頼む</h2>
-    <p class="sub">Claude（または ChatGPT）を開いて、こう送ります。〇〇は曲名、△△はアーティスト名です。</p>
+    <p class="sub">Claude（または ChatGPT）を開いて、こう送ります。〇〇は曲名、△△はアーティスト名です。Claude の人は、送る前に<a href="#websearch">ウェブ検索がオン</a>になっているかを確かめてください（会話ごとの切り替えです）。</p>
 
     <div class="say">
       <span class="label">Claude・ChatGPT に送る</span>
@@ -255,7 +261,6 @@ footer p { margin: 0; }
       <button class="copy" type="button">コピー</button>
     </div>
     <p class="key" style="margin-top:16px"><b>いちばん大事なのは、頭の「UGC Analyzer で」です。</b>これが無いと、AI はふだんどおりに答えるだけで、分析は始まりません。Claude で「道具を使ってよいか」と聞かれたら<b>「常に許可」</b>を押してください。</p>
-    <p class="key"><b>Claude の人は、送る前にウェブ検索をオンに。</b>入力欄の左下の<b>「＋」</b>を押して、<b>「ウェブ検索」</b>（英語の画面では Web search）にチェックが付いているか見ます。付いていなければ押してオンにします。AI が曲の情報（作詞・作曲など）や、YouTube の再生数・チャートといった TikTok の外の数字を調べて、レポートに入れるためです。ウェブ検索は会話ごとの切り替えなので、「続けて」を別の会話で送るときも、同じように確かめてください。「＋」の中に「ウェブ検索」が無いときは、そのままで大丈夫です（Claude が自分で調べます）。ChatGPT の人と、Code タブで頼む人は、何もしなくて大丈夫です。</p>
 
     <h3>実際の会話の流れ</h3>
     <p class="muted" style="margin:0;color:var(--muted)">右が利用者、左が Claude です。iLiFE! の「きゃわぽっぴんどぅー」を分析したときの返事から、一部を省いて載せています。</p>

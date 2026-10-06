@@ -63,7 +63,7 @@ def era_md(files=(F1, F2), h="###"):
 
 def music_md(extra=""):
     return (HEAD["music"] + "\n\n作詞・作曲は山田、編曲は佐藤です [W1]。" + "画面の文字は台詞が多い。" * 40 +
-            "\n\n## 4. 楽曲構成の整理（切り出し箇所）\n\n台詞の部分が切り出された。\n\n## 5. 時代背景における本楽曲の立ち位置\n\n"
+            "\n\n## 4. 切り出し箇所\n\n台詞の部分が切り出された。\n\n## 5. 時代背景における立ち位置\n\n"
             "可愛いアイドル曲の流れの中で、台詞の口パクが新しい。\n" + extra)
 
 
@@ -309,8 +309,9 @@ class TestChecks(Base):
         （service_assemble は本文が「# 」で始まると note_meta の title を使わない）。冒頭の章に文体ガイドどおりの
         「[No.— - YY/MM-K]」が付いても、執筆・仕上げのどちらでも止まらない"""
         body = "# " + TITLE + " [No.— - 26/10-1]\n\n今回は『テスト曲 / だれか』についてのレポートになります。" + "本文の段落。" * 80
-        errs = fw.check_chapter(self.a, body, fw.heading_of(self.a, "intro")) + fw.check_finished(self.a, body, set())
-        self.assertTrue(any("号数" in e or "No." in e for e in errs), errs)
+        # 2026-10-06 ユーザー「検査より最初の生成時に気をつけるようプロンプト化。それでも出てくるものはしょうがない」: 差し戻さず、気づきとして拾う
+        self.assertTrue(any("号数" in e for e in fw.check_no_placeholder(body)))
+        self.assertFalse(any("号数" in e for e in fw.check_chapter(self.a, body, fw.heading_of(self.a, "intro")) + fw.check_finished(self.a, body, set())))
 
     def test_era_with_h4_headings(self):
         """【疑い】時代背景の材料の見出しを「####」で書くと、見出しの検査（部分一致）は通るのに、節を拾う _section_loose は「###」だけを
@@ -336,9 +337,9 @@ class TestChecks(Base):
     def test_guesses_md_is_checked_for_placeholders(self):
         """【疑い】確認メモ（利用者のフォルダの「確認メモ.md」）の「推測で書いたところ」（guesses_md）は検査が無い。
         前の書き足すところのメモの書き方（「ここは人の考察」「書き足すと完成」）で返しても受け付け、そのまま確認メモに載る"""
-        errs = self.acc(task("finish_title"), {"title": TITLE,
-                                               "guesses_md": "- 3章の声質: ここは人の考察を入れる場所。著者が書き足すと完成する"})
-        self.assertTrue(errs)
+        g = "- 3章の声質: ここは人の考察を入れる場所。著者が書き足すと完成する"
+        self.assertEqual(self.acc(task("finish_title"), {"title": TITLE, "guesses_md": g}), [])   # 差し戻さない（2026-10-06 ユーザー）
+        self.assertTrue(fw.check_no_placeholder(g))                                                 # 気づきとして拾える
 
     def test_verify_checks_web_refs_in_music_chapter(self):
         """検算は、新しく書き切る3〜5章（music）の [W番号] も research と照らす"""

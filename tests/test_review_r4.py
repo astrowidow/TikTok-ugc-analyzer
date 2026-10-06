@@ -319,13 +319,13 @@ class TestAcceptChecks(Base):
 
     def test_write_chapter(self):
         t = task("write", {"chapter": "music", "i": 5, "n": 6})
-        ok = long_body("## 3. 楽曲の音楽的特徴（内的要因）",
+        ok = long_body("## 3. 楽曲の音楽的特徴",
                        f"seq 0（@user0、2025-07-01、再生 3,000,000）。『コメント3 すごい』（97 いいね、cid {cid(0, 3)}）\n")
         self.assertTrue(self.accept(t, ok.replace("seq 0", "seq 42")))                       # 存在しない動画
         self.assertTrue(self.accept(t, ok.replace(cid(0, 3), "7512345678901234567")))        # 入力に無い cid
         self.assertTrue(self.accept(t, ok.replace("## 3.", "## 3 .")))                        # 見出しの書き方を変えた
         self.assertTrue(self.accept(t, ok + "\n用語集でいう『口実』\n"))                       # 読者に見せない言葉
-        self.assertTrue(self.accept(t, "## 3. 楽曲の音楽的特徴（内的要因）\n\n短い"))
+        self.assertTrue(self.accept(t, "## 3. 楽曲の音楽的特徴\n\n短い"))
         self.assertEqual(self.accept(t, "```markdown\n" + ok + "```"), [])
         self.assertTrue((self.d / "outputs" / "chapters" / "music.md").read_text(encoding="utf-8").startswith("## 3. 楽曲の"))
         p1 = task("write", {"chapter": "path_P1", "i": 1, "n": 6})
@@ -387,7 +387,7 @@ class TestAcceptChecks(Base):
         self.assertTrue(self.accept(task("finish_title"), {"title": "題"}))
         # 0.6.2〜: 確認メモはサービスが組み立てる。AI は推測で書いたところ（guesses_md）だけ。題名に号数（No.—）は付けない
         self.assertTrue(self.accept(task("finish_title"), {"title": "題", "editor_notes_md": "メモ"}))
-        self.assertTrue(self.accept(task("finish_title"), {"title": "題 [No.— - 26/10-1]", "guesses_md": "なし"}))
+        self.assertEqual(self.accept(task("finish_title"), {"title": "題 [No.— - 26/10-1]", "guesses_md": "なし"}), [])   # 号数は指示書で止める（差し戻さない）
         self.assertEqual(self.accept(task("finish_title"), {"title": "題", "guesses_md": "メモ"}), [])
         rv = task("review", {"community": "dancer", "round": 1, "instruction": "x", "changed": [{"chapter": "path_P1", "why": "w"}],
                              "thesis_changed": True}, n=70)
@@ -424,24 +424,24 @@ class TestReaderWords(Base):
     def test_natural_atsumeta_is_not_work_word(self):
         """【疑い】「再生を集めた動画」「注目を集めた動画」はふつうの言い方なのに、READER_RE の「集めた動画」に当たり、
         執筆（check_chapter）と仕上げ（check_finished）で差し戻す（章の全文を書き直させる）"""
-        md = long_body("## 3. 楽曲の音楽的特徴（内的要因）", "この時期に最も再生を集めた動画は seq 0（@user0、2025-07-01、再生 3,000,000）。\n")
-        errs = fw.check_chapter(self.a, md, "## 3. 楽曲の音楽的特徴（内的要因）")
+        md = long_body("## 3. 楽曲の音楽的特徴", "この時期に最も再生を集めた動画は seq 0（@user0、2025-07-01、再生 3,000,000）。\n")
+        errs = fw.check_chapter(self.a, md, "## 3. 楽曲の音楽的特徴")
         self.assertFalse([e for e in errs if "読者に見せない" in e], errs)
         note = long_body("## 見出し", "いちばん注目を集めた動画は、屋外で踊る投稿でした。\n")
         self.assertFalse([e for e in fw.check_finished(self.a, note, set()) if "読者に見せない" in e])
 
     def test_card_in_content_is_not_work_word(self):
         """【疑い】動画の中身を書いた「メッセージカードに」「トレカの」も、作業の言葉（カードに・カードの）として差し戻す"""
-        md = long_body("## 3. 楽曲の音楽的特徴（内的要因）", "seq 0（@user0、2025-07-01、再生 3,000,000）はメッセージカードに想いを書いて見せる投稿。\n")
-        errs = fw.check_chapter(self.a, md, "## 3. 楽曲の音楽的特徴（内的要因）")
+        md = long_body("## 3. 楽曲の音楽的特徴", "seq 0（@user0、2025-07-01、再生 3,000,000）はメッセージカードに想いを書いて見せる投稿。\n")
+        errs = fw.check_chapter(self.a, md, "## 3. 楽曲の音楽的特徴")
         self.assertFalse([e for e in errs if "読者に見せない" in e], errs)
 
     def test_work_words_still_caught(self):
         """作業の言葉・集めた本数の言い方は止める（執筆も仕上げも）"""
         for w in ("用語集でいう『口実』", "今回集めた投稿では", "30本中12本が", "ラベル付きの動画", "過去レポートでは", "知識ベースの J 章"):
             with self.subTest(w=w):
-                md = long_body("## 3. 楽曲の音楽的特徴（内的要因）", w + "\n")
-                self.assertTrue([e for e in fw.check_chapter(self.a, md, "## 3. 楽曲の音楽的特徴（内的要因）") if "読者に見せない" in e])
+                md = long_body("## 3. 楽曲の音楽的特徴", w + "\n")
+                self.assertTrue([e for e in fw.check_chapter(self.a, md, "## 3. 楽曲の音楽的特徴") if "読者に見せない" in e])
                 self.assertTrue([e for e in fw.check_finished(self.a, long_body("## 見出し", w + "\n"), set()) if "読者に見せない" in e])
 
     def test_phase_id_next_to_japanese_is_caught(self):
@@ -689,7 +689,7 @@ class TestReviseAndDone(Base):
         self.assertTrue(self.accept(rv, {"chapter": "nope", "markdown": "x"}, st))
         self.assertTrue(self.accept(rv, {"chapter": "music", "markdown": "## 3. 楽曲\n短い"}, st))
         self.assertIsNone(fin["params"]["chapter"])
-        md = long_body("## 3. 楽曲の音楽的特徴（内的要因）", "考察を足した。")
+        md = long_body("## 3. 楽曲の音楽的特徴", "考察を足した。")
         self.assertEqual(self.accept(rv, {"chapter": "music", "markdown": md, "note_to_user": "足した"}, st), [])
         self.assertEqual(fin["params"]["chapter"], "music")
         self.assertTrue(list((self.d / "outputs" / "chapters" / "history").glob("music_*.md")))

@@ -1643,8 +1643,8 @@ def heading_of(a, ch: str) -> str:
     if ch.startswith("path_"):
         p = ph[ch[5:]]
         n = list(ph).index(p["id"]) + 1
-        return f"### ({n}) {p['name']}（{p['start']}〜{p['end']}）"
-    return {"branch": "### ここまでの拡大経路をまとめると", "music": "## 3. 楽曲の音楽的特徴（内的要因）",
+        return f"### ({n}) {p['name']}"   # 期間は見出しのかっこでなく、次の行に（2026-10-06 ユーザー「かっこ書きで注釈はいけてない。端的 is 至高」）
+    return {"branch": "### ここまでの拡大経路をまとめると", "music": "## 3. 楽曲の音楽的特徴",
             "result": "## 6. バズった結果得られたもの"}[ch]
 
 
@@ -1711,8 +1711,9 @@ def write_prompt(a, t, base, st):
                      "\n\n" + research_block(a, ("people",), "ウェブで調べた、要のアカウントの素性（所属・経歴は推測せず、ここにあれば言い切る）") +
                      "\n\n界隈ごとのコメント分析（採用文脈と反応）は read の `synthesis`。拡散経路の下書き全体は `pathway`。")
         cat += [pr._catalog_line("synthesis", "界隈ごとの統合（コメント分析のまとめ）"), pr._catalog_line("pathway", "拡散経路の下書き")]
-        spec = ("この段階で何が起きたかを書く。界隈を丸数字で並べ（①…②…）、界隈ごとに**【この界隈に使われた理由（インサイト）】**と"
-                "**【動画が伸びた理由】**を対で書く。代表動画は「投稿日＋投稿者＋再生数」を本文に書き、seq を添える。"
+        spec = (f"見出しの次の行に「期間：{p['start'].replace('-', '/')}〜{p['end'].replace('-', '/')}」の1行を置く。"
+                "この段階で何が起きたかを書く。界隈を丸数字で並べ（①…②…）、界隈ごとに**【使われた理由】**と"
+                "**【伸びた理由】**を対で書く。代表動画は「投稿日＋投稿者＋再生数」を本文に書き、seq を添える。"
                 "コメントが示す動機は cid つきで引用する。観測（データで言えること）と推測を分けて書く。")
         if p["id"] == ph[0]["id"]:
             spec = ("**章の頭に** `## 1. バズの拡大経路` の見出しと、文体ガイドの定型の導入（UGC は界隈を渡って広がる → イノベーター理論で分析 → "
@@ -1751,7 +1752,7 @@ def write_prompt(a, t, base, st):
             era_spec = ("- 5章: この分析には時代背景の材料が無い。read の `kb:cards` から、この曲と型や界隈の渡り方が近い楽曲分析の記事を2本ほど選び、"
                         "`note:<名前>` で読んでから、著者の型（この曲の型 → 読んだ記事の曲との比べ → この曲は何が同じで何が新しいか）で書く。"
                         "読んでいない曲は挙げない。教材・過去の記事といった出どころには触れない\n")
-        spec = ("`## 3. 楽曲の音楽的特徴（内的要因）`・`## 4. 楽曲構成の整理（切り出し箇所）`・`## 5. 時代背景における本楽曲の立ち位置` の3つの見出しを立て、"
+        spec = ("`## 3. 楽曲の音楽的特徴`・`## 4. 切り出し箇所`・`## 5. 時代背景における立ち位置` の3つの見出しを立て、"
                 "**3つとも書き切る**（2026-10-06〜。人が書き足す場所を残さない）。\n"
                 "- 3章: 曲そのものの特徴を、ウェブで調べた曲の情報（作り手・編曲・BPM・ジャンル・歌詞・本人や作り手の言葉）と、使われ方"
                 "（画面の文字・検索候補・尺・元音源の割合）、コメントの言及で書く。音の特徴は、出どころ（調べた情報かコメント）のあることだけを言い切る\n"
@@ -2006,18 +2007,37 @@ def check_chapter(a, md: str, heading: str) -> list:
     if words:
         errs.append(f"読者に見せない作業の言葉・集めた本数の言い方があります: {words[:10]}"
                     "（用語集などの出どころは書かない。数字は曲全体の UGC 数で語り、集めた本数を主語にしない）")
-    errs += check_no_placeholder(body)
+    # 空けておく書き方・名乗り・見出しのかっこ書き・号数は、指示書で最初から書かせない。検査で差し戻すと書き直しの分だけ利用枠を使うので止めない
+    # （2026-10-06 ユーザー「検査するより最初の生成時に気をつけるようプロンプト化。それでも出てくるものはしょうがない」）。当たりは検算の記録に残すだけ
     badw = sorted({int(x) for x in WEB_REF_RE.findall(body)} - research_ids(a))
     if badw:
         errs.append(f"材料に無い出どころの番号があります: {['W' + str(x) for x in badw[:10]]}（ウェブで調べたことの [W番号] だけ）")
-    kb = sorted(set(KB_FILE_RE.findall(body)))
-    if kb:
-        errs.append(f"記事の名前（時代背景の材料の出どころ）が本文にあります: {kb[:5]}（曲名・アーティスト名で書き、出どころには触れない）")
     return errs
 
 
+HEAD_LINE_RE = re.compile(r"^(?:#{2,6} |\*\*【)")                 # 章・節の見出しと【】の小見出し（題名の「# 」は曲名にかっこがあり得るので見ない）
+PAREN_RE = re.compile(r"（[^）]*）|\([^)]*\)")
+DATE_PAREN_RE = re.compile(r"[（(][\d/年月日\-〜～~・、 ]+[）)]")      # 期間だけのかっこ（前の版の段階の見出し）は見逃す
+
+
+def check_headings(a, body: str) -> list:
+    """見出しにかっこ書きの注釈を付けない（2026-10-06 ユーザー「『〜（インサイト）』『〜（内的要因）』のようなかっこ書きの注釈は
+    めちゃくちゃいけてない。端的 is 至高」）。段階の見出し（サービスが決めた形）と、頭の番号「(1)」は見ない"""
+    fixed = {heading_of(a, f"path_{p['id']}") for p in phases(a)}
+    bad = []
+    for line in body.splitlines():
+        s = line.strip()
+        if not HEAD_LINE_RE.match(s) or s in fixed:
+            continue
+        s = re.sub(r"^(#{2,6} )\(\d+\)\s*", r"\1", s)
+        if any(not DATE_PAREN_RE.fullmatch(m.group(0)) for m in PAREN_RE.finditer(s)):
+            bad.append(s[:60])
+    return [f"見出しにかっこ書きの注釈があります: {bad[:3]}（見出しは端的に。補足が要るなら本文に書く）"] if bad else []
+
+
 def check_no_placeholder(body: str) -> list:
-    """空けておく書き方・著者の名乗り・題名の号数。引用（『』「」の中）は利用者や投稿者の言葉なので見ない"""
+    """空けておく書き方・著者の名乗り・題名の号数。引用（『』「」の中）は利用者や投稿者の言葉なので見ない。
+    差し戻しには使わない（検算の記録の「書き方の気づき」と、完了の知らせの文の選び分けだけ）"""
     errs = []
     body = QUOTED_RE.sub("", body)
     hits = sorted({m.group(0) for m in PLACEHOLDER_RE.finditer(body)})
@@ -2048,7 +2068,6 @@ def check_finished(a, md: str, allowed_urls: set) -> list:
     if words:
         errs.append(f"読者に見せない作業の言葉・集めた本数の言い方が残っています: {words[:10]}"
                     "（読者に向けた説明に言い換えるか消す。数字は曲全体の UGC 数で語る）")
-    errs += check_no_placeholder(body)
     tax = pr._taxonomy(a)
     keys = [k for ax in ("community", "format", "motive") for k in tax.get(ax, {}) if "_" in k]
     left = sorted({k for k in keys if re.search(rf"(?<![A-Za-z0-9_]){re.escape(k)}(?![A-Za-z0-9_])", body)})
@@ -2371,10 +2390,6 @@ def _accept(a, t: dict, raw: str, st: dict) -> list:
         if not all(isinstance(obj.get(k), str) for k in ("title", "guesses_md")) or \
                 not isinstance(obj.get("changes_md") or "", str):
             return ["title・guesses_md（・changes_md）は文字列にしてください（guesses_md は Markdown の文字列）"]
-        errs = check_no_placeholder(obj["title"]) + [
-            "guesses_md（推測で書いたところ）: " + e for e in check_no_placeholder(obj["guesses_md"])]   # R8-10: 書き足す場所の一覧に戻さない
-        if errs:
-            return errs
         pr._write_json(a.outputs("note_meta.json"), obj)
         return []
 
@@ -3007,7 +3022,8 @@ def service_verify(a, st: dict) -> dict:
             warnings.append("note に内部の印が残っている: " + ", ".join(sorted({m.group(0) for m in INTERNAL_RE.finditer(nourl)})[:5]))
         if READER_RE.search(note):
             warnings.append("note に作業の言葉が残っている: " + ", ".join(sorted({m.group(0) for m in READER_RE.finditer(note)})[:5]))
-    res = {"at": pr._now(), "seqs": len(seqs), "cids": len(cids), "errors": errors[:50], "warnings": warnings[:50]}
+    style = (check_no_placeholder(note) + check_headings(a, note)) if note else []   # 書き方の気づき（数えない・知らせない）
+    res = {"at": pr._now(), "seqs": len(seqs), "cids": len(cids), "errors": errors[:50], "warnings": warnings[:50], "style": style}
     pr._write_json(a.outputs("verify.json"), res)
     return {"errors": len(errors), "warnings": len(warnings), "seqs": len(seqs), "cids": len(cids)}
 
@@ -3205,6 +3221,7 @@ STYLE_OVERRIDE = """> **UGC Analyzer の決まり（この文体ガイドより�
 > 「弊社では【イノベーター理論】を用いて」は「ここでは【イノベーター理論】を用いて」）・【山本の気づき・こばなし】（【補足】に）・
 > 【お仕事大募集中！】・「コンサル依頼募集中！」・「今回の執筆は『〇〇さん』でした」・題名の号数「[No.— - YY/MM-K]」。
 > 冒頭は「今回は『曲名 / アーティスト』についてのレポートになります。」から、締めは「『曲名』の分析は以上になります！」と読者への1文まで。
+> 見出しにかっこ書きの注釈を付けない（「楽曲の音楽的特徴（内的要因）」→「楽曲の音楽的特徴」、「【この界隈に使われた理由（インサイト）】」→「【使われた理由】」）。端的に。
 
 """
 

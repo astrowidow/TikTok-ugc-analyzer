@@ -43,7 +43,7 @@ def era_md(files=(F1, F2)):
 
 def music_md(extra=""):
     return (HEAD["music"] + "\n\n作詞・作曲は山田、編曲は佐藤です [W1]。" + "画面の文字は台詞が多い。" * 40 +
-            "\n\n## 4. 楽曲構成の整理（切り出し箇所）\n\n台詞の部分が切り出された。\n\n## 5. 時代背景における本楽曲の立ち位置\n\n"
+            "\n\n## 4. 切り出し箇所\n\n台詞の部分が切り出された。\n\n## 5. 時代背景における立ち位置\n\n"
             "可愛いアイドル曲の流れの中で、台詞の口パクが新しい。\n" + extra)
 
 
@@ -162,20 +162,16 @@ class TestPlanAndWrite(Base):
 
     def test_chapter_checks(self):
         self.research()
-        h = "## 3. 楽曲の音楽的特徴（内的要因）"
+        h = "## 3. 楽曲の音楽的特徴"
         self.assertEqual(flow_w1.check_chapter(self.a, music_md(), h), [])
-        errs = flow_w1.check_chapter(self.a, music_md("声質の分析は、ここは人の考察を入れる場所です。"), h)
-        self.assertTrue(any("空けておく書き方" in e for e in errs), errs)
-        errs = flow_w1.check_chapter(self.a, music_md("TikTok外の指標は本データでは扱えない。"), h)
-        self.assertTrue(any("空けておく書き方" in e for e in errs), errs)
         errs = flow_w1.check_chapter(self.a, music_md("チャートで1位 [W9]。"), h)
-        self.assertTrue(any("W9" in e for e in errs), errs)
-        errs = flow_w1.check_chapter(self.a, music_md(f"（{F1}）"), h)
-        self.assertTrue(any("記事の名前" in e for e in errs), errs)
-        for who in ("こんにちは、山本です！", "執筆：スイ・山本慶太朗（株式会社ハイトリンク）", "弊社では分析をしております。", "【お仕事大募集中！】"):
-            with self.subTest(who=who):
-                errs = flow_w1.check_chapter(self.a, music_md(who), h)
-                self.assertTrue(any("著者の名乗り" in e for e in errs), errs)
+        self.assertTrue(any("W9" in e for e in errs), errs)              # 事実の確かさ（材料に無い出どころ）は差し戻す
+        # 書き方（空けておく書き方・名乗り・見出しのかっこ書き）は指示書で書かせない。差し戻さず、検算の記録に残すだけ（2026-10-06 ユーザー）
+        for s in ("声質の分析は、ここは人の考察を入れる場所です。", "TikTok外の指標は本データでは扱えない。", "こんにちは、山本です！",
+                  "執筆：スイ・山本慶太朗（株式会社ハイトリンク）", "弊社では分析をしております。", "【お仕事大募集中！】", "\n### 分岐点① 振りを作った（0→1）\n"):
+            with self.subTest(s=s):
+                self.assertEqual(flow_w1.check_chapter(self.a, music_md(s), h), [])
+                self.assertTrue(flow_w1.check_no_placeholder(music_md(s)) + flow_w1.check_headings(self.a, music_md(s)))
 
     def test_outline_web_evidence(self):
         self.research()
@@ -189,8 +185,7 @@ class TestPlanAndWrite(Base):
         body = "## 6. バズった結果得られたもの\n\n" + "MV は約123万回再生。" * 30
         self.assertEqual(flow_w1.check_finished(self.a, body, allowed), [])
         self.assertTrue(any("内部の印" in e for e in flow_w1.check_finished(self.a, body + "[W2]", allowed)))
-        self.assertTrue(any("空けておく" in e for e in flow_w1.check_finished(self.a, body + "ここでは扱えません。", allowed)))
-        self.assertTrue(any("著者の名乗り" in e for e in flow_w1.check_finished(self.a, "こんにちは、山本です！\n" + body, allowed)))
+        self.assertEqual(flow_w1.check_finished(self.a, "こんにちは、山本です！\n" + body + "ここでは扱えません。", allowed), [])   # 書き方は差し戻さない
 
 
 class TestMemoAndNames(Base):
@@ -222,9 +217,7 @@ class TestMemoAndNames(Base):
 
     def test_title_without_number(self):
         t = {"type": "finish_title", "params": {}}
-        errs = flow_w1.accept(self.a, t, json.dumps({"title": "【曲 / だれか】Hitの理由分析レポート 〜TikTok今週の1曲 [No.— - 26/10-1]",
-                                                      "guesses_md": "なし"}, ensure_ascii=False), {})
-        self.assertTrue(any("号数" in e for e in errs), errs)
+        self.assertTrue(flow_w1.check_no_placeholder("【曲 / だれか】Hitの理由分析レポート 〜TikTok今週の1曲 [No.— - 26/10-1]"))   # 気づきとして拾う（差し戻さない）
         self.assertTrue(flow_w1.accept(self.a, t, json.dumps({"title": "題"}, ensure_ascii=False), {}))   # guesses_md が無い
         self.assertEqual(flow_w1.accept(self.a, t, json.dumps({"title": "【曲 / だれか】Hitの理由分析レポート 〜TikTok今週の1曲",
                                                                "guesses_md": "なし"}, ensure_ascii=False), {}), [])
@@ -244,6 +237,20 @@ class TestMemoAndNames(Base):
         for s in ("読む・note に貼るのはこれ", "仕上げる前の原稿", "推測で書いたところ"):
             self.assertIn(s, links)
         self.assertNotIn("書き足すところ", links)
+
+    def test_verify_keeps_style_notes(self):
+        """書き方の気づき（名乗り・見出しのかっこ書き）は検算の記録に残すが、誤り・注意には数えない（完了の知らせに出さない）"""
+        self.research()
+        p = self.d / "outputs" / "note_chapters" / "music.md"
+        p.write_text("## 3. 楽曲の音楽的特徴（内的要因）\n\nこんにちは、山本です！\n" + "本文。" * 40 + "\n", encoding="utf-8")
+        st = json.loads((self.d / "state" / "tasks.json").read_text(encoding="utf-8"))
+        flow_w1.service_assemble(self.a, st)
+        flow_w1.service_verify(self.a, st)
+        ver = json.loads((self.d / "outputs" / "verify.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(ver["style"]), 2)
+        self.assertFalse([x for x in ver["errors"] + ver["warnings"] if "著者の名乗り" in x or "見出し" in x])
+        n = len(ver["errors"]) + len(ver["warnings"])
+        self.assertIn(f"{n} 件", flow_w1.done_materials(self.a)["verify_note"]) if n else None   # 知らせの件数に気づきは入らない
 
     def test_verify_unknown_web(self):
         self.research()

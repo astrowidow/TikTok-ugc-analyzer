@@ -317,7 +317,7 @@ class TestMultiPage(unittest.TestCase):
 
 
 class TestPickPages(unittest.TestCase):
-    """楽曲ページの選び方: 公式のページのうち一番使われているものを主に、その20%以上を合わせる。個人の音源は入れない"""
+    """楽曲ページの選び方: 公式のページのうち一番使われているものを主に、その30%以上を合わせる（10/7 に20%から上げた）。個人の音源は入れない"""
 
     def test_rule(self):
         import proto_runner as pr
@@ -336,7 +336,7 @@ class TestPickPages(unittest.TestCase):
             take, dropped = pr._pick_music_pages("きゃわぽっぴんどぅー", "iLiFE!", urls)
             self.assertEqual([u for u, _ in take], [urls[1], urls[2]])
             why = {u: w for u, _, w in dropped}
-            self.assertIn("20%未満", why[urls[0]])
+            self.assertIn("30%未満", why[urls[0]])
             self.assertIn("個人の音源", why[urls[3]])
             take, dropped = pr._pick_music_pages("きゃわぽっぴんどぅー", "iLiFE!", urls, take_all=True)
             self.assertEqual((len(take), dropped), (4, []))   # 利用者が渡したものは全部

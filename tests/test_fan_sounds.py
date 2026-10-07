@@ -5,7 +5,7 @@
 きゃわぽっぴんどぅーで、2番の「血液型とかMBTIとか」で自己紹介する波が、ファンが上げた12秒の音源（39K）に乗っていて、
 公式の音源（31.1K・17.7K）だけを取ったレポートから丸ごと抜けた。
 - 表記ゆれの語（kana_key・related_words）と、探す本体（search_fan_sounds）: TikTok の照合した曲の番号（MetaSongId）で同じ曲を見分ける
-- 取得の段（Run.add_fan_sounds・step_resolve・release_urls）: 主の UGC の2割以上を足す。公開の時刻からは外す。探さない場合
+- 取得の段（Run.add_fan_sounds・step_resolve・release_urls）: 主の UGC の3割以上を足す（10/7 に2割から上げた）。公開の時刻からは外す。探さない場合
 - AI の入力（build_llm_input の音源の印・sounds.json、flow_w1.sound_lines・vline）
 """
 import collections
@@ -203,7 +203,7 @@ class TestAddFanSounds(unittest.TestCase):
                 mock.patch.object(pipeline, "read_music_page", read_page):
             return pipeline.Run(aid).step_resolve()
 
-    def test_joins_fan_sound_over_20_percent(self):
+    def test_joins_fan_sound_over_30_percent(self):
         aid = self.make()
         cands = [{"id": NAGI, "title": "オリジナル楽曲 - なぎ", "author": "なぎ", "duration": 190, "hits": 6, "videos": []},
                  {"id": FAN, "title": "オリジナル楽曲 - 쿠레아.⋆𝜗𝜚", "author": "쿠레아.⋆𝜗𝜚", "duration": 12, "hits": 5, "videos": []},
@@ -220,7 +220,7 @@ class TestAddFanSounds(unittest.TestCase):
         self.assertEqual(res["how"], "given")
         m = json.loads((self.adir / aid / "analysis.json").read_text(encoding="utf-8"))
         fan_url = pipeline.music_url_of(FAN, "オリジナル楽曲 - 쿠레아.⋆𝜗𝜚")
-        self.assertEqual(m["music_urls"], [U1, U2, fan_url])   # 2割（6,220）以上の1つだけ。使えないページは足さない
+        self.assertEqual(m["music_urls"], [U1, U2, fan_url])   # 3割（9,330）以上の1つだけ。使えないページは足さない
         self.assertEqual(m["fan_music_urls"], [fan_url])
         pages = pipeline.read_json(self.adir / aid / "raw" / "music_pages.json")
         self.assertEqual([p.get("kind") for p in pages], [None, None, "fan"])
@@ -233,9 +233,9 @@ class TestAddFanSounds(unittest.TestCase):
         self.assertEqual(run.release_urls(), [U1, U2])
         self.assertEqual(run.music_urls(), [U1, U2, fan_url])
 
-    def test_joins_all_over_20_percent_largest_first(self):
-        """2割以上は数の上限なく全部、大きい順に（discover に出た回数の順ではない）。見つけた音源は全部 UGC 数を読む。
-        2026-10-06 の実走の並び。ユーザー「こういう変な制限はしなくていいよ」"""
+    def test_joins_all_over_30_percent_largest_first(self):
+        """3割以上は数の上限なく全部、大きい順に（discover に出た回数の順ではない）。見つけた音源は全部 UGC 数を読む。
+        2026-10-06 の実走の並び（なぎ・片栗粉の数は3割を超えるように大きくした）。ユーザー「こういう変な制限はしなくていいよ」"""
         aid = self.make()
         cands = [{"id": NAGI, "title": "オリジナル楽曲 - なぎ", "author": "なぎ", "duration": 190, "hits": 5, "videos": []},
                  {"id": FAN, "title": "オリジナル楽曲 - 쿠레아", "author": "쿠레아", "duration": 12, "hits": 2, "videos": []},
@@ -243,7 +243,7 @@ class TestAddFanSounds(unittest.TestCase):
                   "videos": []}] + \
                 [{"id": str(7000000000000000010 + i), "title": f"オリジナル楽曲 - {i}", "author": "z", "duration": 12, "hits": 1,
                   "videos": []} for i in range(6)]
-        counts = {NAGI: {"video_count": 8563}, FAN: {"video_count": 39000}, "7653437523162942215": {"video_count": 6881},
+        counts = {NAGI: {"video_count": 15000}, FAN: {"video_count": 39000}, "7653437523162942215": {"video_count": 9400},
                   **{str(7000000000000000010 + i): {"video_count": 1000} for i in range(6)}}
         self.run_with(aid, cands, counts)
         log = pipeline.read_json(self.adir / aid / "raw" / "sound_search.json")

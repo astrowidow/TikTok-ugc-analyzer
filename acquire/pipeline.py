@@ -81,7 +81,7 @@ DEFAULTS = {
     # 利用者が楽曲ページを渡した分析は 0）。2026-10-06 きゃわぽっぴんどぅー: 2番の「血液型とかMBTIとか」で自己紹介する波が、
     # ファンが上げた12秒の音源（39K。公式の2つは 31.1K・17.7K）に乗っていて、公式の音源だけを取ったレポートから丸ごと抜けた。
     # 読む discover のページは曲名と表記ゆれの語 fan_words 個、1ページ fan_videos 本。見つけた音源は全部 UGC 数を読み、
-    # 主の UGC の2割以上なら全部足す（数の上限は付けない。2026-10-06 ユーザー「こういう変な制限はしなくていいよ」。
+    # 主の UGC の3割以上なら全部足す（2026-10-07 2割から上げた。数の上限は付けない。2026-10-06 ユーザー「こういう変な制限はしなくていいよ」。
     # きゃわの実走では 39K・8.5K（フル版）・6.9K の3つ。詳しく読む本数は read_* で音源の数に合わせて割るので、足しても台帳の約4分が延びるだけ）
     # 2026-10-07: discover のページをスクロールして一覧データ（/api/seo/kap/video_list/）から音源を数える（1語 fan_scrolls 回で約60本。
     # 動画は開かない）。表記ゆれの語は上限なし（fan_words 0。2本以上に出た語を全部）。同じ曲かは候補の音源ごとに動画を1〜2本開いて確かめる。
@@ -104,7 +104,7 @@ DEFAULTS = {
 
 
 # ファンの音源は、主の楽曲ページの UGC のこの割合以上なら合わせて取る（同じ曲の公式のページと同じ基準。proto_runner.JOIN_RATIO）
-FAN_JOIN_RATIO = 0.2
+FAN_JOIN_RATIO = 0.3
 
 
 class StepError(Exception):
@@ -316,7 +316,7 @@ class Run:
                 d.quit()
             except Exception:
                 pass
-        # 主の UGC の2割以上を全部、大きい順に（ページの並び＝音源A・B・C の順になる）
+        # 主の UGC の3割以上を全部、大きい順に（ページの並び＝音源A・B・C の順になる）
         ok = [c for c in checked if main_n and c["video_count"] and not c["unavailable"]
               and c["video_count"] >= FAN_JOIN_RATIO * main_n]
         for c in sorted(ok, key=lambda c: -c["video_count"]):

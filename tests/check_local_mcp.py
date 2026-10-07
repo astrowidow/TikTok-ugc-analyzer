@@ -142,8 +142,8 @@ async def main():
             chosen = meta_c.get("music_url") or ""
             dropped_part = tc.split("外した楽曲ページ", 1)[-1] if "外した楽曲ページ" in tc else ""
             ok(chosen == cu[1] and meta_c.get("music_urls") == [cu[1], cu[2]] and "3 つを比べ" in tc
-               and "合わせて進めます" in tc and cu[0] in dropped_part and "20%未満" in dropped_part and "それも入れて" in tc,
-               f"楽曲ページの候補を比べ、一番使われているもの（UGC 31200）と、その20%以上（17700）を合わせて取る。"
+               and "合わせて進めます" in tc and cu[0] in dropped_part and "30%未満" in dropped_part and "それも入れて" in tc,
+               f"楽曲ページの候補を比べ、一番使われているもの（UGC 31200）と、その30%以上（17700）を合わせて取る。"
                f"少ないもの（1632）は外したと伝える（主: {chosen[-6:]}）")
             if mc:
                 rec = json.loads((home / "analyses" / mc.group(1) / "raw" / "music_pages.json").read_text(encoding="utf-8"))

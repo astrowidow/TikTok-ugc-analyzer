@@ -704,17 +704,17 @@ class TestStartArgs(Base):
         self.assertEqual(pr.list_analyses("u1"), [])
 
     def test_join_ratio_boundary(self):
-        """20% ちょうどは合わせて取り、それ未満・UGC が読めない・個人の音源は外す（通る）"""
+        """30% ちょうどは合わせて取り、それ未満・UGC が読めない・個人の音源は外す（通る）"""
         urls = [f"https://www.tiktok.com/music/x-70000000000000001{i}" for i in range(5)]
         self.fake.pages = {urls[0].rsplit("-", 1)[-1]: _page("曲", "歌手", 10000),
-                           urls[1].rsplit("-", 1)[-1]: _page("曲 (sped up)", "歌手", 2000),
-                           urls[2].rsplit("-", 1)[-1]: _page("曲", "歌手", 1999),
+                           urls[1].rsplit("-", 1)[-1]: _page("曲 (sped up)", "歌手", 3000),
+                           urls[2].rsplit("-", 1)[-1]: _page("曲", "歌手", 2999),
                            urls[3].rsplit("-", 1)[-1]: _page("曲", "歌手", None),
                            urls[4].rsplit("-", 1)[-1]: _page("オリジナル楽曲 - someone", "someone", 90000)}
         take, dropped = pr._pick_music_pages("曲", "歌手", urls)
         self.assertEqual([u for u, _ in take], urls[:2])
         why = {u: w for u, _, w in dropped}
-        self.assertIn("20%未満", why[urls[2]])
+        self.assertIn("30%未満", why[urls[2]])
         self.assertIn("読めなかった", why[urls[3]])
         self.assertIn("個人の音源", why[urls[4]])
 

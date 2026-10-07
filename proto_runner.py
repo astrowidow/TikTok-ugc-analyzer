@@ -907,7 +907,7 @@ def _music_search_hint(song: str, artist: str, note: str = "") -> dict:
         "同じ人の動画ばかりにしない\n"
         "3. `https://www.tiktok.com/music/…` の URL が出てきたら、それも全部 candidate_urls に入れる\n"
         "4. video_urls と candidate_urls を付けて start_analysis を呼び直す（Mac が音源を読んで UGC 数を比べ、一番使われているページと、"
-        "その2割以上使われている同じ曲の公式のページ（sped up 版など）を合わせて取る。数十秒かかる）\n"
+        "その3割以上使われている同じ曲の公式のページ（sped up 版など）を合わせて取る。数十秒かかる）\n"
         "5. 1〜4 を全部試しても動画も楽曲ページも見つからないときだけ、利用者に「TikTok アプリでその曲の音源のページを開き、"
         "共有 → リンクをコピー で URL を送ってください」と頼む")
     return {"text": text, "analysis_id": None, "created": False, "needs": "music_url"}
@@ -918,7 +918,9 @@ MAX_VIDEOS = 8      # 音源を読む動画の上限（1本数秒。道具の返
 MIN_FIT = 3         # 楽曲ページが1つしか見つからないとき、その音源を使った動画がこの本数あれば「ほかに無い」とみなす
 # 同じ曲の公式の楽曲ページ（配信版・先行版・sped up など）は、一番使われているページの UGC のこの割合以上なら合わせて取る
 # （2026-10-04 ユーザー「20%でよい」。少ないものは外して、外したと伝える。「それも入れて」で足せる）
-JOIN_RATIO = 0.2
+# 2026-10-07 3割に上げた（ユーザー「むしろ3割にあげるわ」。12曲の分布で、ほかの音源は2割以上と8%未満に分かれ、
+# 2割台の音源（きゃわの なぎ 28%・片栗粉 22%）は50万再生以上が少ない。docs/LIST_CUT.md 第8章）
+JOIN_RATIO = 0.3
 
 
 def _music_fits(song: str, artist: str, info: dict) -> bool:

@@ -110,6 +110,35 @@ def videos(a) -> dict:
     return {int(json.loads(l)["seq"]): json.loads(l) for l in open(a.derived("videos.jsonl"), encoding="utf-8")}
 
 
+_LEDGER = {}
+
+
+def ledger(a) -> list:
+    """台帳（raw/ledger.jsonl）: 取得の一覧の段が楽曲ページのグリッドで見た全動画（2026-10-07〜）。詳しく読んだ動画（records）は
+    ここから選んだ一部なので、本数・週ごとの本数・画面の文字の出現数・尺は台帳で数える。台帳の無い分析（前の取得）は []"""
+    if getattr(a, "dir", None) is None:
+        return []
+    p = a.dir / "raw" / "ledger.jsonl"
+    try:
+        key = (str(p), p.stat().st_mtime)
+    except OSError:
+        return []
+    if key not in _LEDGER:
+        out = []
+        for line in open(p, encoding="utf-8"):
+            try:
+                x = json.loads(line)
+            except ValueError:
+                continue
+            if x.get("create_time"):
+                d = datetime.date.fromisoformat(x["create_time"][:10]).isocalendar()
+                x["week"] = f"{d[0]}-W{d[1]:02d}"
+            out.append(x)
+        _LEDGER.clear()
+        _LEDGER[key] = out
+    return _LEDGER[key]
+
+
 def pool(a) -> dict:
     p = a.derived("pool.tsv")
     if not p.exists():
@@ -245,22 +274,26 @@ def sound_name(s: dict) -> str:
 
 def sound_lines(a, detail: bool = False) -> list:
     """音源ごとの行: UGC 数・集めた投稿の本数・最初の投稿・本数のピーク週・再生の最多の投稿。detail なら画面の文字と提案語の上位も。
-    同じ曲でも、切り抜いた部分（音源）ごとに使われ方が違うことがある（2026-10-06 きゃわぽっぴんどぅー: ファンの12秒の音源で自己紹介の波）"""
+    同じ曲でも、切り抜いた部分（音源）ごとに使われ方が違うことがある（2026-10-06 きゃわぽっぴんどぅー: ファンの12秒の音源で自己紹介の波）。
+    台帳があれば、本数・ピーク週・画面の文字は台帳（グリッドで見た全動画）で数える。提案語は詳しく読んだ動画にしか無い"""
     recs = records(a)
+    led = ledger(a)
     out = []
-    for s in sounds(a):
+    for i, s in enumerate(sounds(a), 1):
         mine = [r for r in recs.values() if r.get("sound") == s["tag"]]
+        seen = [x for x in led if int(x.get("source") or 1) == int(s.get("page") or i)]
         ugc = (s.get("video_count_text") or "読めず").replace(" 動画", "")
         if not mine:
-            out.append(f"- {sound_name(s)}: UGC {ugc}。集めた投稿なし")
+            out.append(f"- {sound_name(s)}: UGC {ugc}。" + (f"グリッドで見た投稿 {len(seen)}本、詳しく読んだ投稿なし" if seen else "集めた投稿なし"))
             continue
-        peak, n_peak = collections.Counter(r["week"] for r in mine).most_common(1)[0]
+        peak, n_peak = collections.Counter(r["week"] for r in (seen or mine) if r.get("week")).most_common(1)[0]
         first = min(mine, key=lambda r: r["date"])
         top = max(mine, key=lambda r: r["plays"])
-        line = (f"- {sound_name(s)}: UGC {ugc}。集めた投稿 {len(mine)}本、最初の投稿 {vline(first)}、"
-                f"本数のピーク週 {peak}（{n_peak}本）、再生の最多 {vline(top)}")
+        line = (f"- {sound_name(s)}: UGC {ugc}。" +
+                (f"グリッドで見た投稿 {len(seen)}本（うち詳しく読んだ {len(mine)}本）" if seen else f"集めた投稿 {len(mine)}本") +
+                f"、最初の投稿 {vline(first)}、本数のピーク週 {peak}（{n_peak}本）、再生の最多 {vline(top)}")
         if detail:
-            st = collections.Counter(x for r in mine for x in (r.get("sticker_texts") or []))
+            st = collections.Counter(x for r in (seen or mine) for x in (r.get("sticker_texts") or []))
             sg = collections.Counter(x for r in mine for x in (r.get("suggested_words") or []))
             line += ("\n  - 画面上の文字の上位: " + ("、".join(f"{w[:30]}（{n}）" for w, n in st.most_common(5)) or "（なし）") +
                      "\n  - 提案語の上位: " + ("、".join(f"{w}（{n}）" for w, n in sg.most_common(8)) or "（なし）"))
@@ -787,8 +820,20 @@ def copy_materials(a) -> None:
     import io
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["週", "投稿数", "再生の合計"])
-    w.writerows(rows[1:])
+    by = a.derived("weekly_sounds.tsv")   # 音源（楽曲ページ）が2つ以上で台帳があれば、音源ごとの列も（2026-10-07 ユーザー「どの楽曲ページのものかは残したい」）
+    snd = sounds(a)
+    if by.exists() and snd:
+        cell = {}
+        for ln in by.read_text(encoding="utf-8").splitlines()[1:]:
+            wk, src, n, pl = ln.split("\t")
+            cell[(wk, int(src))] = (n, pl)
+        heads = [f"音源{x['tag']}『{x.get('title') or ''}』" for x in snd]
+        w.writerow(["週", "投稿数", "再生の合計"] + [h + c for h in heads for c in ("の投稿数", "の再生")])
+        for r in rows[1:]:
+            w.writerow(r + [v for i, x in enumerate(snd, 1) for v in cell.get((r[0], int(x.get("page") or i)), ("0", "0"))])
+    else:
+        w.writerow(["週", "投稿数", "再生の合計"])
+        w.writerows(rows[1:])
     d = report_folder(a)
     d.mkdir(parents=True, exist_ok=True)
     (d / WEEKLY_CSV).write_text(buf.getvalue(), encoding="utf-8-sig")
@@ -1439,7 +1484,7 @@ def research_materials(a) -> str:
     rel = release_info(a)
     first = min(recs.values(), key=lambda r: r["date"]) if recs else None
     u = ugc_total(a)
-    stick = collections.Counter(x for r in recs.values() for x in (r.get("sticker_texts") or []))
+    stick = collections.Counter(x for r in (ledger(a) or recs.values()) for x in (r.get("sticker_texts") or []))
     return (f"#### 曲\n- 曲名: {s.get('title', '')}／アーティスト: {s.get('artist', '')}\n" +
             (f"- TikTok の楽曲ページが作られた日: {rel['date']}\n" if rel else "") +
             (f"- TikTok で最初の投稿: {first['date']}\n" if first else "") +
@@ -1565,7 +1610,8 @@ def common_materials(a, base) -> str:
     labs = labels(a)
     ph = phases(a)
     u = ugc_total(a)
-    total_plays = sum(r["plays"] for r in recs.values())
+    led = ledger(a)
+    total_plays = sum((r.get("plays") or 0) for r in led) if led else sum(r["plays"] for r in recs.values())
     if u and u["parts"]:
         head = (f"- **この曲の UGC 数**（同じ曲の楽曲ページ {len(u['parts'])} つの表示の合計、{u['at']} 時点）: {fmt_count(u['n'])}"
                 f"（内訳: {ugc_parts_line(u)}）。記事の数字はこの合計で語る（内訳に触れるなら「原曲と sped up 版などを合わせて」"
@@ -1583,8 +1629,9 @@ def common_materials(a, base) -> str:
     sl = sound_lines(a)
     return (head + "\n" + ("\n".join([SOUNDS_HEAD] + ["  " + x for x in sl]) + "\n" if sl else "") +
             f"- 投稿の期間: {base['period']}\n"
-            f"- 経路を調べた手掛かり（**記事の本文に本数を書かない**。付録にサービスが書く）: 楽曲ページに並んだ投稿 {len(recs)}本"
-            f"（再生の合計 {fmt_plays(total_plays)}）、そのうち分類した {len(labs)}本、コメントを読んだ {n_comm or len(video_analyses(a))}本\n"
+            f"- 経路を調べた手掛かり（**記事の本文に本数を書かない**。付録にサービスが書く）: 楽曲ページに並んだ投稿 {len(led) or len(recs)}本"
+            f"（再生の合計 {fmt_plays(total_plays)}）、" + (f"そのうち詳しく読んだ {len(recs)}本、" if led else "") +
+            f"分類した {len(labs)}本、コメントを読んだ {n_comm or len(video_analyses(a))}本\n"
             "- 段階: " + " ／ ".join(f"{p['id']} {p['name']}（{p['start']}〜{p['end']}）" for p in ph))
 
 
@@ -1873,10 +1920,12 @@ def style_guide_on(a) -> bool:
 
 def music_materials(a) -> str:
     recs = records(a)
-    dur = sorted(r["duration_s"] for r in recs.values() if isinstance(r.get("duration_s"), (int, float)) and r["duration_s"])
+    led = ledger(a)   # 尺と画面の文字は、台帳（グリッドで見た全動画）があればそこで数える
+    dur = sorted(x for x in ([r.get("duration") for r in led] if led else [r.get("duration_s") for r in recs.values()])
+                 if isinstance(x, (int, float)) and x)
     orig = [r for r in recs.values() if r.get("uses_original_sound") is not None]
     sug = collections.Counter(w for r in recs.values() for w in (r.get("suggested_words") or []))
-    stick = collections.Counter(s for r in recs.values() for s in (r.get("sticker_texts") or []))
+    stick = collections.Counter(s for r in (led or recs.values()) for s in (r.get("sticker_texts") or []))
     va = video_analyses(a)
     music_q = []
     for s, v in sorted(va.items()):
@@ -1905,7 +1954,7 @@ def result_materials(a) -> str:
     return ("#### 本人・公式（プールの判定: 音源の作者名に一致するアカウント・公式企画のタグを使った認証アカウント）\n" +
             ("\n".join(f"- {vline(r)}" for r in sorted(off, key=lambda r: r['date'])) or "（見つからなかった）") +
             "\n\n#### 再生上位10本\n" + "\n".join(f"- {vline(r)}" for r in top) +
-            "\n\n#### 週ごとの本数と再生（全動画）\n" + "\n".join(f"- {w.split(chr(9))[0]}: {w.split(chr(9))[1]}本、{fmt_plays(w.split(chr(9))[2])}" for w in weekly))
+            "\n\n#### 週ごとの本数と再生（楽曲ページのグリッドで見た全動画）\n" + "\n".join(f"- {w.split(chr(9))[0]}: {w.split(chr(9))[1]}本、{fmt_plays(w.split(chr(9))[2])}" for w in weekly))
 
 
 def intro_materials(a) -> str:
@@ -2903,10 +2952,16 @@ def appendix(a) -> str:
               if u else "- この曲の UGC 数: 取得していない"),
              *([f"- 曲の公開日（楽曲ページが作られた日）: {rel['date']}。これより前の日付で楽曲ページに載っていた投稿 {rel['dropped']}本は、"
                 "あとから音源が付いたものとして、すべての分析から除いた"] if (rel := release_info(a)) and rel["dropped"] else []),
-             f"- 楽曲ページのグリッドから集めた動画: {len(recs)}本（取得 {str(acq.get('started_at', ''))[:10]}"
-             + (f"。楽曲ページごと: " + "、".join(f"{x['label']} {m.get('links', '?')}本" for x, m in zip(u["parts"], music_pages(a)))
-                if u and u["parts"] else "") + "）。"
-             f"属性が取れた動画 {sum(1 for r in recs.values() if r.get('enriched'))}本（取れなかったものは写真投稿・削除済みなど）",
+             *([f"- 楽曲ページのグリッドで見た動画: {len(led)}本（取得 {str(acq.get('started_at', ''))[:10]}"
+                + (f"。楽曲ページごと: " + "、".join(f"{x['label']} {m.get('ledger', '?')}本" for x, m in zip(u["parts"], music_pages(a)))
+                   if u and u["parts"] else "") + "）。週ごとの本数はこの全部で数えた",
+                f"- そのうち詳しく読んだ動画: {len(recs)}本（再生50万以上の全部と、本人・最初期・週ごとの一番・再生の多い順で選んだもの）。"
+                f"属性が取れた動画 {sum(1 for r in recs.values() if r.get('enriched'))}本（取れなかったものは写真投稿・削除済みなど）"]
+               if (led := ledger(a)) else
+               [f"- 楽曲ページのグリッドから集めた動画: {len(recs)}本（取得 {str(acq.get('started_at', ''))[:10]}"
+                + (f"。楽曲ページごと: " + "、".join(f"{x['label']} {m.get('links', '?')}本" for x, m in zip(u["parts"], music_pages(a)))
+                   if u and u["parts"] else "") + "）。"
+                f"属性が取れた動画 {sum(1 for r in recs.values() if r.get('enriched'))}本（取れなかったものは写真投稿・削除済みなど）"]),
              f"- ラベルを付けた動画: {len(labs)}本（確信度 H {conf.get('H', 0)} / M {conf.get('M', 0)} / L {conf.get('L', 0)}）",
              f"- コメントを取った動画: {cm.get('videos_ok', '?')}本・{cm.get('comments', '?')}件"
              f"（候補 {cm.get('pool', '?')}本のうち。グリッドに無く差し替えた {cm.get('substituted', 0)}本、時間の上限で取らなかった {cm.get('not_fetched_time', 0)}本）",

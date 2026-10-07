@@ -3,9 +3,10 @@
 
 docs/IMPLEMENTATION_HANDOVER.md 第5章、docs/BLUEPRINT.md 第5章。取得の係（acquire/worker.py）が呼ぶ。
 入出力は全部、分析フォルダ（output/analyses/<分析ID>/）:
-  raw/        ①原本        grid_links.jsonl（楽曲ページで集めたリンク）・enriched.jsonl（動画ページの属性）・covers/・comments.jsonl
+  raw/        ①原本        ledger.jsonl（台帳: 楽曲ページのグリッドで見た全動画）・grid_links.jsonl（そのうち詳しく読む動画）・
+                           enriched.jsonl（動画ページの属性）・covers/・comments.jsonl
   fetch_log/  ②取得の記録  pipeline.log・comments.log・comments_summary.json・substitutions.tsv・notify.log（すべて日時つき）
-  derived/    ③計算物      list.csv（13列）・videos.jsonl・weekly.tsv・llm_input/・pool.tsv・comments/
+  derived/    ③計算物      list.csv（13列。詳しく読んだ動画）・videos.jsonl・weekly.tsv（台帳の全動画）・llm_input/・pool.tsv・comments/
 状態は analysis.json の "acquisition"。工程ごとに done を持つので、どこで止まっても続きから（各工程も再開できる）。
 
 TikTok に触る工程（resolve・list・enrich・comments）は tiktok_lock で既存の CSV ジョブと直列。
@@ -60,14 +61,27 @@ DEFAULTS = {
     "pool_budget": 0,            # プールの本数を直接指定（0なら時間から）
     # 週ごとに配る動画の再生の下限（必ず入れる動画には掛けない）。分析ごとに道具（start_analysis の min_plays）で変えられる。analysis/pool.py の MIN_PLAYS_WEEKLY
     "min_plays_weekly": 100000,
-    "list_sets": 3, "list_scrolls": 30, "list_stall": 4,   # 一覧: scraper.py と同じ 3セット×30スクロール。増えなくなったら早めに止める
+    # 一覧＝台帳（2026-10-07 ユーザー採用。docs/LIST_CUT.md 第6章）: 楽曲ページを開き直さずに続けてスクロールし、グリッドが読み込む
+    # 一覧データ（/api/music/item_list/）を全部拾う。再生数・投稿日時・投稿者・説明文・画面の文字まで入っている（第5章）。
+    # 1回で約29本、60回で約1,700本・約4分（前の 30回×3セットは開き直すたびに同じ上から読み直し、約870本で頭打ちだった）。
+    # 音源が多いときは合計 ledger_scrolls_total 回を音源の数で割る（最低 ledger_scrolls_min 回＝約300本）。増えなくなったら早めに止める
+    "ledger_scrolls": 60, "ledger_scrolls_total": 300, "ledger_scrolls_min": 10, "list_stall": 4,
+    # 台帳から詳しく読む（1本ずつ開いて属性を取る）動画（choose_to_read）。1音源の枠は read_normal を音源の数で割った本数、最低 read_floor。
+    # ただし合計 read_cap が絶対の上限（音源100なら1音源10本）。枠の中は、再生 read_must_plays 以上を全部（枠を超えても）→
+    # 本人・最初期（各 read_role 本、枠の5分の1まで）・週の一番（再生 read_week_plays 以上。枠の5分の1まで）→ 残りを再生の多い順。
+    # 読まない動画は台帳（raw/ledger.jsonl）に残り、週ごとの本数・音源ごとの本数・画面の文字の出現数はそこから数える。
+    # 2026-10-07 ユーザー「再生数が少ないものはリストに入れなくていい。この時期に何本投稿されたかだけ取っといて」
+    # 「最低50本は読む。通常は500本が上限、音源の数で割る。絶対の上限として1000本」「50万再生以上は上限突破してでも全部読む」。
+    # read_select 0 は前と同じ（台帳を全部読む）
+    "read_select": 1, "read_normal": 500, "read_floor": 50, "read_cap": 1000, "read_must_plays": 500000,
+    "read_role": 10, "read_week_plays": 10000,
     "enrich_sleep": 2.0,
     # 同じ曲のファンの音源（「オリジナル楽曲 - 〇〇」）も探し、よく使われていれば合わせて取る（Run.add_fan_sounds。0 で探さない。
     # 利用者が楽曲ページを渡した分析は 0）。2026-10-06 きゃわぽっぴんどぅー: 2番の「血液型とかMBTIとか」で自己紹介する波が、
     # ファンが上げた12秒の音源（39K。公式の2つは 31.1K・17.7K）に乗っていて、公式の音源だけを取ったレポートから丸ごと抜けた。
     # 読む discover のページは曲名と表記ゆれの語 fan_words 個、1ページ fan_videos 本。見つけた音源は全部 UGC 数を読み、
     # 主の UGC の2割以上なら全部足す（数の上限は付けない。2026-10-06 ユーザー「こういう変な制限はしなくていいよ」。
-    # きゃわの実走では 39K・8.5K（フル版）・6.9K の3つ。1つ足すと動画が約850本増え、属性だけで約50分延びる）
+    # きゃわの実走では 39K・8.5K（フル版）・6.9K の3つ。詳しく読む本数は read_* で音源の数に合わせて割るので、足しても台帳の約4分が延びるだけ）
     "fan_sounds": 1, "fan_words": 3, "fan_videos": 16,
     "collect_scrolls": 150,      # コメント: グリッドでプールを探すスクロールの上限
     # 要求の間隔（平均と60秒の上限）。2026-10-05 にユーザーの判断で 1.8回/分・60秒に2回 → 3回/分・60秒に4回へ上げた。
@@ -347,8 +361,10 @@ class Run:
         return out
 
     def step_list(self):
-        """scraper.py と同じ手順（未ログイン・ヘッドレス・END キーでスクロール）でリンクだけ集める（D16）。
-        楽曲ページが複数なら、ページごとに集めて重ねない（どのページで見つけたかを source に残す）"""
+        """一覧の段: 楽曲ページを開き直さずに続けてスクロールし（未ログイン・ヘッドレス・END キー）、グリッドが読み込む一覧データを全部拾って
+        台帳（raw/ledger.jsonl）を作る。そこから詳しく読む動画を選んで raw/grid_links.jsonl に書く（choose_to_read。2026-10-07）。
+        楽曲ページが複数なら、ページごとに集めて重ねない（どのページで見つけたかを source に残す）。
+        一覧データが拾えなかったページ（ブラウザが対応していない・TikTok の形が変わった）は、前と同じく台帳を全部読む"""
         s = self.settings()
         out = self.p("raw", "grid_links.jsonl")
         if out.exists() and out.stat().st_size:
@@ -366,49 +382,60 @@ class Run:
             m0 = read_json(self.p("raw", "music_page.json"), {}) or {}
             if m0.get("url"):
                 before[m0["url"]] = m0
-        seen, order = {}, 0
+        scrolls = ledger_scrolls(len(urls), s)
+        seen, order = {}, 0      # 動画 ID → 台帳の行（ページの順・グリッドの順）
         pages = []
         driver = scraper.create_headless_driver()
+        hooked = hook_item_list(driver)
         try:
             for k, url in enumerate(urls, 1):
                 tag = f"{k}ページ目 " if len(urls) > 1 else ""
-                page_info = None
-                n0 = len(seen)
-                for set_i in range(int(s["list_sets"])):
-                    driver.get(url)
-                    time.sleep(scraper.PAGE_LOAD_TIME)
-                    if page_info is None:   # 楽曲ページの UGC 数（「131.9K 動画」）。記事は全体の UGC 数で語るため（2026-10-03 ユーザー）
-                        page_info = read_music_page(driver)
-                        self.log(f"    楽曲ページ{('（' + str(k) + '）') if len(urls) > 1 else ''}: {page_info}")
-                    last, stall = -1, 0
-                    for scroll_i in range(int(s["list_scrolls"])):
-                        driver.find_element(By.TAG_NAME, "body").send_keys(Keys.END)
-                        time.sleep(scraper.SCROLL_PAUSE_TIME)
-                        n = driver.execute_script(scraper._COUNT_LINKS_JS) or 0
-                        if n <= last:
-                            stall += 1
-                            if stall >= int(s["list_stall"]):
-                                break
-                        else:
-                            stall = 0
-                        last = n
-                    hrefs = driver.execute_script(
-                        "return Array.from(document.querySelectorAll('a[href*=\"/video/\"], a[href*=\"/photo/\"]'))"
-                        ".map(a => a.href).filter(h => h);") or []
-                    new = 0
-                    for h in hrefs:
-                        h = h.split("?")[0]
-                        if h not in seen:
-                            seen[h] = {"url": h, "video_id": h.rstrip("/").rsplit("/", 1)[-1], "set": set_i,
-                                       "order": order, "type": "Photo" if "/photo/" in h else "Video",
-                                       "source": k, "collected_at": now()}
-                            order += 1
-                            new += 1
-                    self.log(f"    一覧 {tag}{set_i + 1}/{s['list_sets']}セット: このセット{len(hrefs)}件 / 新規{new} / 累計{len(seen)}"
-                             f"（スクロール{scroll_i + 1}回）")
+                driver.get(url)
+                time.sleep(scraper.PAGE_LOAD_TIME)
+                # 楽曲ページの UGC 数（「131.9K 動画」）。記事は全体の UGC 数で語るため（2026-10-03 ユーザー）
+                page_info = read_music_page(driver)
+                self.log(f"    楽曲ページ{('（' + str(k) + '）') if len(urls) > 1 else ''}: {page_info}")
+                last, stall, scroll_i = -1, 0, 0
+                for scroll_i in range(scrolls):
+                    driver.find_element(By.TAG_NAME, "body").send_keys(Keys.END)
+                    time.sleep(scraper.SCROLL_PAUSE_TIME)
+                    n = driver.execute_script(scraper._COUNT_LINKS_JS) or 0
+                    if n <= last:
+                        stall += 1
+                        if stall >= int(s["list_stall"]):
+                            break
+                    else:
+                        stall = 0
+                    last = n
+                hrefs = driver.execute_script(
+                    "return Array.from(document.querySelectorAll('a[href*=\"/video/\"], a[href*=\"/photo/\"]'))"
+                    ".map(a => a.href).filter(h => h);") or []
+                api = {}
+                if hooked:
+                    try:
+                        for it in driver.execute_script(LEDGER_READ_JS) or []:
+                            if isinstance(it, dict) and it.get("id"):
+                                api.setdefault(str(it["id"]), it)
+                    except Exception as e:
+                        self.log(f"    一覧データを読めませんでした（このページは台帳を全部読みます）: {type(e).__name__}: {e}")
+                n0, n_api = len(seen), 0
+                for h in hrefs:
+                    h = h.split("?")[0]
+                    vid = h.rstrip("/").rsplit("/", 1)[-1]
+                    if vid not in seen:
+                        seen[vid] = ledger_row(vid, h, k, order, api.get(vid))
+                        n_api += vid in api
+                        order += 1
+                for vid, it in api.items():   # グリッドの表示に出る前に止めた分（一覧データには届いている）
+                    if vid not in seen:
+                        seen[vid] = ledger_row(vid, None, k, order, it)
+                        n_api += 1
+                        order += 1
+                self.log(f"    一覧 {tag}: グリッド {len(hrefs)}件・一覧データ {len(api)}件 / 新規 {len(seen) - n0}（うち再生数あり {n_api}）"
+                         f"（スクロール{scroll_i + 1}回）")
                 info = {**(before.get(url) or {}), **{key: v for key, v in (page_info or {}).items() if v is not None}}
                 info.pop("how", None)
-                pages.append({**info, "url": url, "page": k, "links": len(seen) - n0, "at": now()})
+                pages.append({**info, "url": url, "page": k, "ledger": len(seen) - n0, "at": now()})
         finally:
             try:
                 driver.quit()
@@ -426,17 +453,35 @@ class Run:
         dropped = self.drop_before_release(seen, self.release_urls())
         if not seen:
             raise StepError("楽曲ページの動画が、全部曲の公開より前の日付でした（楽曲ページが違う可能性）")
+        for k, pg in enumerate(pages, 1):
+            pg["ledger"] = sum(1 for r in seen.values() if r["source"] == k)
+        song = self.meta.get("song") or {}
+        why = choose_to_read(list(seen.values()), urls, s, song.get("artist") or (pages[0].get("creator") or ""))
+        for k, pg in enumerate(pages, 1):
+            pg["links"] = sum(1 for v, r in seen.items() if r["source"] == k and v in why)
         write_json(self.p("raw", "music_pages.json"), pages)
         write_json(self.p("raw", "music_page.json"), pages[0])   # 主のページ（前からの形）
+        with open(self.p("raw", "ledger.jsonl"), "w", encoding="utf-8") as f:
+            for v, r in seen.items():
+                f.write(json.dumps({**r, "read": why.get(v)}, ensure_ascii=False) + "\n")
         with open(out, "w", encoding="utf-8") as f:
-            for r in seen.values():
-                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            for v, r in seen.items():
+                if v in why:
+                    f.write(json.dumps({"url": r["url"], "video_id": v, "order": r["order"], "type": r["type"],
+                                        "source": r["source"], "plays": r.get("plays"), "why": why[v],
+                                        "collected_at": r["collected_at"]}, ensure_ascii=False) + "\n")
         self._write_links_csv()
+        reasons = collections.Counter(why.values())
+        q = read_quota(len(urls), s)
+        self.log(f"    台帳 {len(seen)}本から、詳しく読む動画 {len(why)}本（1音源の枠 {q}本。"
+                 + "・".join(f"{k} {n}" for k, n in reasons.most_common()) + "）")
         counts = [p.get("video_count") for p in pages]
-        res = {"links": len(seen), "ugc_total": sum(c for c in counts if c) or None,
+        res = {"links": len(why), "ledger": len(seen), "quota": q, "reasons": dict(reasons),
+               "ugc_total": sum(c for c in counts if c) or None,
                "release": iso_time(release_time(self.release_urls())), "dropped_before_release": dropped}
         if len(pages) > 1:
-            res["pages"] = [{"url": p["url"], "links": p["links"], "ugc": p.get("video_count")} for p in pages]
+            res["pages"] = [{"url": p["url"], "links": p["links"], "ledger": p["ledger"], "ugc": p.get("video_count")}
+                            for p in pages]
         return res
 
     def drop_before_release(self, seen: dict, urls: list) -> int:
@@ -560,7 +605,9 @@ class Run:
         return (r.stdout or "").strip()
 
     def step_derive(self):
-        out1 = self._script("analysis/prep_sample.py", self.p("derived", "list.csv"), self.p("derived"))
+        led = self.p("raw", "ledger.jsonl")   # 台帳（2026-10-07〜）。週ごとの本数は台帳の全動画で数える
+        out1 = self._script("analysis/prep_sample.py", self.p("derived", "list.csv"), self.p("derived"),
+                            *(["--ledger", led] if led.exists() else []))
         out2 = self._script("analysis/build_llm_input.py", self.p("derived"), "--enriched", self.p("raw", "enriched.jsonl"),
                             "--out", self.p("derived", "llm_input"))
         return {"prep_sample": out1.splitlines()[-1:], "build_llm_input": out2.splitlines()[-1:]}
@@ -814,6 +861,184 @@ def music_urls_of(m: dict) -> list:
     if m.get("music_url") and m["music_url"] not in urls:
         urls.insert(0, m["music_url"])
     return urls
+
+
+# --- 台帳（一覧の段。2026-10-07。docs/LIST_CUT.md 第5・6章） ---
+# 楽曲ページのグリッドは、スクロールのたびに /api/music/item_list/ を読む。その返事に、並ぶ動画の再生数・投稿日時・投稿者・説明文・
+# 画面の文字まで入っている（ログインなしで、7ページ・9,846本で確かめた。来ないのは関連する検索の語・投稿の地域・TikTok のラベルだけ）。
+# ページを開く前に fetch と XMLHttpRequest に仕掛けておき、届いた返事から要る項目だけを取っておく（全部だと1ページ約40MB）
+LEDGER_HOOK_JS = r"""
+(() => {
+  if (window.__ledger) return;
+  window.__ledger = [];
+  const want = u => typeof u === 'string' && /\/api\/music\/item_list/.test(u);
+  const pick = (o, ks) => { const r = {}; if (o) for (const k of ks) r[k] = o[k]; return r; };
+  const take = t => {
+    try {
+      const j = JSON.parse(t);
+      for (const it of (j.itemList || [])) {
+        window.__ledger.push({
+          id: it.id, createTime: it.createTime, desc: it.desc, isAd: it.isAd, photo: !!it.imagePost,
+          stats: it.statsV2 || it.stats, author: pick(it.author, ['uniqueId', 'nickname', 'verified', 'signature']),
+          authorStats: pick(it.authorStatsV2 || it.authorStats, ['followerCount', 'videoCount']),
+          music: pick(it.music, ['id', 'title', 'authorName', 'original', 'duration']),
+          duration: (it.video || {}).duration,
+          hashtags: (it.textExtra || []).map(x => x.hashtagName).filter(x => x),
+          challenges: (it.challenges || []).map(c => c.title).filter(x => x),
+          stickers: (it.stickersOnItem || []).flatMap(s => s.stickerText || []),
+        });
+      }
+    } catch (e) {}
+  };
+  const of = window.fetch;
+  window.fetch = async function(input, init) {
+    const u = typeof input === 'string' ? input : (input && input.url);
+    const r = await of.apply(this, arguments);
+    if (want(String(u))) { try { take(await r.clone().text()); } catch (e) {} }
+    return r;
+  };
+  const oo = XMLHttpRequest.prototype.open, os = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function(m, u) { this.__u = String(u); return oo.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function() {
+    if (want(this.__u)) this.addEventListener('load', () => { try { take(this.responseText); } catch (e) {} });
+    return os.apply(this, arguments);
+  };
+})();
+"""
+LEDGER_READ_JS = "return window.__ledger || [];"
+
+
+def hook_item_list(driver) -> bool:
+    """これから開くページで、グリッドの一覧データを拾う仕掛けを入れる。入れられなければ False（台帳は再生数なしになり、全部読む）"""
+    try:
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": LEDGER_HOOK_JS})
+        return True
+    except Exception:
+        return False
+
+
+def _int(x):
+    try:
+        return int(str(x).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def ledger_row(vid: str, url, source: int, order: int, it=None) -> dict:
+    """台帳の1行。it はグリッドの一覧データ（LEDGER_HOOK_JS で取っておいた形）。無ければ番号から投稿日時だけ。
+    create_time は属性（enriched.jsonl）と同じ UTC の「YYYY-MM-DD HH:MM:SS」"""
+    it = it or {}
+    a, st, mu = it.get("author") or {}, it.get("stats") or {}, it.get("music") or {}
+    t = _int(it.get("createTime")) or id_time(vid)
+    kind = "Photo" if it.get("photo") or "/photo/" in str(url or "") else "Video"
+    if not url:
+        url = f"https://www.tiktok.com/@{a.get('uniqueId') or 'user'}/{kind.lower()}/{vid}"
+    row = {"video_id": vid, "url": url, "type": kind, "source": source, "order": order, "collected_at": now(),
+           "create_time": datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if t else None,
+           "api": bool(it)}
+    if it:
+        row.update({"plays": _int(st.get("playCount")), "likes": _int(st.get("diggCount")),
+                    "comments": _int(st.get("commentCount")), "shares": _int(st.get("shareCount")),
+                    "saves": _int(st.get("collectCount")), "desc": it.get("desc") or "",
+                    "hashtags": it.get("hashtags") or [], "challenges": it.get("challenges") or [],
+                    "sticker_texts": it.get("stickers") or [], "duration": it.get("duration"),
+                    "music_id": str(mu.get("id")) if mu.get("id") else None, "is_ad": bool(it.get("isAd")),
+                    "author": {"unique_id": a.get("uniqueId"), "nickname": a.get("nickname"), "verified": bool(a.get("verified")),
+                               "follower_count": _int((it.get("authorStats") or {}).get("followerCount"))}})
+    return row
+
+
+def ledger_scrolls(n_sounds: int, s: dict) -> int:
+    """1音源あたりのスクロールの回数: 普段は ledger_scrolls。合計が ledger_scrolls_total を超えるなら、それを音源の数で割る（最低 ledger_scrolls_min）"""
+    k = max(1, n_sounds)
+    per = int(s["ledger_scrolls"])
+    if per * k > int(s["ledger_scrolls_total"]):
+        per = max(int(s["ledger_scrolls_min"]), int(s["ledger_scrolls_total"]) // k)
+    return per
+
+
+def read_quota(n_sounds: int, s: dict) -> int:
+    """1音源あたりに詳しく読む本数（枠）: read_normal を音源の数で割る。最低 read_floor。ただし合計が read_cap を超えるなら read_cap を割る
+    （1音源 500・2音源 250・5音源 100・10〜20音源 50・50音源 20・100音源 10。2026-10-07 ユーザー）"""
+    k = max(1, n_sounds)
+    q = max(int(s["read_floor"]), int(s["read_normal"]) // k)
+    return q if q * k <= int(s["read_cap"]) else max(1, int(s["read_cap"]) // k)
+
+
+def _week(create_time: str):
+    d = datetime.date.fromisoformat(str(create_time)[:10])
+    return d.isocalendar()[:2]
+
+
+def choose_to_read(rows: list, urls: list, s: dict, artist: str) -> dict:
+    """台帳の行から、詳しく読む動画 {video_id: 理由}。音源（楽曲ページ。行の source）ごとに枠（read_quota）を持ち、その中で
+      ① 本人（"本人"。コメント選びと同じ見分け方 pool.artist_accounts）と、音源ができた日より後の最初期（"最初期"）を、
+         それぞれ read_role 本。ただし枠の5分の1まで
+      ② 再生 read_must_plays 以上（"50万以上"）を全部。枠を超えてもよい（2026-10-07 ユーザー「上限突破してでも全部読む」）
+      ③ 週の一番（"週の一番"。その週に再生 read_week_plays 以上の動画があれば、一番再生の多い1本）。枠の5分の1まで。
+         枠で足りないときは投稿の多い週から
+      ④ 残りを再生の多い順（"再生順"）で枠まで
+    合計が read_cap を超えたら（①が多いとき）、再生順 → 週の一番 → 50万以上 の順に、再生の少ないものから外す（本人・最初期は残す）。
+    read_select 0、または再生数の無いページ（一覧データが拾えなかった）は、そのページを全部読む（"全部"）"""
+    by_page = collections.defaultdict(list)
+    for r in rows:
+        by_page[int(r["source"])].append(r)
+    if not int(s.get("read_select", 1)):
+        return {r["video_id"]: "全部" for r in rows}
+    q = read_quota(len(urls), s)
+    role = min(int(s["read_role"]), max(1, q // 5))
+    week_cap = max(role, q // 5)
+    must, week_floor = int(s["read_must_plays"]), int(s["read_week_plays"])
+    import pool as pool_mod
+    arts = pool_mod.artist_accounts(
+        [{"video_id": r["video_id"]} for r in rows if r.get("author")],
+        {r["video_id"]: r for r in rows if r.get("author")}, artist) if artist else set()
+    out = {}
+    for k, rs in by_page.items():
+        if not any(r.get("plays") is not None for r in rs):
+            out.update({r["video_id"]: "全部" for r in rs})
+            continue
+        P = lambda r: r.get("plays") or 0   # noqa: E731
+        by_play = sorted(rs, key=lambda r: (-P(r), r["order"]))
+        born = id_time(music_id_of(urls[k - 1])) if k - 1 < len(urls) else None
+        born_s = (datetime.datetime.fromtimestamp(born, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                  if born else "")
+        mine = {}
+
+        def add(r, why):
+            if r["video_id"] not in mine and r["video_id"] not in out:
+                mine[r["video_id"]] = why
+        # 本人・最初期を先に印を付ける（50万以上と重なっても、合計の上限で外さないように）
+        for r in [r for r in by_play if (r.get("author") or {}).get("unique_id") in arts][:role]:
+            add(r, "本人")
+        timed = [r for r in rs if r.get("create_time") and r["create_time"] >= born_s]
+        for r in sorted(timed, key=lambda r: (r["create_time"], r["order"]))[:role]:
+            add(r, "最初期")
+        for r in by_play:
+            if P(r) >= must:
+                add(r, "50万以上" if must == 500000 else f"{must:,}再生以上")
+        weeks, in_time = collections.defaultdict(list), {r["video_id"] for r in timed}
+        for r in by_play:
+            if P(r) >= week_floor and r["video_id"] in in_time:
+                weeks[_week(r["create_time"])].append(r)
+        n_posts = collections.Counter(_week(r["create_time"]) for r in timed)
+        picked = sorted(weeks, key=lambda w: (-n_posts[w], w))[:week_cap]
+        for w in sorted(picked):
+            add(weeks[w][0], "週の一番")
+        for r in by_play:
+            if len(mine) >= q:
+                break
+            add(r, "再生順")
+        out.update(mine)
+    cap = int(s["read_cap"])
+    if len(out) > cap:
+        plays = {r["video_id"]: r.get("plays") or 0 for r in rows}
+        rank = {"再生順": 0, "週の一番": 1}
+        drop = sorted((v for v, w in out.items() if w not in ("本人", "最初期")),
+                      key=lambda v: (rank.get(out[v], 2), plays[v]))
+        for v in drop[:len(out) - cap]:
+            del out[v]
+    return out
 
 
 def summary_files(d: Path) -> list:

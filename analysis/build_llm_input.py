@@ -65,7 +65,7 @@ if len(PAGES) >= 2:
         durs = [e["music"]["duration"] for e in enriched.values()
                 if str((e.get("music") or {}).get("id")) == mid and (e.get("music") or {}).get("duration")]
         SOUND_OF_ID[mid], SOUND_OF_PAGE[k] = tag, tag
-        SOUNDS.append({"tag": tag, "url": p["url"], "title": p.get("title"), "creator": p.get("creator"), "kind": p.get("kind") or "",
+        SOUNDS.append({"tag": tag, "page": k, "url": p["url"], "title": p.get("title"), "creator": p.get("creator"), "kind": p.get("kind") or "",
                        "duration": p.get("duration") or (max(set(durs), key=durs.count) if durs else None),
                        "video_count": p.get("video_count"), "video_count_text": p.get("video_count_text")})
 

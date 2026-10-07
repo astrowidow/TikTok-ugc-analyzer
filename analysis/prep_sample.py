@@ -2,12 +2,18 @@
 分類の試行用: 既存スクレイパーの CSV から、分類軸の提案とラベル付けに使うサンプルを作る。
 
   python3 analysis/prep_sample.py "シルエット.csv" output/trial_silhouette
+  python3 analysis/prep_sample.py <分析>/derived/list.csv <分析>/derived --ledger <分析>/raw/ledger.jsonl
 
 出力:
   videos.jsonl      … 全行（正規化済み。week / hashtags / plays を数値化）
   sample_taxonomy.md … 分類軸の提案に読ませる層化サンプル（上位 + 最初期 + 週ごとの無作為）
   sample_label.jsonl … ラベル付け対象（離陸前は全件 + 離陸後は上位と無作為）
   weekly.tsv        … 週次の本数と再生数
+  weekly_sounds.tsv … 音源（楽曲ページ）ごとの週次の本数と再生数（台帳があり、音源が2つ以上のとき）
+
+台帳（--ledger。取得の一覧の段が楽曲ページのグリッドで見た全動画。2026-10-07〜）があれば、週次の本数・再生と離陸週は台帳で数える。
+CSV（詳しく読んだ動画）は台帳から選んだ一部なので、週ごとの本数には使わない
+（2026-10-07 ユーザー「再生数が少ないものはリストに入れなくていい。この時期に何本投稿されたかだけ取っといて。どの楽曲ページのものかは残したい」）
 
 サンプルの選び方は決定論的（seed 固定）。LLM に渡すのは sample_*。
 """
@@ -19,8 +25,14 @@ import random
 import re
 import sys
 
-src = pathlib.Path(sys.argv[1])
-out = pathlib.Path(sys.argv[2])
+args = sys.argv[1:]
+ledger_path = None
+if "--ledger" in args:
+    i = args.index("--ledger")
+    ledger_path = pathlib.Path(args[i + 1])
+    del args[i:i + 2]
+src = pathlib.Path(args[0])
+out = pathlib.Path(args[1])
 out.mkdir(parents=True, exist_ok=True)
 random.seed(20260911)
 
@@ -63,9 +75,25 @@ with open(out / "videos.jsonl", "w", encoding="utf-8") as f:
     for r in rows:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-# 週次
+
+def week_of(date: str) -> str:
+    y, m, dd = map(int, date[:10].split("-"))
+    iso = datetime.date(y, m, dd).isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
+# 週次（台帳があれば台帳の全動画で。無ければ CSV の全行で）
+ledger = []
+if ledger_path and ledger_path.exists():
+    for line in open(ledger_path, encoding="utf-8"):
+        if line.strip():
+            x = json.loads(line)
+            if x.get("create_time"):
+                ledger.append(x)
+counted = [{"week": week_of(x["create_time"]), "plays": x.get("plays") or 0, "source": int(x.get("source") or 1)}
+           for x in ledger] if ledger else rows
 weeks = {}
-for r in rows:
+for r in counted:
     w = weeks.setdefault(r["week"], {"n": 0, "plays": 0})
     w["n"] += 1
     w["plays"] += r["plays"]
@@ -73,10 +101,24 @@ with open(out / "weekly.tsv", "w", encoding="utf-8") as f:
     f.write("week\tn\tplays\n")
     for k in sorted(weeks):
         f.write(f"{k}\t{weeks[k]['n']}\t{weeks[k]['plays']}\n")
+sources = sorted({r["source"] for r in counted}) if ledger else []
+if len(sources) >= 2:
+    by = {}
+    for r in counted:
+        w = by.setdefault((r["week"], r["source"]), {"n": 0, "plays": 0})
+        w["n"] += 1
+        w["plays"] += r["plays"]
+    with open(out / "weekly_sounds.tsv", "w", encoding="utf-8") as f:
+        f.write("week\tsource\tn\tplays\n")
+        for (k, src_k) in sorted(by):
+            f.write(f"{k}\t{src_k}\t{by[(k, src_k)]['n']}\t{by[(k, src_k)]['plays']}\n")
+elif (out / "weekly_sounds.tsv").exists():
+    (out / "weekly_sounds.tsv").unlink()
 
 # 離陸週: 週の本数が初めて全体の 5% を超えた週
 total = len(rows)
-takeoff = next((k for k in sorted(weeks) if weeks[k]["n"] >= total * 0.05), sorted(weeks)[-1])
+grand = len(counted)
+takeoff = next((k for k in sorted(weeks) if weeks[k]["n"] >= grand * 0.05), sorted(weeks)[-1])
 
 # --- 分類軸の提案用サンプル ---
 top = sorted(rows, key=lambda r: -r["plays"])[:100]
@@ -102,7 +144,8 @@ def line(r):
 
 with open(out / "sample_taxonomy.md", "w", encoding="utf-8") as f:
     f.write(f"# 分類軸提案用サンプル: {src.name}\n\n")
-    f.write(f"全{total}本 / 期間 {rows[0]['date']}〜{rows[-1]['date']} / 離陸週 {takeoff}\n")
+    f.write((f"全{total}本" if not ledger else f"詳しく読んだ{total}本（楽曲ページのグリッドで見た{grand}本から選んだもの）") +
+            f" / 期間 {rows[0]['date']}〜{rows[-1]['date']} / 離陸週 {takeoff}\n")
     f.write(f"サンプル {len(sample_tax)}本 = 再生上位100 + 最初期40 + 離陸後の各週から無作為6\n\n")
     f.write("| seq | 日付 | 再生 | いいね | コメント | 型 | 投稿者 | 説明文 |\n|---|---|---|---|---|---|---|---|\n")
     for r in sample_tax:
@@ -120,5 +163,5 @@ with open(out / "sample_label.jsonl", "w", encoding="utf-8") as f:
     for r in label_set:
         f.write(json.dumps({k: r[k] for k in ("seq", "video_id", "date", "week", "type", "username", "desc", "plays", "likes", "comments")}, ensure_ascii=False) + "\n")
 
-print(f"rows={total} takeoff={takeoff} taxonomy_sample={len(sample_tax)} label_set={len(label_set)} "
+print(f"rows={total} ledger={len(ledger)} takeoff={takeoff} taxonomy_sample={len(sample_tax)} label_set={len(label_set)} "
       f"(pre-takeoff {len(pre)} + post top {len(post_top)} + post random {len(post_rand)})")

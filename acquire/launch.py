@@ -27,14 +27,16 @@ sys.path.insert(0, str(BASE_DIR))
 from acquire import pipeline, worker  # noqa: E402
 
 TASK_NAME = "tiktok-acq"
-# 見込み（シルエット規模）。一覧5分・属性 1本3.3秒・派生2分・コメントはコメントを取る本数×1本の見込み（pipeline.minutes_per_comment_video）＋準備10分
+# 見込み（シルエット規模）。一覧4分・属性 1本3.3秒・派生2分・コメントはコメントを取る本数×1本の見込み（pipeline.minutes_per_comment_video）＋準備10分
 # （準備: Chrome を起こしてグリッドで対象を探す。2026-10-06 の実走で 5.5分）
-# 一覧の時間と、一覧が済むまでの本数は、楽曲ページ1つあたり（2026-10-06 の実走: シルエット2ページで一覧 580秒・1,812本、きゃわ2ページで 1,711本）
-LIST_SECONDS = 290
+# 一覧（台帳）は楽曲ページ1つあたり「開いて題を読む約25秒＋スクロール1回約3.7秒」（2026-10-07 の確かめ: 60回で 220〜250秒・約1,700本）。
+# 一覧が済むまでの属性の本数は、詳しく読む本数の枠（pipeline.read_quota）から見る。全部読む設定（read_select 0）なら1ページ約1,700本
+LIST_SECONDS_BASE = 25
+LIST_SECONDS_PER_SCROLL = 3.7
 FAN_SEARCH_SECONDS = 240
 ENRICH_SECONDS_PER_VIDEO = 3.3
 DERIVE_SECONDS = 120
-TYPICAL_VIDEOS = 900
+TYPICAL_VIDEOS = 1700
 # プールが決まる前の、コメントを取る本数の見込み（"page"＝必ず入れる動画＋属性のまとまりごとの上位。シルエット79本・きゃわ116本、2026-10-06）
 TYPICAL_COMMENT_VIDEOS = 100
 
@@ -128,7 +130,11 @@ def _remaining_seconds(m: dict) -> int:
     steps = acq.get("steps") or {}
     s = {**pipeline.DEFAULTS, **(m.get("acquisition_settings") or {})}
     pages = max(1, len(pipeline.music_urls_of(m)))   # 楽曲ページが2つ以上なら、一覧も属性もページの数だけ
-    n_links = ((steps.get("list") or {}).get("detail") or {}).get("links") or TYPICAL_VIDEOS * pages
+    if int(s.get("read_select", 1)):
+        guess_links = min(int(s["read_cap"]), pipeline.read_quota(pages, s) * pages)
+    else:
+        guess_links = TYPICAL_VIDEOS * pages
+    n_links = ((steps.get("list") or {}).get("detail") or {}).get("links") or guess_links
     if s.get("comment_plan", "page") == "page":
         guess = TYPICAL_COMMENT_VIDEOS
     else:
@@ -136,7 +142,7 @@ def _remaining_seconds(m: dict) -> int:
     n_pool = ((steps.get("pool") or {}).get("detail") or {}).get("n_pool") or guess
     per = pipeline.minutes_per_comment_video(s)
     # resolve: 同じ曲のファンの音源を探す（discover 4ページ・動画40本ほどの音源・UGC 数4つ。pipeline.Run.add_fan_sounds）
-    est = {"resolve": FAN_SEARCH_SECONDS if int(s.get("fan_sounds") or 0) else 60, "list": LIST_SECONDS * pages, "enrich": n_links * ENRICH_SECONDS_PER_VIDEO, "derive": DERIVE_SECONDS,
+    est = {"resolve": FAN_SEARCH_SECONDS if int(s.get("fan_sounds") or 0) else 60, "list": pages * (LIST_SECONDS_BASE + LIST_SECONDS_PER_SCROLL * pipeline.ledger_scrolls(pages, s)), "enrich": n_links * ENRICH_SECONDS_PER_VIDEO, "derive": DERIVE_SECONDS,
            "pool": 10, "comments": n_pool * per * 60 + 600,
            "comments_md": 30, "notify": 5}
     total = 0.0

@@ -141,14 +141,23 @@ class TestStrayFileInAnalysesDir(AppBase):
 # ---------------------------------------------------------------------------
 class TestRemainingSeconds(R1Base):
     def test_bug_two_music_pages_double_list_and_enrich(self):
-        """楽曲ページが2つなら一覧は約900本ずつ増える（10/6 の実走: シルエット2ページで 1,812本・一覧 580秒、きゃわ 1,711本）。
-        一覧が済むまで（分析を始めた返事で AI が言う「終わるのは〜ごろ」）も、2ページ分の属性を見込むべき"""
+        """楽曲ページが2つなら、一覧（台帳）はページの数だけかかる。詳しく読む本数は 2026-10-07 から音源の数で割る
+        （1音源 500本・2音源 250本ずつで、合計は同じ。pipeline.read_quota）ので、属性は増えない。
+        全部読む設定（read_select 0）なら、前と同じく2ページ分の属性を見込む（10/6 の実走: シルエット2ページで 1,812本）"""
         la = self.la
         one = {"analysis_id": "x1", "music_url": U1, "music_urls": [U1], "acquisition": {"status": "queued", "steps": {}}}
         two = {"analysis_id": "x2", "music_url": U1, "music_urls": [U1, U2], "acquisition": {"status": "queued", "steps": {}}}
         diff = la._remaining_seconds(two) - la._remaining_seconds(one)
+        page = la.LIST_SECONDS_BASE + la.LIST_SECONDS_PER_SCROLL * 60
+        self.assertAlmostEqual(diff, page, delta=2, msg=f"2ページなら一覧1ページ分だけ増える（差 {diff}秒）")
+        many = {**two, "music_urls": [U1] + [f"{U2}{i}" for i in range(20)]}
+        self.assertGreater(la._remaining_seconds(many) - la._remaining_seconds(one), 500 * la.ENRICH_SECONDS_PER_VIDEO,
+                           "21音源なら1音源50本で合計1,000本ぶんの属性")
+        for m in (one, two):
+            m["acquisition_settings"] = {"read_select": 0}
+        diff = la._remaining_seconds(two) - la._remaining_seconds(one)
         self.assertGreaterEqual(diff, 0.9 * la.TYPICAL_VIDEOS * la.ENRICH_SECONDS_PER_VIDEO,
-                                f"2ページでも1ページと同じ見込み（差 {diff}秒）")
+                                f"全部読む設定で2ページでも1ページと同じ見込み（差 {diff}秒）")
 
     def test_bug_resumed_enrich_uses_progress_not_first_start(self):
         """属性の段の途中で Mac が眠り（係は止められ、段の started_at は最初のまま残る）、6時間後に続きから始めた。

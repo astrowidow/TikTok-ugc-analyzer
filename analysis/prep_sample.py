@@ -115,10 +115,13 @@ if len(sources) >= 2:
 elif (out / "weekly_sounds.tsv").exists():
     (out / "weekly_sounds.tsv").unlink()
 
-# 離陸週: 週の本数が初めて全体の 5% を超えた週
+# 離陸週: 週の本数が初めて「全体の 5%」か「ピーク週の半分」の少ない方を超えた週。
+# 台帳（2026-10-07〜）は古い楽曲ページだと何年分にも散らばり、5% に届く週が無くなる（シルエット 2020年のページ:
+# 3,467本・217週でピーク週 156本 < 5% の173本 → 最後の週になり、詳しく読んだ全動画がラベルの対象になった）
 total = len(rows)
 grand = len(counted)
-takeoff = next((k for k in sorted(weeks) if weeks[k]["n"] >= grand * 0.05), sorted(weeks)[-1])
+line = min(grand * 0.05, max(w["n"] for w in weeks.values()) * 0.5)
+takeoff = next((k for k in sorted(weeks) if weeks[k]["n"] >= line), sorted(weeks)[-1])
 
 # --- 分類軸の提案用サンプル ---
 top = sorted(rows, key=lambda r: -r["plays"])[:100]

@@ -888,10 +888,11 @@ def phase_materials(a) -> dict:
     # 区切りの候補（数字で）
     weeks = sorted(allw)
     grand = sum(n for n, _ in allw.values()) or 1
-    takeoff = next((w for w in weeks if allw[w][0] >= grand * 0.05), weeks[-1] if weeks else "")
+    line = min(grand * 0.05, max((n for n, _ in allw.values()), default=0) * 0.5)   # analysis/prep_sample.py と同じ
+    takeoff = next((w for w in weeks if allw[w][0] >= line), weeks[-1] if weeks else "")
     peak = max(weeks, key=lambda w: allw[w][0]) if weeks else ""
     cands = [f"- 最初の投稿: {min(r['date'] for r in recs.values())}（{min(recs.values(), key=lambda r: r['date'])['week']}）",
-             f"- 離陸週（週の本数が全体の5%を初めて超えた週）: {takeoff}",
+             f"- 離陸週（週の本数が、全体の5%かピーク週の半分の少ない方を初めて超えた週）: {takeoff}",
              f"- 本数のピーク週: {peak}（{allw.get(peak, (0, 0))[0]}本）"]
     prev = None
     for w in weeks:

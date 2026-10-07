@@ -8,6 +8,7 @@ AI も TikTok も使わない。
 - 写すもの: raw（covers を除く。サムネの一覧は derived/llm_input/sheets に作ってある）・fetch_log・derived・analysis.json
 - AI の仕事の状態（state）は写さない（AI 役が最初の仕事＝界隈の軸から回す）。界隈の確認は省く（skip_confirm）
 - 題を変える（同じ題だとレポートのフォルダを上書きする）
+- --rederive: 集計と AI の入力（derive）を今のコードで作り直す（取得のあとに集計を直したとき。動画の一覧と通し番号は変わらない）
 """
 import json
 import shutil
@@ -42,6 +43,8 @@ def main():
     (dst / "analysis.json").write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
     import proto_runner as pr
     pr._set_options(dst, skip_confirm=True, skip_confirm_at=pipeline.now())
+    if "--rederive" in sys.argv:
+        print(json.dumps(pipeline.Run(new).step_derive(), ensure_ascii=False))
     led = sum(1 for _ in open(dst / "raw" / "ledger.jsonl", encoding="utf-8")) if (dst / "raw" / "ledger.jsonl").exists() else None
     links = sum(1 for _ in open(dst / "raw" / "grid_links.jsonl", encoding="utf-8"))
     print(json.dumps({"id": new, "title": m["title"], "ledger": led, "links": links}, ensure_ascii=False))

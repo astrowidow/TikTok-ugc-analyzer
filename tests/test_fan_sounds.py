@@ -100,6 +100,26 @@ class TestSearch(unittest.TestCase):
         self.assertEqual(r["meta_song_ids"], [META])
         self.assertIn(FAN, [c["id"] for c in r["candidates"]])
 
+    def test_counts_sounds_from_discover_list_without_opening(self):
+        """discover の一覧データ（discover_items の形。音源つき）なら、動画を開かずに数える。開くのは曲の番号を知る分だけ
+        （公式の音源1本・候補の音源ごとに1本）。語は上限なしで、2本以上に出た表記ゆれの語を全部（2026-10-07）"""
+        def item(v, mid, title, tags=()):
+            return {"video": v, "music": {"id": mid, "title": title, "authorName": "だれか", "duration": 12}, "desc": "",
+                    "hashtags": list(tags)}
+        song_page = [item(f"o{i}", "7644119804865808400", "きゃわぽっぴんどぅー", ["きゃわほっぴんどぅ", "mbti"]) for i in range(6)]
+        song_page += [item("f1", FAN, "オリジナル楽曲 - 쿠레아", ["キャワポッピンドゥー", "きゃわほっぴんどぅ"]),
+                      item("n1", NAGI, "オリジナル楽曲 - なぎ"), item("x1", "7000000000000000001", "べつの曲")]
+        pages = {"きゃわぽっぴんどぅー": song_page,
+                 "きゃわほっぴんどぅ": [item("f2", FAN, "オリジナル楽曲 - 쿠레아"), item("f3", FAN, "オリジナル楽曲 - 쿠레아")],
+                 "キャワポッピンドゥー": [item("f4", FAN, "オリジナル楽曲 - 쿠레아")]}
+        self.music.update({"o0": mus("7644119804865808400", "きゃわぽっぴんどぅー"), "f1": mus(FAN, "オリジナル楽曲 - 쿠레아"),
+                           "n1": mus(NAGI, "オリジナル楽曲 - なぎ"), "x1": mus("7000000000000000001", "べつの曲", meta=("999",))})
+        r = pipeline.search_fan_sounds("きゃわぽっぴんどぅー", {"7644119804865808400"}, lambda w: pages.get(w, []), self.music_of)
+        self.assertEqual(r["words"], ["きゃわぽっぴんどぅー", "きゃわほっぴんどぅ"], "1本にしか出ない「キャワポッピンドゥー」は開かない")
+        self.assertEqual([(c["id"], c["hits"]) for c in r["candidates"]], [(FAN, 3), (NAGI, 1)])
+        self.assertEqual((r["videos"], r["opened"]), (11, 4))
+        self.assertEqual(sorted(self.read), ["f1", "n1", "o0", "x1"])
+
     def test_no_song_id_no_candidates(self):
         self.music["v1"] = mus("7644119804865808400", "きゃわぽっぴんどぅー", "iLiFE!", meta=())
         r = pipeline.search_fan_sounds("きゃわぽっぴんどぅー", {"7644119804865808400"}, lambda w: self.pages.get(w, []),

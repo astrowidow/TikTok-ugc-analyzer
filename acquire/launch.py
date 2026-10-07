@@ -33,7 +33,7 @@ TASK_NAME = "tiktok-acq"
 # 一覧が済むまでの属性の本数は、詳しく読む本数の枠（pipeline.read_quota）から見る。全部読む設定（read_select 0）なら1ページ約1,700本
 LIST_SECONDS_BASE = 25
 LIST_SECONDS_PER_SCROLL = 3.7
-FAN_SEARCH_SECONDS = 240
+FAN_SEARCH_SECONDS = 360   # 2026-10-07 discover の一覧データで数える形にして 267〜397秒（前は 110〜131秒）
 ENRICH_SECONDS_PER_VIDEO = 3.3
 DERIVE_SECONDS = 120
 TYPICAL_VIDEOS = 1700

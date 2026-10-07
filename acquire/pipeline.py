@@ -82,7 +82,11 @@ DEFAULTS = {
     # 読む discover のページは曲名と表記ゆれの語 fan_words 個、1ページ fan_videos 本。見つけた音源は全部 UGC 数を読み、
     # 主の UGC の2割以上なら全部足す（数の上限は付けない。2026-10-06 ユーザー「こういう変な制限はしなくていいよ」。
     # きゃわの実走では 39K・8.5K（フル版）・6.9K の3つ。詳しく読む本数は read_* で音源の数に合わせて割るので、足しても台帳の約4分が延びるだけ）
-    "fan_sounds": 1, "fan_words": 3, "fan_videos": 16,
+    # 2026-10-07: discover のページをスクロールして一覧データ（/api/seo/kap/video_list/）から音源を数える（1語 fan_scrolls 回で約60本。
+    # 動画は開かない）。表記ゆれの語は上限なし（fan_words 0。2本以上に出た語を全部）。同じ曲かは候補の音源ごとに動画を1〜2本開いて確かめる。
+    # 前（1語16本・3語まで、動画を全部開く）は、きゃわの 10/7 の取得で 32本を読んで쿠레아（自己紹介の波の音源）が1本も出ず、取りこぼした
+    # （쿠레아の動画は説明文に曲名を書くのが15%だけで、#mbti が多い。discover の並びに出るのは1割ほど）
+    "fan_sounds": 1, "fan_words": 0, "fan_videos": 16, "fan_scrolls": 10,
     "collect_scrolls": 150,      # コメント: グリッドでプールを探すスクロールの上限
     # 要求の間隔（平均と60秒の上限）。2026-10-05 にユーザーの判断で 1.8回/分・60秒に2回 → 3回/分・60秒に4回へ上げた。
     # 実走: 2.0回/分で5時間・123本、3回/分で1時間・40本、どちらも空応答・4xx 0。同じ動画の取得が68%に（docs/COMMENT_SPEED.md 第5章）。
@@ -266,6 +270,7 @@ class Run:
         self.lock("同じ曲のファンの音源を探す")
         import scraper
         d = scraper.create_headless_driver()
+        hook_discover(d)
         checked, added = [], []
         try:
             def music_of(u):
@@ -285,9 +290,10 @@ class Run:
                 return list(dict.fromkeys(h.split("?")[0] for h in (d.execute_script(
                     "return Array.from(document.querySelectorAll('a[href*=\"/video/\"]')).map(a => a.href);") or [])))
 
-            found = search_fan_sounds(song, ids, lambda w: discover_links(d, w, int(s["fan_videos"]))[:int(s["fan_videos"])], music_of,
-                                      int(s["fan_words"]), page_links)
-            self.log(f"    discover {len(found['words'])}ページ（{'・'.join(found['words'])}）で動画 {found['videos']}本の音源を読み、"
+            found = search_fan_sounds(song, ids, lambda w: discover_items(d, w, int(s["fan_scrolls"]), int(s["fan_videos"])),
+                                      music_of, int(s["fan_words"]) or None, page_links)
+            self.log(f"    discover {len(found['words'])}ページ（{'・'.join(found['words'])}）で動画 {found['videos']}本の音源を読み"
+                     f"（開いた動画 {found.get('opened', found['videos'])}本）、"
                      f"同じ曲（TikTok の照合 {'・'.join(found['meta_song_ids']) or 'なし'}）のほかの音源 {len(found['candidates'])}個")
             cands = found["candidates"]
             if cands and not main_n:
@@ -1197,15 +1203,89 @@ def discover_links(driver, word: str, limit: int = 16, wait: float = 8) -> list:
     return list(dict.fromkeys(links))
 
 
-def related_words(song: str, counts, n: int) -> list:
-    """関連する検索の語・ハッシュタグ（counts: 語 → 出た動画の数）のうち、曲名の表記ゆれか曲名を含む語を、多い順に n 個。
-    曲名そのものと、同じ discover のページになる語は除く"""
+# discover のページは、スクロールのたびに /api/seo/kap/video_list/ を読む（1回16本）。その動画の音源（id・題・作者・長さ）が入っている
+# （TikTok の照合した曲の番号は入っていない。2026-10-07 にきゃわで確かめた: 10回で60本・32秒）
+DISCOVER_HOOK_JS = r"""
+(() => {
+  if (window.__disc) return;
+  window.__disc = [];
+  const want = u => typeof u === 'string' && /\/api\/seo\/kap\/video_list/.test(u);
+  const take = t => {
+    try {
+      const j = JSON.parse(t);
+      for (const it of (j.videoList || [])) {
+        const m = it.music || {}, a = it.author || {};
+        window.__disc.push({id: it.id, uid: a.uniqueId, desc: it.desc || '',
+          hashtags: (it.textExtra || []).map(x => x.hashtagName).filter(x => x),
+          music: {id: m.id, title: m.title, authorName: m.authorName, duration: m.duration}});
+      }
+    } catch (e) {}
+  };
+  const of = window.fetch;
+  window.fetch = async function(input, init) {
+    const u = typeof input === 'string' ? input : (input && input.url);
+    const r = await of.apply(this, arguments);
+    if (want(String(u))) { try { take(await r.clone().text()); } catch (e) {} }
+    return r;
+  };
+  const oo = XMLHttpRequest.prototype.open, os = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function(m, u) { this.__u = String(u); return oo.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function() {
+    if (want(this.__u)) this.addEventListener('load', () => { try { take(this.responseText); } catch (e) {} });
+    return os.apply(this, arguments);
+  };
+})();
+"""
+
+
+def hook_discover(driver) -> bool:
+    """これから開く discover のページで、一覧データの動画の音源を拾う仕掛けを入れる。入れられなければ False（discover_items は URL だけ返す）"""
+    try:
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": DISCOVER_HOOK_JS})
+        return True
+    except Exception:
+        return False
+
+
+def discover_items(driver, word: str, scrolls: int = 10, limit: int = 16, wait: float = 6) -> list:
+    """discover のページを scrolls 回スクロールして、並んだ動画を一覧データから: [{"video", "music", "desc", "hashtags"}]。
+    一覧データが拾えなければ（仕掛けが無い・TikTok の形が変わった）、前と同じく並びの URL（文字列。開いて音源を読む）"""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    links = discover_links(driver, word, limit, wait=8)
+    if not links:
+        return []
+    for _ in range(max(0, scrolls)):
+        try:
+            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.END)
+        except Exception:
+            break
+        time.sleep(2.5)
+    try:
+        got = driver.execute_script("return window.__disc || [];") or []
+    except Exception:
+        got = []
+    out, seen = [], set()
+    for x in got:
+        if not isinstance(x, dict) or not x.get("id") or x["id"] in seen:
+            continue
+        seen.add(x["id"])
+        out.append({"video": f"https://www.tiktok.com/@{x.get('uid') or 'user'}/video/{x['id']}", "music": x.get("music") or {},
+                    "desc": x.get("desc") or "", "hashtags": x.get("hashtags") or []})
+    return out or links
+
+
+def related_words(song: str, counts, n, min_count: int = 1) -> list:
+    """関連する検索の語・ハッシュタグ（counts: 語 → 出た動画の数）のうち、曲名の表記ゆれか曲名を含む語を、多い順に n 個（None は上限なし）。
+    min_count 本より少ない動画にしか出ない語は除く。曲名そのものと、同じ discover のページになる語も除く"""
     import difflib
     k = kana_key(song)
-    if not k or n <= 0:
+    if not k or (n is not None and n <= 0):
         return []
     out, slugs = [], {discover_slug(song).lower()}
     for w, _c in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+        if _c < min_count:
+            break
         kw = kana_key(w)
         if not kw or not (k in kw or difflib.SequenceMatcher(None, k, kw).ratio() >= 0.8):
             continue
@@ -1213,40 +1293,88 @@ def related_words(song: str, counts, n: int) -> list:
             continue
         slugs.add(discover_slug(w).lower())
         out.append(w)
-        if len(out) >= n:
+        if n is not None and len(out) >= n:
             break
     return out
 
 
-def search_fan_sounds(song: str, page_ids, links_of, music_of, words: int = 3, page_links=None) -> dict:
-    """同じ曲のほかの音源（ファンが上げた「オリジナル楽曲 - 〇〇」など）を探す。links_of(語) → 動画の URL、music_of(URL) → read_video_music の形。
-    1. 曲名の discover のページの人気の動画の音源を読む。取るページ（page_ids）の音源を使った動画から、TikTok が照合した曲の番号を知る
-       （無ければ page_links() の動画を3本まで読む）
-    2. 読んだ動画の関連する検索の語とハッシュタグのうち、曲名の表記ゆれ・曲名を含む語を多い順に words 個、同じように読む
-       （2026-10-06 きゃわぽっぴんどぅー: 39K のファンの音源は曲名のページには無く、「キャワポッピンドゥー」「きゃわほっぴんどぅ」
-       「きゃわぽっぴんどぅー ダンス」のページに合わせて5回出た）
-    3. 取るページと同じ曲の番号を持つ、取るページでない音源を、出た回数の多い順に返す（番号の無い音源は、同じ曲か分からないので返さない）
-    戻り値 {"words", "videos"（音源が読めた動画の数）, "meta_song_ids", "candidates": [{"id", "title", "author", "duration", "hits", "videos"}]}"""
+def search_fan_sounds(song: str, page_ids, links_of, music_of, words=None, page_links=None) -> dict:
+    """同じ曲のほかの音源（ファンが上げた「オリジナル楽曲 - 〇〇」など）を探す。links_of(語) → discover の動画
+    （discover_items の形 {"video", "music", ...}。音源が入っていれば開かない。URL の文字列なら開いて読む）、music_of(URL) → read_video_music の形。
+    1. 曲名の discover のページの動画の音源を数える
+    2. その動画の説明文・ハッシュタグ・関連する検索の語のうち、曲名の表記ゆれ・曲名を含む語（words 個。None は上限なしで2本以上に出た語）の
+       ページも同じように数える（2026-10-06 きゃわぽっぴんどぅー: 39K のファンの音源は曲名のページには無く、「キャワポッピンドゥー」
+       「きゃわほっぴんどぅ」「きゃわぽっぴんどぅー ダンス」のページに合わせて5回出た）
+    3. 取るページ（page_ids）の音源の動画を開いて、TikTok が照合した曲の番号を知る（無ければ page_links() の動画を3本まで）
+    4. 取るページでない音源ごとに動画を2本まで開いて曲の番号を読み、同じ番号の音源を、出た回数の多い順に返す
+       （番号の無い音源は、同じ曲か分からないので返さない）
+    戻り値 {"words", "videos"（音源が分かった動画の数）, "opened"（開いた動画の数）, "meta_song_ids",
+           "candidates": [{"id", "title", "author", "duration", "hits", "videos"}]}"""
     page_ids = {str(x) for x in page_ids}
-    seen, reads = set(), []
+    seen, reads, opened = set(), [], {}
+    counts = collections.Counter()
+
+    def open_(u):
+        if u not in opened:
+            opened[u] = music_of(u) or {}
+        return opened[u]
 
     def read(word):
-        for u in links_of(word) or []:
-            if u in seen:
-                continue
-            seen.add(u)
-            m = music_of(u) or {}
+        for x in links_of(word) or []:
+            if isinstance(x, dict):
+                u, mu = x.get("video") or x.get("url"), x.get("music") or {}
+                if not u or u in seen:
+                    continue
+                seen.add(u)
+                m = ({"id": str(mu["id"]), "title": mu.get("title"), "author": mu.get("authorName") or mu.get("author"),
+                      "duration": mu.get("duration"), "desc": x.get("desc") or "", "hashtags": x.get("hashtags") or []}
+                     if mu.get("id") else open_(u))
+            else:
+                u = x
+                if u in seen:
+                    continue
+                seen.add(u)
+                m = open_(u)
             if m.get("id"):
-                reads.append({**m, "video": u, "word": word})
+                reads.append({**m, "id": str(m["id"]), "video": u, "word": word})
+
+    def words_of(m):
+        return (set(m.get("suggested_words") or []) | set(m.get("hashtags") or [])
+                | set(re.findall(r"#([^\s#]+)", m.get("desc") or "")))
+
+    def meta_of(rs):
+        """同じ音源の動画の、曲の番号（開いた動画に無ければ2本まで開く）"""
+        got = {x for m in rs for x in (m.get("meta_song_ids") or [])}
+        for m in rs[:2]:
+            if got:
+                break
+            got |= set(open_(m["video"]).get("meta_song_ids") or [])
+        return got
+
+    def sounds():
+        out = collections.defaultdict(list)
+        for m in reads:
+            out[m["id"]].append(m)
+        return out
 
     read(song)
-    counts = collections.Counter()
+    # 曲名のページの音源ごとに、照合のための動画を先に開く（開いた動画の関連する検索の語も、表記ゆれの語を選ぶのに使う。
+    # 一覧データには関連する検索の語が無い）
+    for rs in sounds().values():
+        meta_of(rs)
     for m in reads:
-        counts.update(set(m.get("suggested_words") or []) | set(re.findall(r"#([^\s#]+)", m.get("desc") or "")))
-    ws = related_words(song, counts, words)
+        counts.update(words_of(m))
+    for u, m in opened.items():
+        if u not in {r["video"] for r in reads if "suggested_words" in r}:
+            counts.update(set(m.get("suggested_words") or []))
+    ws = related_words(song, counts, words, min_count=1 if words else 2)
     for w in ws:
         read(w)
-    metas = {x for m in reads if str(m["id"]) in page_ids for x in m.get("meta_song_ids") or []}
+    by_sound = sounds()
+    metas = set()
+    for sid in page_ids:
+        if by_sound.get(sid):
+            metas |= meta_of(by_sound[sid])
     if not metas and page_links is not None:
         for u in (page_links() or [])[:3]:
             m = music_of(u) or {}
@@ -1254,16 +1382,16 @@ def search_fan_sounds(song: str, page_ids, links_of, music_of, words: int = 3, p
                 metas |= set(m.get("meta_song_ids") or [])
             if metas:
                 break
-    cands = {}
-    for m in reads:
-        if str(m["id"]) in page_ids or not metas & set(m.get("meta_song_ids") or []):
-            continue
-        c = cands.setdefault(str(m["id"]), {"id": str(m["id"]), "title": m.get("title"), "author": m.get("author"),
-                                            "duration": m.get("duration"), "hits": 0, "videos": []})
-        c["hits"] += 1
-        c["videos"].append(m["video"])
-    return {"words": [song] + ws, "videos": len(reads), "meta_song_ids": sorted(metas),
-            "candidates": sorted(cands.values(), key=lambda c: -c["hits"])}
+    cands = []
+    if metas:
+        for sid, rs in by_sound.items():
+            if sid in page_ids or not metas & meta_of(rs):
+                continue
+            m = rs[0]
+            cands.append({"id": sid, "title": m.get("title"), "author": m.get("author"), "duration": m.get("duration"),
+                          "hits": len(rs), "videos": [x["video"] for x in rs]})
+    return {"words": [song] + ws, "videos": len(reads), "opened": len(opened), "meta_song_ids": sorted(metas),
+            "candidates": sorted(cands, key=lambda c: -c["hits"])}
 
 
 def ensure_chrome(port, log) -> None:

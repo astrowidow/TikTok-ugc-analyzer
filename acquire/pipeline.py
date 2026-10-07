@@ -431,7 +431,8 @@ class Run:
                         seen[vid] = ledger_row(vid, None, k, order, it)
                         n_api += 1
                         order += 1
-                self.log(f"    一覧 {tag}: グリッド {len(hrefs)}件・一覧データ {len(api)}件 / 新規 {len(seen) - n0}（うち再生数あり {n_api}）"
+                n_grid = len({h.split("?")[0] for h in hrefs})   # 1本の動画にリンクが2つずつある
+                self.log(f"    一覧 {tag}: グリッド {n_grid}本・一覧データ {len(api)}本 / 新規 {len(seen) - n0}（うち再生数あり {n_api}）"
                          f"（スクロール{scroll_i + 1}回）")
                 info = {**(before.get(url) or {}), **{key: v for key, v in (page_info or {}).items() if v is not None}}
                 info.pop("how", None)

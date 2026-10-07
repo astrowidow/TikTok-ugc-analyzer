@@ -13,7 +13,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 import common  # noqa: E402
 import select_study as ss  # noqa: E402
 
-VERS = {"シルエット": ["x-sil-l100", "x-sil-l50", "x-sil-l20"], "きゃわ": ["x-kyw-l100", "x-kyw-l50", "x-kyw-l20"]}
+# v070: 0.7.0 で取り直した分析（台帳から選んで詳しく読む。fork_fresh.py で写す。docs/LIST_CUT.md 第7章）
+VERS = {"シルエット": ["x-sil-l100", "x-sil-l50", "x-sil-l20", "x-sil-v070"],
+        "きゃわ": ["x-kyw-l100", "x-kyw-l50", "x-kyw-l20", "x-kyw-v070"]}
 
 
 def mentioned(vd: Path) -> set:

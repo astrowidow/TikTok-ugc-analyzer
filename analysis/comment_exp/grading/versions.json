@@ -74,6 +74,21 @@
     "dir": "output/fulltest_20261006/v3",
     "role": "variant",
     "note": "通し試験 2026-10-06 の切り直しのあと（第3版）"
+   },
+   "l100": {
+    "dir": "{HOME}/analyses/x-sil-l100",
+    "role": "list_base",
+    "note": "一覧の実験（2026-10-06）: 一覧を絞らない写しを、最初の段（界隈の軸）から AI 役で回し直した基準。コメントは必ず入れる動画だけ1ページ"
+   },
+   "l50": {
+    "dir": "{HOME}/analyses/x-sil-l50",
+    "role": "list_variant",
+    "note": "一覧の実験: 楽曲ページのグリッドの上から50%（音源2つで割るのと同じ深さ）。ほかは l100 と同じ"
+   },
+   "l20": {
+    "dir": "{HOME}/analyses/x-sil-l20",
+    "role": "list_variant",
+    "note": "一覧の実験: グリッドの上から20%（音源5つで割るのと同じ深さ）"
    }
   }
  },
@@ -146,6 +161,21 @@
     "dir": "{HOME}/analyses/x-kyw-ct2",
     "role": "variant",
     "note": "ct1 と同じ条件の2回目"
+   },
+   "l100": {
+    "dir": "{HOME}/analyses/x-kyw-l100",
+    "role": "list_base",
+    "note": "一覧の実験（2026-10-06）: 一覧を絞らない写し（2ページ 1,716本）を最初の段から回し直した基準。コメントは必ず入れる動画だけ1ページ"
+   },
+   "l50": {
+    "dir": "{HOME}/analyses/x-kyw-l50",
+    "role": "list_variant",
+    "note": "一覧の実験: 楽曲ページごとにグリッドの上から50%（858本。音源2つで割る）"
+   },
+   "l20": {
+    "dir": "{HOME}/analyses/x-kyw-l20",
+    "role": "list_variant",
+    "note": "一覧の実験: 楽曲ページごとにグリッドの上から20%（343本。音源5つで割るのと同じ深さ）"
    }
   }
  }

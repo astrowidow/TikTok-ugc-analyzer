@@ -67,8 +67,15 @@ def load(aid, bases):
                 read.add(seq2v[int(n[9:])])
         truth["熟読"].update(read)
     stable = {k: {v for v, n in c.items() if n >= 2} for k, c in truth.items()}
+    # 元の版ごとの「言及」が、正解の言及（2本以上）をどれだけ含むか（ぶれの目安。list_cut_study が使う）
+    base_recall = []
+    for vd in [d] + [common.HOME / "analyses" / b for b in bases]:
+        rep = (vd / "outputs/REPORT.md").read_text(encoding="utf-8")
+        rep = rep[:rep.find("付録")] if "付録" in rep else rep
+        mine = {seq2v[int(s)] for s in set(SEQ.findall(rep)) if int(s) in seq2v}
+        base_recall.append(len(mine & stable["言及"]) / max(1, len(stable["言及"])))
     alive = [v for v in recs if (enr.get(v) or {}).get("author")]
-    return dict(recs=recs, enr=enr, labs=labs, pool=pool, fetched=fetched, truth=stable, alive=alive)
+    return dict(recs=recs, enr=enr, labs=labs, pool=pool, fetched=fetched, truth=stable, alive=alive, base_recall=base_recall)
 
 
 def num(x):

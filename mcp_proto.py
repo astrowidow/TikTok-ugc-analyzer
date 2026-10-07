@@ -209,7 +209,7 @@ def _build_server(user_of=None, local: bool = False):
                      "（名指しの無い「〇〇を分析して」には使わない。restart_analysis の返事で呼び直すように言われたときは呼ぶ）。"
                      "song は曲名、artist はアーティスト名。music_url は TikTok の楽曲ページ（https://www.tiktok.com/music/…）。"
                      + ("楽曲ページは Mac が TikTok で探す（曲名で人気の動画を開いて使われている音源を読み、楽曲ページの UGC 数を比べ、"
-                        "一番使われているページと、その2割以上使われている同じ曲の公式のページ（sped up 版など）を合わせて取る。数十秒かかる）。"
+                        "一番使われているページと、その3割以上使われている同じ曲の公式のページ（sped up 版など）を合わせて取る。数十秒かかる）。"
                         "**まず曲名とアーティスト名だけで呼んでよい**。ウェブ検索で楽曲ページ（https://www.tiktok.com/music/…）や、"
                         "その曲を使った動画（https://www.tiktok.com/@…/video/…）がすでに見つかっていれば、candidate_urls・video_urls に足してもよい。"
                         "Mac が見つけられなかったときや根拠が足りないときは、探し方が返ってくるので従って呼び直す。"

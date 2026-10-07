@@ -131,7 +131,8 @@ def _remaining_seconds(m: dict) -> int:
     s = {**pipeline.DEFAULTS, **(m.get("acquisition_settings") or {})}
     pages = max(1, len(pipeline.music_urls_of(m)))   # 楽曲ページが2つ以上なら、一覧も属性もページの数だけ
     if int(s.get("read_select", 1)):
-        guess_links = min(int(s["read_cap"]), pipeline.read_quota(pages, s) * pages)
+        # 枠の合計＋枠の外の最初期（枠×read_early_share）。本人は多くて数十本なので見込みに入れない
+        guess_links = min(int(s["read_cap"]), round(pipeline.read_quota(pages, s) * pages * (1 + float(s["read_early_share"]))))
     else:
         guess_links = TYPICAL_VIDEOS * pages
     n_links = ((steps.get("list") or {}).get("detail") or {}).get("links") or guess_links

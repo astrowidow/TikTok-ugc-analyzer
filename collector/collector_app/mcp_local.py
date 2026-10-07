@@ -121,7 +121,7 @@ class LocalHooks:
                 pass
 
     def find_sounds(self, song: str, video_urls: list | None = None, discover: bool = True,
-                    limit: int = 8, given_max: int = 3) -> dict:
+                    limit: int = 8, given_max: int = 3, artist: str = "") -> dict:
         """その曲の音源（楽曲ページ）を TikTok で探す。曲名の「discover」のページ（人気の動画が並ぶ。ログインなしで見られる）から
         動画を集め、渡された動画と合わせて、動画ごとに使っている音源を読む（1つの Chrome で。1本数秒）。
         （2026-10-04: AI のウェブ検索に出る動画は古いものが多く、先行版や個人の音源ばかりだった。discover の人気の動画8本では、
@@ -145,10 +145,16 @@ class LocalHooks:
         links = []
         try:
             if url:
-                try:   # 動画の並びは読み込みのあとから出てくる（limit 本そろうか8秒まで待つ）
-                    links = pipeline.discover_links(d, song, limit)
-                except Exception:
-                    links = []
+                # 動画の並びは読み込みのあとから出てくる（limit 本そろうか8秒まで待つ）。曲名だけのページが無い曲（トップページに飛ばされる）は、
+                # アーティスト名を足した語で（pipeline.discover_words。2026-10-07「愛くださいませ」「倍倍FIGHT」）
+                for w in pipeline.discover_words(song, artist):
+                    try:
+                        links = pipeline.discover_links(d, w, limit)
+                    except Exception:
+                        links = []
+                    if links:
+                        url = f"https://www.tiktok.com/discover/{pipeline.discover_slug(w)}"
+                        break
             # 読むのは合わせて limit + given_max 本まで（道具の返事が遅くなりすぎないように）。discover で足りなければ、渡された動画で埋める
             targets = list(dict.fromkeys(given[:max(given_max, limit + given_max - len(links[:limit]))] + links[:limit]))
             reads = [{**self._read_music(d, v), "video": v} for v in targets]

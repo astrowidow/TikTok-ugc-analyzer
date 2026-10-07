@@ -1148,7 +1148,7 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
             return _music_search_hint(song, artist, "video_urls は https://www.tiktok.com/@投稿者/video/数字 の形にする"
                                                     f"（形の違うもの: {', '.join(bad_v[:3])}）。")
         try:
-            survey = LOCAL.find_sounds(song, vids, discover=not only_one) or {}
+            survey = LOCAL.find_sounds(song, vids, discover=not only_one, artist=artist) or {}
         except Exception as e:
             survey = {"error": type(e).__name__}
         freq, other = {}, []

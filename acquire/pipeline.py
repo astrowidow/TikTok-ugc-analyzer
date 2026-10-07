@@ -66,15 +66,16 @@ DEFAULTS = {
     # 1回で約29本、60回で約1,700本・約4分（前の 30回×3セットは開き直すたびに同じ上から読み直し、約870本で頭打ちだった）。
     # 音源が多いときは合計 ledger_scrolls_total 回を音源の数で割る（最低 ledger_scrolls_min 回＝約300本）。増えなくなったら早めに止める
     "ledger_scrolls": 60, "ledger_scrolls_total": 300, "ledger_scrolls_min": 10, "list_stall": 4,
-    # 台帳から詳しく読む（1本ずつ開いて属性を取る）動画（choose_to_read）。1音源の枠は read_normal を音源の数で割った本数、最低 read_floor。
-    # ただし合計 read_cap が絶対の上限（音源100なら1音源10本）。枠の中は、再生 read_must_plays 以上を全部（枠を超えても）→
-    # 本人・最初期（各 read_role 本、枠の5分の1まで）・週の一番（再生 read_week_plays 以上。枠の5分の1まで）→ 残りを再生の多い順。
+    # 台帳から詳しく読む（1本ずつ開いて属性を取る）動画（choose_to_read。docs/LIST_CUT.md 第8章）。
+    # 枠: read_normal 本を、音源ごとの台帳の再生の合計の割合で配る（最低 read_floor。音源が多くて最低×数が read_cap を超えるなら
+    # read_cap÷数）。枠の中は再生の多い順だけ。本人は全部、最初期は枠の read_early_share の本数を、枠の外で足す。
+    # 合計が read_cap を超えたら、再生順の再生の少ないほうから外す（本人・最初期は残す）。
     # 読まない動画は台帳（raw/ledger.jsonl）に残り、週ごとの本数・音源ごとの本数・画面の文字の出現数はそこから数える。
     # 2026-10-07 ユーザー「再生数が少ないものはリストに入れなくていい。この時期に何本投稿されたかだけ取っといて」
-    # 「最低50本は読む。通常は500本が上限、音源の数で割る。絶対の上限として1000本」「50万再生以上は上限突破してでも全部読む」。
-    # read_select 0 は前と同じ（台帳を全部読む）
-    "read_select": 1, "read_normal": 500, "read_floor": 50, "read_cap": 1000, "read_must_plays": 500000,
-    "read_role": 10, "read_week_plays": 10000,
+    # 「最低50本は読む。通常は500本が上限、絶対の上限として1000本」「4万本の音源と1万本の音源で詳しく読む数が同じなのは変」
+    # 「本人は枠の外」「最初期は枠の5分の1・枠の外でいい」「週の一番はやめる」「50万以下で論じられる話は大きな流れの話じゃない」。
+    # 前のレポートが名指しした50万再生以上は、シルエット 89/89・きゃわ 97/97 本を読む（第8章）。read_select 0 は前と同じ（台帳を全部読む）
+    "read_select": 1, "read_normal": 500, "read_floor": 50, "read_cap": 1000, "read_early_share": 0.2,
     "enrich_sleep": 2.0,
     # 同じ曲のファンの音源（「オリジナル楽曲 - 〇〇」）も探し、よく使われていれば合わせて取る（Run.add_fan_sounds。0 で探さない。
     # 利用者が楽曲ページを渡した分析は 0）。2026-10-06 きゃわぽっぴんどぅー: 2番の「血液型とかMBTIとか」で自己紹介する波が、
@@ -291,7 +292,7 @@ class Run:
                     "return Array.from(document.querySelectorAll('a[href*=\"/video/\"]')).map(a => a.href);") or [])))
 
             found = search_fan_sounds(song, ids, lambda w: discover_items(d, w, int(s["fan_scrolls"]), int(s["fan_videos"])),
-                                      music_of, int(s["fan_words"]) or None, page_links)
+                                      music_of, int(s["fan_words"]) or None, page_links, artist)
             self.log(f"    discover {len(found['words'])}ページ（{'・'.join(found['words'])}）で動画 {found['videos']}本の音源を読み"
                      f"（開いた動画 {found.get('opened', found['videos'])}本）、"
                      f"同じ曲（TikTok の照合 {'・'.join(found['meta_song_ids']) or 'なし'}）のほかの音源 {len(found['candidates'])}個")
@@ -464,8 +465,11 @@ class Run:
             pg["ledger"] = sum(1 for r in seen.values() if r["source"] == k)
         song = self.meta.get("song") or {}
         why = choose_to_read(list(seen.values()), urls, s, song.get("artist") or (pages[0].get("creator") or ""))
+        quotas = read_quotas([sum((r.get("plays") or 0) for r in seen.values() if r["source"] == k)
+                              for k in range(1, len(pages) + 1)], s)
         for k, pg in enumerate(pages, 1):
             pg["links"] = sum(1 for v, r in seen.items() if r["source"] == k and v in why)
+            pg["quota"] = quotas[k - 1]
         write_json(self.p("raw", "music_pages.json"), pages)
         write_json(self.p("raw", "music_page.json"), pages[0])   # 主のページ（前からの形）
         with open(self.p("raw", "ledger.jsonl"), "w", encoding="utf-8") as f:
@@ -479,15 +483,14 @@ class Run:
                                         "collected_at": r["collected_at"]}, ensure_ascii=False) + "\n")
         self._write_links_csv()
         reasons = collections.Counter(why.values())
-        q = read_quota(len(urls), s)
-        self.log(f"    台帳 {len(seen)}本から、詳しく読む動画 {len(why)}本（1音源の枠 {q}本。"
+        self.log(f"    台帳 {len(seen)}本から、詳しく読む動画 {len(why)}本（枠 {'・'.join(map(str, quotas))}本。"
                  + "・".join(f"{k} {n}" for k, n in reasons.most_common()) + "）")
         counts = [p.get("video_count") for p in pages]
-        res = {"links": len(why), "ledger": len(seen), "quota": q, "reasons": dict(reasons),
+        res = {"links": len(why), "ledger": len(seen), "quota": quotas, "reasons": dict(reasons),
                "ugc_total": sum(c for c in counts if c) or None,
                "release": iso_time(release_time(self.release_urls())), "dropped_before_release": dropped}
         if len(pages) > 1:
-            res["pages"] = [{"url": p["url"], "links": p["links"], "ledger": p["ledger"], "ugc": p.get("video_count")}
+            res["pages"] = [{"url": p["url"], "links": p["links"], "ledger": p["ledger"], "quota": p["quota"], "ugc": p.get("video_count")}
                             for p in pages]
         return res
 
@@ -965,37 +968,41 @@ def ledger_scrolls(n_sounds: int, s: dict) -> int:
 
 
 def read_quota(n_sounds: int, s: dict) -> int:
-    """1音源あたりに詳しく読む本数（枠）: read_normal を音源の数で割る。最低 read_floor。ただし合計が read_cap を超えるなら read_cap を割る
-    （1音源 500・2音源 250・5音源 100・10〜20音源 50・50音源 20・100音源 10。2026-10-07 ユーザー）"""
-    k = max(1, n_sounds)
-    q = max(int(s["read_floor"]), int(s["read_normal"]) // k)
-    return q if q * k <= int(s["read_cap"]) else max(1, int(s["read_cap"]) // k)
+    """1音源の枠を均等に割ったときの本数（取得の時間の見込み用。実際の枠は read_quotas で再生の合計の割合で配る）"""
+    return read_quotas([1] * max(1, n_sounds), s)[0]
 
 
-def _week(create_time: str):
-    d = datetime.date.fromisoformat(str(create_time)[:10])
-    return d.isocalendar()[:2]
+def read_quotas(weights: list, s: dict) -> list:
+    """音源ごとの枠: read_normal を weights（台帳の再生の合計）の割合で配る。最低 read_floor（音源が多くて最低×数が read_cap を超えるなら
+    read_cap÷数）。合計が read_cap を超えたら、最低を超えた分を縮める。weights が全部0なら均等
+    （2音源 750M・629M → 272・228、きゃわ5音源 → 148・189・94・57・50、20音源で均等なら各50、100音源なら各10）"""
+    k = max(1, len(weights))
+    normal, cap = int(s["read_normal"]), int(s["read_cap"])
+    fl = int(s["read_floor"]) if int(s["read_floor"]) * k <= cap else max(1, cap // k)
+    ws = [max(0, w or 0) for w in weights] or [1]
+    tot = sum(ws)
+    q = [max(fl, round(normal * w / tot)) if tot else max(fl, normal // k) for w in ws]
+    if sum(q) > cap:
+        extra = [x - fl for x in q]
+        room = cap - fl * k
+        q = [fl + (int(e * room / sum(extra)) if sum(extra) else 0) for e in extra]
+    return q
 
 
 def choose_to_read(rows: list, urls: list, s: dict, artist: str) -> dict:
-    """台帳の行から、詳しく読む動画 {video_id: 理由}。音源（楽曲ページ。行の source）ごとに枠（read_quota）を持ち、その中で
-      ① 本人（"本人"。コメント選びと同じ見分け方 pool.artist_accounts）と、音源ができた日より後の最初期（"最初期"）を、
-         それぞれ read_role 本。ただし枠の5分の1まで
-      ② 再生 read_must_plays 以上（"50万以上"）を全部。枠を超えてもよい（2026-10-07 ユーザー「上限突破してでも全部読む」）
-      ③ 週の一番（"週の一番"。その週に再生 read_week_plays 以上の動画があれば、一番再生の多い1本）。枠の5分の1まで。
-         枠で足りないときは投稿の多い週から
-      ④ 残りを再生の多い順（"再生順"）で枠まで
-    合計が read_cap を超えたら（①が多いとき）、再生順 → 週の一番 → 50万以上 の順に、再生の少ないものから外す（本人・最初期は残す）。
+    """台帳の行から、詳しく読む動画 {video_id: 理由}。音源（楽曲ページ。行の source）ごとに:
+      - 本人（"本人"。コメント選びと同じ見分け方 pool.artist_accounts）を全部。枠の外
+      - 音源ができた日より後の最初期（"最初期"）を、枠×read_early_share 本。枠の外
+      - 枠（read_quotas。台帳の再生の合計の割合で配る）を、再生の多い順（"再生順"）で埋める
+    合計が read_cap を超えたら、再生順の再生の少ないほうから外す（本人・最初期は残す）。
     read_select 0、または再生数の無いページ（一覧データが拾えなかった）は、そのページを全部読む（"全部"）"""
     by_page = collections.defaultdict(list)
     for r in rows:
         by_page[int(r["source"])].append(r)
     if not int(s.get("read_select", 1)):
         return {r["video_id"]: "全部" for r in rows}
-    q = read_quota(len(urls), s)
-    role = min(int(s["read_role"]), max(1, q // 5))
-    week_cap = max(role, q // 5)
-    must, week_floor = int(s["read_must_plays"]), int(s["read_week_plays"])
+    n = max([len(urls)] + list(by_page))
+    quotas = read_quotas([sum((r.get("plays") or 0) for r in by_page.get(k, [])) for k in range(1, n + 1)], s)
     import pool as pool_mod
     arts = pool_mod.artist_accounts(
         [{"video_id": r["video_id"]} for r in rows if r.get("author")],
@@ -1005,44 +1012,35 @@ def choose_to_read(rows: list, urls: list, s: dict, artist: str) -> dict:
         if not any(r.get("plays") is not None for r in rs):
             out.update({r["video_id"]: "全部" for r in rs})
             continue
-        P = lambda r: r.get("plays") or 0   # noqa: E731
-        by_play = sorted(rs, key=lambda r: (-P(r), r["order"]))
+        q = quotas[k - 1]
+        mine = {}
+        for r in rs:
+            if (r.get("author") or {}).get("unique_id") in arts:
+                mine[r["video_id"]] = "本人"
         born = id_time(music_id_of(urls[k - 1])) if k - 1 < len(urls) else None
         born_s = (datetime.datetime.fromtimestamp(born, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                   if born else "")
-        mine = {}
-
-        def add(r, why):
-            if r["video_id"] not in mine and r["video_id"] not in out:
-                mine[r["video_id"]] = why
-        # 本人・最初期を先に印を付ける（50万以上と重なっても、合計の上限で外さないように）
-        for r in [r for r in by_play if (r.get("author") or {}).get("unique_id") in arts][:role]:
-            add(r, "本人")
-        timed = [r for r in rs if r.get("create_time") and r["create_time"] >= born_s]
-        for r in sorted(timed, key=lambda r: (r["create_time"], r["order"]))[:role]:
-            add(r, "最初期")
-        for r in by_play:
-            if P(r) >= must:
-                add(r, "50万以上" if must == 500000 else f"{must:,}再生以上")
-        weeks, in_time = collections.defaultdict(list), {r["video_id"] for r in timed}
-        for r in by_play:
-            if P(r) >= week_floor and r["video_id"] in in_time:
-                weeks[_week(r["create_time"])].append(r)
-        n_posts = collections.Counter(_week(r["create_time"]) for r in timed)
-        picked = sorted(weeks, key=lambda w: (-n_posts[w], w))[:week_cap]
-        for w in sorted(picked):
-            add(weeks[w][0], "週の一番")
-        for r in by_play:
-            if len(mine) >= q:
+        timed = sorted((r for r in rs if r.get("create_time") and r["create_time"] >= born_s),
+                       key=lambda r: (r["create_time"], r["order"]))
+        n_early, got = max(1, round(q * float(s["read_early_share"]))), 0
+        for r in timed:
+            if got >= n_early:
                 break
-            add(r, "再生順")
+            if r["video_id"] not in mine:
+                mine[r["video_id"]] = "最初期"
+                got += 1
+        got = 0
+        for r in sorted(rs, key=lambda r: (-(r.get("plays") or 0), r["order"])):
+            if got >= q:
+                break
+            if r["video_id"] not in mine:
+                mine[r["video_id"]] = "再生順"
+                got += 1
         out.update(mine)
     cap = int(s["read_cap"])
     if len(out) > cap:
         plays = {r["video_id"]: r.get("plays") or 0 for r in rows}
-        rank = {"再生順": 0, "週の一番": 1}
-        drop = sorted((v for v, w in out.items() if w not in ("本人", "最初期")),
-                      key=lambda v: (rank.get(out[v], 2), plays[v]))
+        drop = sorted((v for v, w in out.items() if w == "再生順"), key=lambda v: plays[v])
         for v in drop[:len(out) - cap]:
             del out[v]
     return out
@@ -1298,7 +1296,14 @@ def related_words(song: str, counts, n, min_count: int = 1) -> list:
     return out
 
 
-def search_fan_sounds(song: str, page_ids, links_of, music_of, words=None, page_links=None) -> dict:
+def discover_words(song: str, artist: str = "") -> list:
+    """discover で最初に開く語: 曲名。曲名だけのページが無い曲（「愛くださいませ」「倍倍FIGHT」はトップページに飛ばされる。2026-10-07）には、
+    曲名＋アーティスト名・アーティスト名＋曲名（「プロポーズ なとり」「Yummy PAIN」はある）"""
+    a = re.sub(r"[（(【\[].*?[）)】\]]", "", artist or "").strip()
+    return list(dict.fromkeys(w for w in (song, f"{song} {a}" if a else "", f"{a} {song}" if a else "") if w.strip()))
+
+
+def search_fan_sounds(song: str, page_ids, links_of, music_of, words=None, page_links=None, artist: str = "") -> dict:
     """同じ曲のほかの音源（ファンが上げた「オリジナル楽曲 - 〇〇」など）を探す。links_of(語) → discover の動画
     （discover_items の形 {"video", "music", ...}。音源が入っていれば開かない。URL の文字列なら開いて読む）、music_of(URL) → read_video_music の形。
     1. 曲名の discover のページの動画の音源を数える
@@ -1357,7 +1362,13 @@ def search_fan_sounds(song: str, page_ids, links_of, music_of, words=None, page_
             out[m["id"]].append(m)
         return out
 
-    read(song)
+    first = song
+    for w in discover_words(song, artist):   # 曲名だけのページが無ければ、アーティスト名を足した語で
+        n0 = len(reads)
+        read(w)
+        if len(reads) > n0:
+            first = w
+            break
     # 曲名のページの音源ごとに、照合のための動画を先に開く（開いた動画の関連する検索の語も、表記ゆれの語を選ぶのに使う。
     # 一覧データには関連する検索の語が無い）
     for rs in sounds().values():
@@ -1390,7 +1401,7 @@ def search_fan_sounds(song: str, page_ids, links_of, music_of, words=None, page_
             m = rs[0]
             cands.append({"id": sid, "title": m.get("title"), "author": m.get("author"), "duration": m.get("duration"),
                           "hits": len(rs), "videos": [x["video"] for x in rs]})
-    return {"words": [song] + ws, "videos": len(reads), "opened": len(opened), "meta_song_ids": sorted(metas),
+    return {"words": [first] + ws, "videos": len(reads), "opened": len(opened), "meta_song_ids": sorted(metas),
             "candidates": sorted(cands, key=lambda c: -c["hits"])}
 
 

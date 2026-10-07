@@ -4,8 +4,8 @@
 
 楽曲ページのグリッドが読み込む一覧データ（/api/music/item_list/）に、再生数・投稿日時・投稿者・画面の文字まで入っている。
 一覧の段で全部拾って台帳（raw/ledger.jsonl）にし、詳しく読む（1本ずつ開く）のはそこから選んだ動画だけにする。
-- 枠（read_quota）とスクロールの回数（ledger_scrolls）: ユーザーの決めた数（最低50・普段500を音源の数で割る・絶対の上限1,000）
-- 選び方（choose_to_read）: 50万再生以上は枠を超えても全部・本人・最初期・週の一番・再生順
+- 枠（read_quotas）とスクロールの回数（ledger_scrolls）: ユーザーの決めた数（普段500を台帳の再生の合計の割合で配る・最低50・絶対の上限1,000）
+- 選び方（choose_to_read）: 枠は再生順だけ。本人は全部・最初期は枠の5分の1を枠の外で
 - 一覧の段（Run.step_list）を偽のブラウザで: 台帳と選んだ一覧、楽曲ページごとの本数
 - 集計（prep_sample の --ledger）と AI の材料（flow_w1.sound_lines）は台帳で数える
 """
@@ -60,10 +60,20 @@ def rows_of(items_by_page):
 
 
 class TestQuota(unittest.TestCase):
-    def test_read_quota_table(self):
-        """2026-10-07 ユーザー「最低50本。通常は500本を音源の数で割る。絶対の上限として1000本。音源100なら各10本」"""
-        got = {k: pipeline.read_quota(k, S) for k in (1, 2, 3, 5, 10, 15, 20, 30, 50, 100)}
-        self.assertEqual(got, {1: 500, 2: 250, 3: 166, 5: 100, 10: 50, 15: 50, 20: 50, 30: 33, 50: 20, 100: 10})
+    def test_read_quotas(self):
+        """2026-10-07 ユーザー「最低50本。通常は500本。絶対の上限として1000本」「4万本の音源と1万本の音源で同じ数は変」→ 台帳の再生の合計の割合で配る"""
+        self.assertEqual(pipeline.read_quotas([750, 629], S), [272, 228])                      # シルエット（2020年・2025年の公式）
+        self.assertEqual(pipeline.read_quotas([192, 246, 122, 75, 15], S), [148, 189, 94, 58, 50])   # きゃわの5音源（百万の単位。片栗粉は最低の50）
+        self.assertEqual(pipeline.read_quotas([5], S), [500])
+        self.assertEqual(pipeline.read_quotas([0, 0], S), [250, 250], "再生の合計が分からなければ均等")
+        self.assertEqual(sum(pipeline.read_quotas([1] * 20, S)), 1000)
+        self.assertEqual(pipeline.read_quotas([1] * 30, S), [33] * 30)
+        self.assertEqual(pipeline.read_quotas([1] * 100, S), [10] * 100)
+        q = pipeline.read_quotas([100] + [1] * 24, S)   # 大きい音源1つと小さい音源24個: 最低50×25＝1,250 > 1,000 → 最低は 40
+        self.assertLessEqual(sum(q), 1000)
+        self.assertEqual(min(q), 40)
+        self.assertEqual({k: pipeline.read_quota(k, S) for k in (1, 2, 5, 10, 20, 30, 100)},
+                         {1: 500, 2: 250, 5: 100, 10: 50, 20: 50, 30: 33, 100: 10}, "見込み用の均等の枠")
 
     def test_ledger_scrolls(self):
         """普段は1音源60回。合計300回を超えるなら割る（最低10回）"""
@@ -73,64 +83,62 @@ class TestQuota(unittest.TestCase):
 
 class TestChoose(unittest.TestCase):
     def test_single_sound(self):
-        """1音源（枠500）: 50万以上は全部、本人・最初期・週の一番は再生が小さくても入り、残りを再生順で。1万再生未満の大半は台帳だけ"""
+        """1音源（枠500）: 枠は再生の多い順だけ。本人は全部・最初期は枠の5分の1（100本）を枠の外で。週の一番は無い"""
         its = [item(vid_at("2026-05-27", 1), "2026-05-27", 300, uid="early1"),            # 最初期（小さい。音源ができたのは 5/26）
                item(vid_at("2026-05-28", 2), "2026-05-28", 200, uid="ilife_official", nick="iLiFE!【あいらいふ】",
                     followers=579400, verified=True),                                        # 本人（小さい）
                item(vid_at("2026-05-20", 3), "2026-05-20", 100, uid="before")]               # 音源ができる前（最初期にしない）
         n = 4
-        for day in range(1, 29):   # 6月: 毎日 20本（再生 1,000〜600万）
+        for day in range(1, 29):   # 6月: 毎日 40本（再生 1,000〜600万）
             d = f"2026-06-{day:02d}"
-            for j in range(20):
+            for j in range(40):
                 plays = [6_000_000, 800_000, 520_000][j] if j < 3 else 1000 + j * 997
                 its.append(item(vid_at(d, n), d, plays))
                 n += 1
         quiet = vid_at("2026-08-20", 9999)
-        its.append(item(quiet, "2026-08-20", 15_000))   # 静かな週の一番（1.5万再生）
+        its.append(item(quiet, "2026-08-20", 15_000))   # 静かな週の一番（1.5万再生）。週の一番はやめた
         rows = rows_of([its])
         why = pipeline.choose_to_read(rows, [U1], S, "iLiFE!")
-        self.assertEqual(len(why), 500)
-        big = [r["video_id"] for r in rows if r["plays"] >= 500_000]
-        self.assertEqual(len(big), 84)
-        self.assertTrue(all(v in why for v in big))
+        c = __import__("collections").Counter(why.values())
+        self.assertEqual((c["本人"], c["最初期"], c["再生順"]), (1, 100, 500))
         self.assertEqual(why[its[0]["id"]], "最初期")
         self.assertEqual(why[its[1]["id"]], "本人")
         self.assertNotIn(its[2]["id"], why)
-        self.assertEqual(why[quiet], "週の一番")
-        small = its[3 + 19 * 20 + 3]   # 6/20 の再生 3,991 の動画
-        self.assertEqual(small["stats"]["playCount"], "3991")
-        self.assertNotIn(small["id"], why, "小さい動画は台帳だけ")
+        self.assertNotIn(quiet, why)
+        line = min(r["plays"] for r in rows if why.get(r["video_id"]) == "再生順")
+        self.assertTrue(all(r["video_id"] in why for r in rows if r["plays"] > line), "枠は再生の多い順")
 
-    def test_must_plays_over_quota_and_small_sound_gets_quota(self):
-        """5音源（枠100）: 大きい音源は50万以上が枠を超えても全部。小さい音源も枠まで読む"""
+    def test_quota_follows_plays(self):
+        """大きい音源ほど枠が大きい。小さい音源も最低の50本は読む"""
         pages = []
         for k in range(5):
             its = []
             for j in range(300):
                 day = f"2026-07-{1 + j % 28:02d}"
-                plays = (600_000 + j) if (k == 0 and j < 130) else (5_000 + j * (10 if k == 4 else 1000))
+                plays = (600_000 + j) if k == 0 else (5_000 + j * (10 if k == 4 else 1000))
                 its.append(item(vid_at(day, k * 1000 + j), day, plays))
             pages.append(its)
         urls = [f"https://www.tiktok.com/music/x-{MID1[:-1]}{k}" for k in range(5)]
         rows = rows_of(pages)
         why = pipeline.choose_to_read(rows, urls, S, "iLiFE!")
-        per = [sum(1 for r in rows if r["source"] == k and r["video_id"] in why) for k in range(1, 6)]
-        big = [r["video_id"] for r in rows if r["plays"] >= 500_000]
-        self.assertTrue(all(v in why for v in big), "50万以上の130本は全部（枠100を超える）")
-        self.assertGreater(per[0], 130)
-        self.assertEqual(per[1:], [100, 100, 100, 100])
-        small = [r for r in rows if r["source"] == 5 and r["video_id"] in why]
-        self.assertLess(min(r["plays"] for r in small), 10_000, "小さい音源（再生 5,000〜8,000）も枠の100本まで読む")
+        per = [sum(1 for r in rows if r["source"] == k and why.get(r["video_id"]) == "再生順") for k in range(1, 6)]
+        q = pipeline.read_quotas([sum(r["plays"] for r in rows if r["source"] == k) for k in range(1, 6)], S)
+        early0 = sum(1 for r in rows if r["source"] == 1 and why.get(r["video_id"]) == "最初期")
+        self.assertEqual(per[1:], q[1:])
+        self.assertEqual(per[0], min(q[0], 300 - early0), "台帳が枠より小さければ、最初期を除いた残り全部")
+        self.assertGreater(q[0], q[1])
+        self.assertEqual(q[4], 50)
 
     def test_cap_1000(self):
-        """音源100（枠10）でも合計は1,000本まで。50万以上が多くて超えたら、再生の少ない方から外す（最初期は残す）"""
+        """音源100（枠10・最初期2）でも合計は1,000本まで。超えたら再生順の再生の少ないほうから外す（最初期は残す）"""
         pages = []
         for k in range(100):
             pages.append([item(vid_at("2026-07-01", k * 100 + j), "2026-07-01", 900_000 + j) for j in range(15)])
         urls = [f"https://www.tiktok.com/music/x-{MID1[:-3]}{k:03d}" for k in range(100)]
         why = pipeline.choose_to_read(rows_of(pages), urls, S, "")
+        c = __import__("collections").Counter(why.values())
         self.assertEqual(len(why), 1000)
-        self.assertIn("最初期", set(why.values()))
+        self.assertEqual(c["最初期"], 200)
 
     def test_without_plays_or_select_off_reads_all(self):
         """一覧データが拾えなかったページ（再生数が無い）と、read_select 0 は前と同じく全部読む"""
@@ -205,17 +213,19 @@ class TestStepList(unittest.TestCase):
         self.assertEqual(len(ledger), 700, "グリッドに出る前に止めた分（各20本）も一覧データから入る。公開より前の1本は除く")
         self.assertTrue(all(r["api"] and r["plays"] is not None for r in ledger))
         self.assertEqual(sum(1 for r in ledger if r["read"]), len(links))
-        self.assertEqual(len(links), 500, "2音源で1音源250本ずつ")
-        self.assertEqual([sum(1 for g in links if g["source"] == k) for k in (1, 2)], [250, 250])
+        q = pipeline.read_quotas([sum(r["plays"] for r in ledger if r["source"] == k) for k in (1, 2)], S)
+        self.assertEqual(q, [379, 121], "台帳の再生の合計（約297万・約94万）の割合")
+        # 1ページ目は台帳400本が「最初期76＋再生順379」より少ないので全部。2ページ目は 24＋121
+        self.assertEqual([sum(1 for g in links if g["source"] == k) for k in (1, 2)], [400, 145])
         self.assertEqual(sum(1 for g in links if (g["plays"] or 0) >= 500_000), 3)
         self.assertEqual({g["why"] for g in links}, {"最初期", "再生順"})
         self.assertTrue(all("?" not in g["url"] for g in links))
         self.assertEqual(ledger[0]["create_time"], "2026-06-01 12:00:00")
         self.assertEqual(ledger[-1]["sticker_texts"], ["血液型とかなんだとか"])
         pages = json.loads((d / "raw" / "music_pages.json").read_text(encoding="utf-8"))
-        self.assertEqual([(p["ledger"], p["links"]) for p in pages], [(400, 250), (300, 250)])
-        self.assertEqual((res["links"], res["ledger"], res["quota"], res["dropped_before_release"]), (500, 700, 250, 1))
-        self.assertEqual((d / "raw" / "grid_links.csv").read_text(encoding="utf-8").count("\n"), 501)
+        self.assertEqual([(p["ledger"], p["links"], p["quota"]) for p in pages], [(400, 400, 379), (300, 145, 121)])
+        self.assertEqual((res["links"], res["ledger"], res["quota"], res["dropped_before_release"]), (545, 700, [379, 121], 1))
+        self.assertEqual((d / "raw" / "grid_links.csv").read_text(encoding="utf-8").count("\n"), 546)
 
 
 class TestDeriveFromLedger(unittest.TestCase):

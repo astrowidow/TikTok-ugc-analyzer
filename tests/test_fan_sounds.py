@@ -120,6 +120,17 @@ class TestSearch(unittest.TestCase):
         self.assertEqual((r["videos"], r["opened"]), (11, 4))
         self.assertEqual(sorted(self.read), ["f1", "n1", "o0", "x1"])
 
+    def test_song_page_missing_falls_back_to_artist(self):
+        """曲名だけの discover のページが無い曲（トップページに飛ばされる）は、曲名＋アーティスト名で探す（2026-10-07「愛くださいませ」）"""
+        self.assertEqual(pipeline.discover_words("愛くださいませ", "≠ME"), ["愛くださいませ", "愛くださいませ ≠ME", "≠ME 愛くださいませ"])
+        self.assertEqual(pipeline.discover_words("きゃわぽっぴんどぅー", "iLiFE!【あいらいふ】")[1], "きゃわぽっぴんどぅー iLiFE!")
+        self.assertEqual(pipeline.discover_words("雨", ""), ["雨"])
+        pages = {"きゃわぽっぴんどぅー iLiFE!": self.pages["きゃわぽっぴんどぅー"]}
+        r = pipeline.search_fan_sounds("きゃわぽっぴんどぅー", {"7644119804865808400"}, lambda w: pages.get(w, []), self.music_of, 3,
+                                       artist="iLiFE!")
+        self.assertEqual(r["words"][0], "きゃわぽっぴんどぅー iLiFE!")
+        self.assertEqual(r["meta_song_ids"], [META])
+
     def test_no_song_id_no_candidates(self):
         self.music["v1"] = mus("7644119804865808400", "きゃわぽっぴんどぅー", "iLiFE!", meta=())
         r = pipeline.search_fan_sounds("きゃわぽっぴんどぅー", {"7644119804865808400"}, lambda w: self.pages.get(w, []),

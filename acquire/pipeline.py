@@ -295,7 +295,8 @@ class Run:
                                       music_of, int(s["fan_words"]) or None, page_links, artist)
             self.log(f"    discover {len(found['words'])}ページ（{'・'.join(found['words'])}）で動画 {found['videos']}本の音源を読み"
                      f"（開いた動画 {found.get('opened', found['videos'])}本）、"
-                     f"同じ曲（TikTok の照合 {'・'.join(found['meta_song_ids']) or 'なし'}）のほかの音源 {len(found['candidates'])}個")
+                     f"同じ曲（TikTok の照合 {'・'.join(found['meta_song_ids']) or 'なし'}・題と作者で分かる公式の別の版 "
+                     f"{sum(1 for c in found['candidates'] if c.get('match') == '題と作者')}個を含む）のほかの音源 {len(found['candidates'])}個")
             cands = found["candidates"]
             if cands and not main_n:
                 d.get(urls[0])
@@ -1179,6 +1180,26 @@ def fits_song(song: str, artist: str, title, author) -> bool:
     return bool(s and t and s in t) and (not a or not c or a in c or c in a)
 
 
+# 公式の別の版の題に付く版の名前（「愛とU (Sped Up Ver.)」のかっこ書きでなく、題のうしろにそのまま付くもの）
+VERSION_WORDS = re.compile(r"(spedup|speedup|sped|slowed|reverb|remix|instrumental|inst|acoustic|version|ver|edit|short|"
+                           r"tvsize|animesize|live|nightcore|full|フル|ショート|ばーじょん)+")
+
+
+def same_song_version(song: str, artist: str, title, author) -> bool:
+    """同じ曲の公式の別の版（sped up・TV サイズなど）か: 題からかっこ書きと版の名前を除くと曲名と同じで、作者がアーティスト名に合う。
+    TikTok が曲の番号（MetaSongId）を付けない版があるので、番号でなく題と作者で見分ける（2026-10-08「愛とU」: 流行った Sped Up 版の
+    3ページ 34.3K・22.4K・6.3K はどれも番号が無く、主の 34.3K からほかの版もファンの音源も照合できなかった）。
+    fits_song（曲名を含めばよい・読めなければ合う）より厳しく、作者・アーティスト名のどちらかが読めなければ合わないとみなす
+    （同じアーティストの別の曲「雨上がり」・ファンが曲名を題にした音源・アーティスト名の一部だけの名前「mega」は合わない）"""
+    strip = lambda x: re.sub(r"[（(【\[].*?[）)】\]]", "", str(x or ""))   # noqa: E731
+    s, t = kana_key(song), kana_key(strip(title))
+    a, c = kana_key(strip(artist)), kana_key(author)
+    if not (s and t.startswith(s) and a and c):
+        return False
+    rest = t[len(s):]
+    return (not rest or bool(VERSION_WORDS.fullmatch(rest))) and (a in c or (len(c) * 2 >= len(a) and c in a))
+
+
 def discover_slug(word: str) -> str:
     from urllib.parse import quote
     return quote(re.sub(r"\s+", "-", (word or "").strip()), safe="-")
@@ -1313,8 +1334,10 @@ def search_fan_sounds(song: str, page_ids, links_of, music_of, words=None, page_
     3. 取るページ（page_ids）の音源の動画を開いて、TikTok が照合した曲の番号を知る（無ければ page_links() の動画を3本まで）
     4. 取るページでない音源ごとに動画を2本まで開いて曲の番号を読み、同じ番号の音源を、出た回数の多い順に返す
        （番号の無い音源は、同じ曲か分からないので返さない）
+    5. 題と作者で同じ曲の公式の別の版と分かる音源（same_song_version。sped up など、番号の無いことがある）も返す。取るページに番号が
+       無ければ、その版の番号でファンの音源を照合する（2026-10-08「愛とU」。artist が無ければ題では見分けない）
     戻り値 {"words", "videos"（音源が分かった動画の数）, "opened"（開いた動画の数）, "meta_song_ids",
-           "candidates": [{"id", "title", "author", "duration", "hits", "videos"}]}"""
+           "candidates": [{"id", "title", "author", "duration", "hits", "videos", "match"（"曲の番号" か "題と作者"）}]}"""
     page_ids = {str(x) for x in page_ids}
     seen, reads, opened = set(), [], {}
     counts = collections.Counter()
@@ -1382,9 +1405,22 @@ def search_fan_sounds(song: str, page_ids, links_of, music_of, words=None, page_
     for w in ws:
         read(w)
     by_sound = sounds()
+    official = set()   # 題と作者で分かる公式の別の版（一覧データの題は英字のことがある「Ai To U」ので、開いた動画の題も見る）
+    if artist:
+        for sid, rs in by_sound.items():
+            if sid in page_ids:
+                continue
+            meta_of(rs)
+            names = [(m.get("title"), m.get("author")) for m in rs]
+            names += [(o.get("title"), o.get("author")) for o in (opened.get(m["video"]) for m in rs) if o]
+            if any(same_song_version(song, artist, t, a) for t, a in names):
+                official.add(sid)
     metas = set()
     for sid in page_ids:
         if by_sound.get(sid):
+            metas |= meta_of(by_sound[sid])
+    if not metas:   # 取るページに番号が無い（sped up 版が主など）: 公式の別の版の番号で
+        for sid in official:
             metas |= meta_of(by_sound[sid])
     if not metas and page_links is not None:
         for u in (page_links() or [])[:3]:
@@ -1394,13 +1430,12 @@ def search_fan_sounds(song: str, page_ids, links_of, music_of, words=None, page_
             if metas:
                 break
     cands = []
-    if metas:
-        for sid, rs in by_sound.items():
-            if sid in page_ids or not metas & meta_of(rs):
-                continue
-            m = rs[0]
-            cands.append({"id": sid, "title": m.get("title"), "author": m.get("author"), "duration": m.get("duration"),
-                          "hits": len(rs), "videos": [x["video"] for x in rs]})
+    for sid, rs in by_sound.items():
+        if sid in page_ids or not (sid in official or (metas and metas & meta_of(rs))):
+            continue
+        m = rs[0]
+        cands.append({"id": sid, "title": m.get("title"), "author": m.get("author"), "duration": m.get("duration"),
+                      "hits": len(rs), "videos": [x["video"] for x in rs], "match": "題と作者" if sid in official else "曲の番号"})
     return {"words": [first] + ws, "videos": len(reads), "opened": len(opened), "meta_song_ids": sorted(metas),
             "candidates": sorted(cands, key=lambda c: -c["hits"])}
 

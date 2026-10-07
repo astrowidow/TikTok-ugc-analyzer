@@ -131,6 +131,51 @@ class TestSearch(unittest.TestCase):
         self.assertEqual(r["words"][0], "きゃわぽっぴんどぅー iLiFE!")
         self.assertEqual(r["meta_song_ids"], [META])
 
+    def test_finds_versions_without_song_id_by_title_and_author(self):
+        """TikTok が曲の番号を付けない公式の版（sped up）は、題と作者で同じ曲と見分ける。主に番号が無ければ、公式の別の版の番号で
+        ファンの音源を照合する（2026-10-08「愛とU」: 主の Sped Up 34.3K に番号が無く、Sped Up 22.4K もファンの音源も拾えなかった）。
+        一覧データの題は英字（「Ai To U」）でも、開いた動画の題で見る"""
+        MAIN, SPED2, NORMAL, KOKONA = "7399608512890211089", "7392144707461712657", "7374864084296271889", "7543955690495511313"
+        M = "7374867594837067777"
+
+        def item(v, mid, title, author="Mega Shinnosuke"):
+            return {"video": v, "music": {"id": mid, "title": title, "authorName": author, "duration": 30}, "desc": "", "hashtags": []}
+        pages = {"愛とU": [item("a1", MAIN, "Ai To U (Sped Up Ver.)"), item("a2", MAIN, "Ai To U (Sped Up Ver.)"),
+                          item("b1", SPED2, "Ai To U (Sped Up Ver.)"), item("b2", SPED2, "Ai To U (Sped Up Ver.)"),
+                          item("n1", NORMAL, "Ai To U"), item("k1", KOKONA, "オリジナル楽曲 - ここな", "コ"),
+                          item("g1", "7000000000000000005", "Gohan Tabeyo"), item("r1", "7000000000000000006", "愛とU", "らん 란"),
+                          item("t1", "7000000000000000007", "Ai To U to Watashi")]}
+        self.music.update({
+            "a1": mus(MAIN, "愛とU (Sped Up Ver.)", "Mega Shinnosuke", meta=()),
+            "a2": mus(MAIN, "愛とU (Sped Up Ver.)", "Mega Shinnosuke", meta=()),
+            "b1": mus(SPED2, "愛とU (Sped Up Ver.)", "Mega Shinnosuke", meta=()),
+            "b2": mus(SPED2, "愛とU (Sped Up Ver.)", "Mega Shinnosuke", meta=()),
+            "n1": mus(NORMAL, "愛とU", "Mega Shinnosuke", meta=(M,)),
+            "k1": mus(KOKONA, "オリジナル楽曲 - ここな", "コ", meta=(M,)),
+            "g1": mus("7000000000000000005", "ごはん食べヨ", "Mega Shinnosuke", meta=("888",)),
+            "r1": mus("7000000000000000006", "愛とU", "らん 란", meta=()),                 # ファンが曲名を題にした音源
+            "t1": mus("7000000000000000007", "愛とUと私", "Mega Shinnosuke", meta=())})   # 曲名で始まる別の曲
+        r = pipeline.search_fan_sounds("愛とU", {MAIN}, lambda w: pages.get(w, []), self.music_of, artist="Mega Shinnosuke")
+        self.assertEqual(r["meta_song_ids"], [M])
+        self.assertEqual({c["id"]: c["match"] for c in r["candidates"]}, {SPED2: "題と作者", NORMAL: "題と作者", KOKONA: "曲の番号"})
+        # アーティスト名が無ければ、題では見分けない（前と同じ: 番号の無い主からは照合できない）
+        r = pipeline.search_fan_sounds("愛とU", {MAIN}, lambda w: pages.get(w, []), self.music_of)
+        self.assertEqual(r["candidates"], [])
+
+    def test_same_song_version(self):
+        f = pipeline.same_song_version
+        self.assertTrue(f("愛とU", "Mega Shinnosuke", "愛とU (Sped Up Ver.)", "Mega Shinnosuke"))
+        self.assertTrue(f("愛とU", "Mega Shinnosuke", "愛とU sped up", "Mega Shinnosuke"))
+        self.assertTrue(f("きゃわぽっぴんどぅー", "iLiFE!【あいらいふ】", "きゃわぽっぴんどぅー（14秒）", "iLiFE!"))
+        self.assertTrue(f("愛とU", "Mega Shinnosuke & Foo", "愛とU", "Mega Shinnosuke"))
+        self.assertFalse(f("愛とU", "Mega Shinnosuke", "愛とUと私", "Mega Shinnosuke"))       # 曲名で始まる別の曲
+        self.assertFalse(f("雨", "神が残した夢を喰う。", "雨上がり", "神が残した夢を喰う。"))
+        self.assertFalse(f("愛とU", "Mega Shinnosuke", "愛とU", "らん 란"))                   # ファンの音源
+        self.assertFalse(f("愛とU", "Mega Shinnosuke", "愛とU", "mega"))                     # アーティスト名の一部だけ
+        self.assertFalse(f("愛とU", "Mega Shinnosuke", "愛とU", ""))                         # 作者が読めない
+        self.assertFalse(f("愛とU", "", "愛とU", "Mega Shinnosuke"))
+        self.assertFalse(f("愛とU", "Mega Shinnosuke", "Ai To U (Sped Up Ver.)", "Mega Shinnosuke"))   # 英字の題（開いた動画の題で見る）
+
     def test_no_song_id_no_candidates(self):
         self.music["v1"] = mus("7644119804865808400", "きゃわぽっぴんどぅー", "iLiFE!", meta=())
         r = pipeline.search_fan_sounds("きゃわぽっぴんどぅー", {"7644119804865808400"}, lambda w: self.pages.get(w, []),

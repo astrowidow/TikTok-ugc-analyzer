@@ -721,6 +721,49 @@ def render(a, t: dict, st: dict) -> dict:
 
 
 # --- 界隈の確認（F1〜F3）---
+def clean_cut(text: str, limit: int = 80) -> str:
+    """長い文を、読点などの切れ目で、かっこを閉じた形で短くする（途中で切って「（…」のまま見せない。2026-10-12）"""
+    t = str(text or "").strip()
+    if len(t) <= limit:
+        return t
+    cut = t[:limit]
+    j = max(cut.rfind(c) for c in "、・，, ")
+    if j >= limit * 0.5:
+        cut = cut[:j]
+    while cut.count("（") > cut.count("）"):
+        cut = cut[:cut.rfind("（")]
+    while cut.count("(") > cut.count(")"):
+        cut = cut[:cut.rfind("(")]
+    return cut.rstrip("、・，, ") + "…"
+
+
+def split_sentence(t: str) -> tuple:
+    """最初の「。」で2つに分ける。ただし『』「」（）の中の「。」では分けない（『今日、好きになりました。』）"""
+    depth = 0
+    for i, ch in enumerate(t):
+        if ch in "『「（(":
+            depth += 1
+        elif ch in "』」）)":
+            depth = max(0, depth - 1)
+        elif ch == "。" and depth == 0:
+            return t[:i], t[i + 1:]
+    return t, ""
+
+
+def axis_name_and_desc(definition: str) -> tuple:
+    """界隈の定義から、案を見せるときの短い名前と、短い説明（2026-10-12: 長い定義の1文目を90字で切っていて、
+    「心花りり @…（`honke`）」のように、かっこが閉じないまま見えていた）"""
+    d = str(definition or "").strip()
+    m = re.match(r"^(.{1,24}?)[：:]\s*(.+)$", d, re.S)
+    if m:   # 「本家: iLiFE! の公式アカウントと…」
+        name, rest = m.group(1).strip(), m.group(2).strip()
+    else:   # 「本家（iLiFE!）。界隈ではなく…」
+        name = short_name(d)
+        rest = split_sentence(d)[1].strip()
+    first = split_sentence(rest)[0].strip() if rest else ""
+    return name, clean_cut(first)
+
+
 def present_axes(a, tax: dict) -> str:
     """界隈を初出の順に並べ、初出日・定義・代表動画のリンクを添える"""
     recs = records(a)
@@ -738,7 +781,10 @@ def present_axes(a, tax: dict) -> str:
     lines = []
     for i, (first, k, v, seqs) in enumerate(items):
         mark = marks[i] if i < len(marks) else f"({i + 1})"
-        lines.append(f"{mark} {pr._first_sentence(v)}（`{k}`）— 初出 {first if first != '9999' else '不明'}")
+        name, desc = axis_name_and_desc(v)
+        lines.append(f"{mark} {name}（`{k}`）— 初出 {first if first != '9999' else '不明'}")
+        if desc:
+            lines.append(f"    {desc}")
         for s in seqs[:3]:
             r = recs[s]
             u = url_of(vs.get(s, {}))

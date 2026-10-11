@@ -570,3 +570,16 @@ class TestPhasesCount(RedoBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAxisNames(unittest.TestCase):
+    def test_name_and_clean_description(self):
+        """界隈の案の見出し: 短い名前と、かっこを閉じた短い説明（2026-10-12: 「心花りり @…（`honke`）」と途中で切れていた）"""
+        n, d = fw.axis_name_and_desc("本家: iLiFE! の公式アカウント（@ilife_official）とメンバー本人のアカウント（bio に「iLiFE!」「〇色担当」、"
+                                     "ID が @ilife_〜、心花りり @kokohana_riri など）。シグナル: x")
+        self.assertEqual(n, "本家")
+        self.assertEqual(d.count("（"), d.count("）"))
+        self.assertTrue(d.endswith("…"))
+        self.assertEqual(fw.axis_name_and_desc("今日好き: 恋愛リアリティ番組『今日、好きになりました。』の出演者。")[1],
+                         "恋愛リアリティ番組『今日、好きになりました。』の出演者")
+        self.assertEqual(fw.axis_name_and_desc("本家（iLiFE!）。界隈ではなく本家として別に扱う。"), ("本家", "界隈ではなく本家として別に扱う"))

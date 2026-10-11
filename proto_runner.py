@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 from pathlib import Path
@@ -292,10 +293,13 @@ def resolve(user_id: str, ref: str | None) -> Analysis:
         hits = [a for a in mine if ref_n in a.title.lower() or ref_n in a.song_line.lower()]
         if not hits:
             raise RunnerError(f"「{ref}」に当たる分析がありません。status で一覧を見てください")
+        live = [a for a in hits if not _set_aside(a)]   # 取り直した・しまった分析は、ほかに無いときだけ
+        hits = live or hits
         # 題がぴったり合う分析を先にする（「Lemon」で頼んで、取得中の「Lemonade」を選ばない）
         exact = [a for a in hits if ref_n in (a.title.strip().lower(), str((a.meta.get("song") or {}).get("title") or "").strip().lower())]
         return _pick(exact or hits)
-    return _pick(mine)
+    live = [a for a in mine if not _set_aside(a)]
+    return _pick(live or mine)
 
 
 # ---------------------------------------------------------------------------
@@ -567,8 +571,9 @@ def check_taxonomy(tax, need_region: bool = True) -> list:
         if empty:
             errs.append(f"`{axis}` の定義が空か短すぎます（見分けるシグナルと例を書く）: {empty[:5]}")
     comm = tax.get("community")
-    if isinstance(comm, dict) and len([k for k in comm if not k.startswith("_")]) > 20:
-        errs.append("`community` が多すぎます（8〜14 程度）")
+    # 上限は広めに（2026-10-12: 利用者が「界隈をもっと細かく」と頼んだときに差し戻さない。目安の 8〜14 は指示書に書いてある）
+    if isinstance(comm, dict) and len([k for k in comm if not k.startswith("_")]) > 40:
+        errs.append("`community` が多すぎます（40 まで。目安は 8〜14。利用者が細かく分けるよう頼んだときは多くてよい）")
     for axis in (("region", "tier") if need_region else ("tier",)):
         v = tax.get(axis)
         if not isinstance(v, list) or not all(isinstance(x, str) for x in v) or "unknown" not in v:
@@ -813,7 +818,13 @@ def _acq_view(a: Analysis):
 
 def status(user_id: str, ref: str | None = None) -> dict:
     with _lock:
-        targets = [resolve(user_id, ref)] if ref else list_analyses(user_id)
+        if ref:
+            targets = [resolve(user_id, ref)]
+            hidden = 0
+        else:   # 取り直した・しまった分析は一覧に出さない（数だけ。2026-10-12: 同じ曲が並んで見分けられなかった）
+            mine = list_analyses(user_id)
+            targets = [a for a in mine if not _set_aside(a)]
+            hidden = len(mine) - len(targets)
         items = []
         for a in targets:
             av = _acq_view(a)
@@ -850,13 +861,29 @@ def status(user_id: str, ref: str | None = None) -> dict:
                     if age > STALE_AFTER_S:
                         msg = (f"「{cur['title']}」を渡したまま {int(age // 60)} 分止まっています。"
                                "「続けて」と言えば続きから再開します。")
-            items.append({"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": state_label,
-                          "progress": _progress(st), "message": msg})
+            item = {"analysis_id": a.id, "title": a.title, "song": a.song_line, "state": state_label,
+                    "progress": _progress(st), "message": msg}
+            if state_label == "done" or ref:   # 完成した分析にも、どの楽曲ページで作ったかを出す
+                item["pages"] = _acq_pages(a)
+            items.append(item)
+        for i in items:   # どれのことか見分けられるように: 作った日・作った版・脇へ置いた印
+            b = next(x for x in targets if x.id == i["analysis_id"])
+            i["created"] = str(b.meta.get("created_at") or "")[:16].replace("T", " ")
+            i["app_version"] = b.meta.get("app_version")
+            if b.meta.get("superseded_by"):
+                i["message"] = f"（取り直し済み。新しい分析は {b.meta['superseded_by']}）" + i["message"]
+            elif b.meta.get("archived_at"):
+                i["message"] = "（しまってある分析）" + i["message"]
         if not items:
-            return {"text": "あなたの分析はまだありません。", "analyses": []}
-        text = "\n".join(f"- {i['title']}（{i['analysis_id']}）: {i['message']} 進み具合 {i['progress']}"
-                         + "".join(f"\n  - 取っている楽曲ページ: {_page_line(p['url'], p)}" for p in i.get("pages") or [])
+            return {"text": "あなたの分析はまだありません。" + (f"（しまった・取り直した分析が {hidden}件あります。info で見られます）"
+                                                         if hidden else ""), "analyses": []}
+        text = "\n".join(f"- {i['title']}（{i['created']} に作成・分析 ID: {i['analysis_id']}）: {i['message']} 進み具合 {i['progress']}"
+                         + "".join(f"\n  - {'取っている' if i['state'] != 'done' else '使った'}楽曲ページ: {_page_line(p['url'], p)}"
+                                   for p in i.get("pages") or [])
                          for i in items)
+        if hidden:
+            text += f"\n（ほかに、取り直した・しまった分析が {hidden}件あります。分析 ID か曲名を指定すれば見られます）"
+        text += "\n（AI へ: 楽曲ページ・音源・本数・版などの中身の質問には info で答える）"
         return {"text": text, "analyses": items}
 
 
@@ -1051,11 +1078,11 @@ def _written_once(a: Analysis) -> bool:
     return bool(st) and any(t.get("kind") == "done" and t.get("status") == "done" for t in st.get("tasks") or [])
 
 
-def _acquired_unwritten(user_id: str, song: str, urls) -> "Analysis | None":
+def _acquired_unwritten(user_id: str, song: str, urls, artist: str = "") -> "Analysis | None":
     """同じ利用者・同じ曲（launch.find_active と同じ当て方）の、取得が済んでいて（acquisition done）、
-    レポートがまだ完成していない分析（新しいもの）。完成済み・止まった（failed）・やめた分析は見ない"""
+    レポートがまだ完成していない分析（新しいもの）。完成済み・止まった（failed）・やめた・取り直した・しまった分析は見ない"""
     from acquire import launch
-    for aid in launch.find_acquired(user_id, song, [u for u in urls or [] if u]):
+    for aid in launch.find_acquired(user_id, song, [u for u in urls or [] if u], artist):
         try:
             a = Analysis(aid)
             if not _written_once(a):
@@ -1063,6 +1090,123 @@ def _acquired_unwritten(user_id: str, song: str, urls) -> "Analysis | None":
         except (RunnerError, OSError, ValueError):   # 壊れた目録・仕事の状態は飛ばす
             continue
     return None
+
+
+def _ids(urls) -> set:
+    """楽曲ページの URL の末尾の番号（題の書き方が違っても同じページと見分ける）"""
+    return {str(u).split("?")[0].rstrip("/").rsplit("-", 1)[-1] for u in urls or [] if u}
+
+
+def _urls_of(a: Analysis) -> list:
+    return [u for u in (a.meta.get("music_urls") or [a.meta.get("music_url")]) if u]
+
+
+def _differs(a: Analysis, user_urls, replies: bool, min_plays) -> list:
+    """同じ曲の前の分析と、今回の頼みが違うところ。違えば黙って前の分析に戻さずに取り直す
+    （2026-10-12 友達: 3つ目の楽曲ページを渡して頼み直しても、曲名を変えても、前の2ページの分析に戻されていた）"""
+    what = []
+    if user_urls and _ids(user_urls) - _ids(_urls_of(a)):
+        what.append("楽曲ページ")
+    if replies and not wants_replies(a.meta):
+        what.append("返信も取る")
+    if min_plays is not None:
+        from acquire import pipeline
+        cur = min_plays_of(a.meta)
+        if (cur if cur is not None else int(pipeline.DEFAULTS["min_plays_weekly"])) != max(0, int(min_plays)):
+            what.append("再生の下限")
+    return what
+
+
+SUPERSEDING = "（取り直しを受け付け中）"
+
+
+def _supersede_begin(old_id: str, reason: str) -> None:
+    """取り直す前の分析を脇へ置く（消さない）。取得中・順番待ちの取得と、掘り下げ・切り直しの取り足しはやめる。
+    印（superseded_by）を付けると、同じ曲の引き当て・「分析して」の再開・曲名なしの引き当てから外れる（acquire/launch.set_aside）"""
+    p = ANALYSES_DIR / old_id / "analysis.json"
+    m = _read_json(p, {}) or {}
+    stop = False
+    acq = m.get("acquisition") or {}
+    if acq.get("status") in ("queued", "running"):
+        acq.update({"status": "cancelled", "cancelled_at": _now(), "cancel_reason": reason})
+        m["acquisition"] = acq
+        stop = True
+    dp = m.get("deepen") or {}
+    if dp.get("status") in ("queued", "running"):
+        dp.update({"status": "cancelled", "cancelled_at": _now(), "cancel_reason": reason})
+        m["deepen"] = dp
+        stop = True
+    m.update({"superseded_by": SUPERSEDING, "superseded_at": _now(), "superseded_reason": reason})
+    _write_json(p, m)
+    if stop and LOCAL is not None:
+        LOCAL.request_stop(old_id)
+
+
+def _supersede_end(old_id: str, new_id) -> None:
+    """取り直しの新しい分析ができたら印に新しい ID を書く。作れなかったら印を外す（やめた取得は戻らない。返事でそう言う）"""
+    p = ANALYSES_DIR / old_id / "analysis.json"
+    m = _read_json(p, {}) or {}
+    if new_id:
+        m["superseded_by"] = new_id
+    elif m.get("superseded_by") == SUPERSEDING:
+        for k in ("superseded_by", "superseded_at", "superseded_reason"):
+            m.pop(k, None)
+    _write_json(p, m)
+
+
+def _seed_from(old_id: str, new_id: str, enriched: bool = True, comments: bool = True) -> dict:
+    """前の分析の取得済みのものを、取り直す分析の置き場に写す。属性（enrich）・コメント（spatest）は video_id で続きから取る作りなので、
+    重なる動画は TikTok に取りに行かない（2026-10-12 ユーザー「原理上できない事はない」。docs/PLAN_0_8.md 2-1）。
+    数字（再生数など）は一覧の段で新しく読む。サムネは同じボリュームならハードリンク（容量を食わない）"""
+    src, dst = ANALYSES_DIR / old_id / "raw", ANALYSES_DIR / new_id / "raw"
+    dst.mkdir(parents=True, exist_ok=True)
+    done = {}
+
+    def lines(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return sum(1 for x in f if x.strip())
+        except OSError:
+            return 0
+
+    if enriched and (src / "enriched.jsonl").exists():
+        shutil.copy2(src / "enriched.jsonl", dst / "enriched.jsonl")
+        done["enriched"] = lines(dst / "enriched.jsonl")
+        if (src / "covers").is_dir():
+            (dst / "covers").mkdir(exist_ok=True)
+            n = 0
+            for f in (src / "covers").iterdir():
+                if not f.is_file() or (dst / "covers" / f.name).exists():
+                    continue
+                try:
+                    os.link(f, dst / "covers" / f.name)
+                except OSError:
+                    shutil.copy2(f, dst / "covers" / f.name)
+                n += 1
+            done["covers"] = n
+    if comments and (src / "comments.jsonl").exists():
+        shutil.copy2(src / "comments.jsonl", dst / "comments.jsonl")
+        done["comments_rows"] = lines(dst / "comments.jsonl")
+    return done
+
+
+def _set_aside(a: Analysis) -> bool:
+    """取り直した・しまった分析か（acquire/launch.set_aside）"""
+    from acquire import launch
+    return launch.set_aside(a.meta)
+
+
+def _same_song_open(user_id: str, song: str, urls, artist: str = "") -> "Analysis | None":
+    """同じ曲の、取得中・順番待ち・止まった・取得済みでまだ書き終えていない分析（新しいもの）。脇へ置いたもの・完成済みは見ない"""
+    from acquire import launch
+    hits = []
+    for b in list_analyses(user_id):
+        if _set_aside(b) or not launch._same_song(b.meta, song, [u for u in urls or [] if u], artist):
+            continue
+        st = _acq_status(b)
+        if st in ("queued", "running", "failed") or (st == "done" and not _written_once(b)):
+            hits.append(b)
+    return max(hits, key=lambda b: b.meta.get("created_at", "")) if hits else None
 
 
 def _resume_reply(a: Analysis, replies: bool = False, min_plays: int | None = None) -> dict:
@@ -1081,14 +1225,15 @@ def _resume_reply(a: Analysis, replies: bool = False, min_plays: int | None = No
 def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
                    candidate_urls: list | None = None, only_one: bool = False, music_urls: list | None = None,
                    video_urls: list | None = None, replies: bool = False, min_plays: int | None = None,
-                   skip_confirm: bool = False, before_create=None) -> dict:
+                   skip_confirm: bool = False, before_create=None, fresh: bool = False, **kw) -> dict:
     """分析を作って取得の待ち行列に入れる。replies=True なら返信も取る（既定は取らない）。
     min_plays は週ごとに選ぶ動画の再生の下限（省けば acquire/pipeline.py の既定 min_plays_weekly）。
     skip_confirm=True なら、取得のあとの界隈の確認を省いて最後まで書く。
+    fresh=True は「最初から」: 同じ曲の取得済み・取得中の分析があっても書き始めず、新しく取り直す（前の分析は消さずに脇へ置く）。
     before_create は、楽曲ページを読んで選び終えてから、同じ曲の受け付け済みを探して分析を作る直前に（ロックの中で）呼ぶもの
-    （restart_analysis が前の取得をやめる。ページを読む所で失敗しても前の取得が残るように）"""
+    （ページを読む所で失敗しても前の取得が残るように）。kw は restart_analysis から（fan_sounds・extra_settings・seed・supersede）"""
     res = _start_analysis(user_id, song, artist, music_url, video_url, candidate_urls, only_one, music_urls, video_urls,
-                          replies, min_plays, before_create)
+                          replies, min_plays, before_create, fresh=fresh, **kw)
     if skip_confirm and res.get("analysis_id"):
         _set_options(ANALYSES_DIR / res["analysis_id"], skip_confirm=True, skip_confirm_at=_now())
         res["text"] = res["text"].replace(CONFIRM_ONCE, CONFIRM_SKIPPED)
@@ -1097,6 +1242,8 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
             res["text"] += "\n（AI へ: 利用者は界隈の確認を省くように頼んでいる。start_analysis を呼び直すときも skip_confirm=true を付ける）"
         if replies:
             res["text"] += "\n（AI へ: 利用者は返信も取るように頼んでいる。start_analysis を呼び直すときも replies=true を付ける）"
+        if fresh or kw.get("supersede"):
+            res["text"] += "\n（AI へ: これは取り直しの頼み。start_analysis を呼び直すときは fresh=true を付ける）"
         if min_plays is not None:
             res["text"] += f"\n（AI へ: 利用者は再生の下限を指定している。start_analysis を呼び直すときも min_plays={int(min_plays)} を付ける）"
     return res
@@ -1105,7 +1252,8 @@ def start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "
 def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = "", video_url: str = "",
                     candidate_urls: list | None = None, only_one: bool = False, music_urls: list | None = None,
                     video_urls: list | None = None, replies: bool = False, min_plays: int | None = None,
-                    before_create=None) -> dict:
+                    before_create=None, fresh: bool = False, fan_sounds=None, extra_settings: dict | None = None,
+                    seed: dict | None = None, supersede: str | None = None) -> dict:
     """分析を作って取得の待ち行列に入れる（取得は Web サービスの外の係か、利用者の Mac の取得アプリが走らせる）。
     取得アプリの形では、どの楽曲ページで進めるか（題・作者・UGC 数・URL）を返事に出す（2026-10-04 ユーザー
     「止めるのではなく、このページで進めるからね、ってのがプロンプトに出るくらいがいい」）。
@@ -1123,10 +1271,22 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
         raise RunnerError("楽曲ページの URL は https://www.tiktok.com/music/曲名-数字 の形です: " + ", ".join(bad))
     if not song:
         song = _title_from_music_url(music_url or user_urls[0])
-    if before_create is None:   # 取得が済んでレポートがまだの同じ曲は、取り直さずにそのまま書き始める（TikTok を開く前に見る）
-        done = _acquired_unwritten(user_id, song, [music_url] + user_urls)
-        if done is not None:
-            return _resume_reply(done, replies, min_plays)
+    if before_create is None and supersede is None:
+        if fresh:   # 「最初から」: 同じ曲の取得中・取得済みでまだ書き終えていない分析は、脇へ置いて新しく取る（完成済みはそのまま残る）
+            old = _same_song_open(user_id, song, [music_url] + user_urls, artist)
+            if old is not None:
+                supersede = old.id
+        else:   # 取得が済んでレポートがまだの同じ曲は、取り直さずにそのまま書き始める（TikTok を開く前に見る）
+            done = _acquired_unwritten(user_id, song, [music_url] + user_urls, artist)
+            if done is not None:
+                diff = _differs(done, user_urls, replies, min_plays)
+                if not diff:
+                    return _resume_reply(done, replies, min_plays)
+                # 違う頼み（ほかの楽曲ページ・返信・再生の下限）は、黙って前の分析に戻さずに取り直す。取得済みのものは使い回す
+                supersede = done.id
+                seed = {"from": done.id, "enriched": True, "comments": not (replies and not wants_replies(done.meta))}
+                if fan_sounds is None:
+                    fan_sounds = int((done.meta.get("acquisition_settings") or {}).get("fan_sounds", 1) or 0) == 1
     found_via = ""
     dropped = []
     pages = None     # [(url, info)]。1つ目が主
@@ -1192,11 +1352,13 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
             f"先行版などあまり使われていない音源のことがある。**一般の人の動画（踊ってみた・歌ってみた・歌詞動画など）を、あと {MIN_FIT - n_fit} 本以上**"
             "探して video_urls に入れて呼び直す。探しても動画がほかに無ければ、only_one=true を付けて呼び直す。")
     if LOCAL is not None and len(cands) >= 2:   # 候補を比べる（利用者が渡したものは全部取る）
-        pages, dropped = _pick_music_pages(song, artist, cands[:MAX_CANDIDATES], take_all=bool(user_urls))
+        # 利用者が渡したページは数で切らない（2026-10-12: 返事は「全部」と言いながら7つ目から捨てていた）
+        pages, dropped = _pick_music_pages(song, artist, cands if user_urls else cands[:MAX_CANDIDATES],
+                                           take_all=bool(user_urls))
         if not pages:   # どれも日本の地域で使えない: 分析を作らず、ほかのページの探し方を返す
             return _unavailable_hint(song, artist, [u for u, _i, _w in dropped])
         music_url = pages[0][0]
-        k = min(len(cands), MAX_CANDIDATES)
+        k = len(cands) if user_urls else min(len(cands), MAX_CANDIDATES)
         where = (f"TikTok で人気の動画など {n_read} 本の音源から見つけた楽曲ページ" if survey.get("found") else
                  f"動画 {n_read} 本の音源などから見つけた楽曲ページ" if n_read else "同じ曲の楽曲ページ")
         n_gone = sum(1 for _u, _i, w in dropped if w == UNAVAILABLE_WHY)
@@ -1221,8 +1383,8 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
     if LOCAL is not None and not music_url:
         return _music_search_hint(song, artist)
     from acquire import launch
-    if LOCAL is not None and pages is None and (before_create is not None
-                                                or launch.find_active(user_id, song, music_url) is None):
+    if LOCAL is not None and pages is None and (before_create is not None or supersede is not None
+                                                or launch.find_active(user_id, song, music_url, artist) is None):
         # 楽曲ページが1つ: 分析を作る前に開いて、題・作者・UGC 数を読む（日本の地域で使えないページなら作らない）。
         # 同じ曲の取得をもう受け付けていれば読まない（返事は受け付け済みのページを出す）
         try:
@@ -1233,23 +1395,51 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
             return _unavailable_hint(song, artist, [music_url])
         pages = [(music_url, info)]
     urls = [u for u, _ in pages] if pages else [music_url]
+    disk_note = ""
     with _lock:
         if before_create is not None:
             before_create()
-        else:   # ページを選んだあとでもう一度（題が違っても、同じ楽曲ページを取り終えた分析があれば、そのまま書き始める）
-            done = _acquired_unwritten(user_id, song, urls)
+        elif supersede is None and not fresh:   # ページを選んだあとでもう一度（題が違っても、同じ楽曲ページを取り終えた分析があれば、そのまま書き始める）
+            done = _acquired_unwritten(user_id, song, urls, artist)
             if done is not None:
-                return _resume_reply(done, replies, min_plays)
-        aid = launch.find_active(user_id, song, music_url)
-        created = aid is None
-        if created:
-            active = [a for a in list_analyses(user_id)
-                      if (a.meta.get("acquisition") or {}).get("status") in ("queued", "running")]
-            if len(active) >= MAX_ACTIVE_PER_USER:
-                raise RunnerError(f"取得中・順番待ちの分析が{len(active)}件あります。終わってから次を頼んでください: "
-                                  + ", ".join(a.title for a in active))
-            aid = launch.new_analysis(user_id, song, artist, music_url,
-                                      acquisition_settings_for(replies, min_plays, fan_sounds=not user_urls), music_urls=urls)
+                diff = _differs(done, urls if user_urls else [], replies, min_plays)
+                if not diff:
+                    return _resume_reply(done, replies, min_plays)
+                supersede = done.id
+                seed = {"from": done.id, "enriched": True, "comments": not (replies and not wants_replies(done.meta))}
+        free = getattr(LOCAL, "disk_free_bytes", None) if LOCAL is not None else None
+        if free is not None:   # 1つの分析は 150〜450MB（2026-10-12 実測）。足りなければ始める前に伝える
+            try:
+                gb = free() / 1e9
+            except Exception:
+                gb = None
+            if gb is not None and gb < 1.0:
+                raise RunnerError(f"Mac の空き容量が約{gb:.1f}GB しかなく、取得の途中で止まるおそれがあります（1曲で 0.2〜0.5GB 使います）。"
+                                  "空きを増やしてから、もう一度頼んでください（使わなくなった分析は archive_analysis でしまえます）")
+            if gb is not None and gb < 5.0:
+                disk_note = f"（Mac の空き容量が約{gb:.1f}GB です。1曲で 0.2〜0.5GB 使います）"
+        if supersede is not None:
+            _supersede_begin(supersede, "利用者が取り直した")
+        try:
+            aid = launch.find_active(user_id, song, music_url, artist)
+            created = aid is None
+            if created:
+                # 頼める数で断らない（2026-10-12。係は1つずつ取るので、順番に並べて見込みを伝える）
+                settings = acquisition_settings_for(replies, min_plays,
+                                                    fan_sounds=(not user_urls) if fan_sounds is None else bool(fan_sounds)) or {}
+                settings.update(extra_settings or {})
+                aid = launch.new_analysis(user_id, song, artist, music_url, settings or None, music_urls=urls)
+        except Exception:
+            if supersede is not None:
+                _supersede_end(supersede, None)
+            raise
+        if supersede is not None:
+            _supersede_end(supersede, aid)
+            old_opts = _options(ANALYSES_DIR / supersede)
+            if old_opts.get("skip_confirm") and created:   # 界隈の確認を省く頼みは引き継ぐ
+                _set_options(ANALYSES_DIR / aid, skip_confirm=True, skip_confirm_at=_now())
+        seeded = _seed_from(seed["from"], aid, seed.get("enriched", True), seed.get("comments", True)) \
+            if (seed and created) else {}
     if LOCAL is not None and created and pages is None:   # どの楽曲ページで進めるかを見せるため、題・作者・UGC 数を読む（読めなくても進める）
         try:
             info = LOCAL.inspect_music(music_url) or {}
@@ -1263,11 +1453,37 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
         if any(r.get("video_count") for r in rec):
             pipeline.write_json(ANALYSES_DIR / aid / "raw" / "music_pages.json", rec)
             pipeline.write_json(ANALYSES_DIR / aid / "raw" / "music_page.json", rec[0])
+    if created:   # 受け付けのときに選んだページと外したページ（理由つき）を残す（info で答える。前は返事の中にしか無かった）
+        try:
+            from acquire import pipeline
+            pipeline.write_json(ANALYSES_DIR / aid / "raw" / "page_choice.json", {
+                "at": _now(), "how": "利用者が渡したページ" if user_urls else "Mac が探して比べたページ",
+                "found_via": found_via, "read_videos": n_read, "fit_videos": n_fit,
+                "chosen": [{"url": u, **{k: (i or {}).get(k) for k in ("title", "creator", "video_count", "video_count_text")}}
+                           for u, i in (pages or [(music_url, {})])],
+                "dropped": [{"url": u, "why": w, **{k: (i or {}).get(k) for k in ("title", "creator", "video_count", "video_count_text")}}
+                            for u, i, w in dropped],
+                "superseded": supersede, "seeded": seeded})
+        except Exception:
+            pass
     kick = LOCAL.ensure_app() if LOCAL is not None else launch.ensure_worker()
     p = launch.progress(aid)
     title = song
     eta = p.get("eta_seconds")
     head = f"「{title}」の{'取得を受け付けました' if created else '取得はもう受け付けています'}（分析 ID: {aid}）。"
+    if supersede is not None and created:
+        old_m = _read_json(ANALYSES_DIR / supersede / "analysis.json", {}) or {}
+        head += (f"新しい分析として取り直します。前の分析（{str(old_m.get('created_at') or '')[:10]} に作ったもの・分析 ID: {supersede}）は"
+                 "消さずに残してあります。")
+        if seeded.get("enriched") or seeded.get("comments_rows"):
+            head += "前の分析で取った動画の属性・コメントは使い回し、重なる動画は TikTok に取りに行きません。"
+    elif created and LOCAL is not None:
+        prev = [b for b in list_analyses(user_id) if b.id != aid and _written_once(b) and not _set_aside(b)
+                and launch._same_song(b.meta, song, urls, artist)]
+        if prev:   # 完成したレポートがある曲を新しく頼まれた: 新しく取ることを一言（前のレポートはそのまま）
+            last = max(prev, key=lambda b: b.meta.get("created_at", ""))
+            head += f"前に作ったレポート（{str(last.meta.get('created_at') or '')[:10]}）はそのまま残っています。新しく集めて、新しいレポートを作ります。"
+    head += disk_note
     meta_now = _read_json(ANALYSES_DIR / aid / "analysis.json", {}) or {}
     mp = min_plays_of(meta_now)
     plays_line = (f"週ごとに選ぶ動画は再生{mp:,}以上にします（起点・大型ヒット・本人・公式などは再生に関わらず取ります）。"
@@ -1408,7 +1624,15 @@ def _auto_confirm(a: Analysis, st: dict, t: dict):
     return _run_services(a, st)
 
 
-def next_task(user_id: str, ref: str | None = None, skip_confirm: bool = False) -> dict:
+def _pick_for_work(user_id: str):
+    """曲名なしの「続けて」: AI の作業が残っている分析（取得中・取り足し中でない）を先に選ぶ
+    （2026-10-12: 2曲を並べていると、取得中のほうを選んで「待って」と返していた。docs/PLAN_0_8.md 第6章）"""
+    cands = [b for b in list_analyses(user_id) if not _set_aside(b) and _acq_status(b) in (None, "done")
+             and _is_active(b) and not _deepen_view(b)]
+    return max(cands, key=lambda b: b.meta.get("created_at", "")) if cands else None
+
+
+def next_task(user_id: str, ref: str | None = None, skip_confirm: bool = False, want_confirm: bool = False) -> dict:
     _await_deepen(user_id, ref)
     with _lock:
         kb = _kb()
@@ -1420,9 +1644,11 @@ def next_task(user_id: str, ref: str | None = None, skip_confirm: bool = False) 
                 a0 = None   # 分析がまだ無くても、知識ベースの仕事はできる
             if a0 is None or _kb_ok_now(a0):
                 return _kb_task_text(kb, kt)
-        a = resolve(user_id, ref)
+        a = (None if ref else _pick_for_work(user_id)) or resolve(user_id, ref)
         if skip_confirm and not _options(a.dir).get("skip_confirm"):
             _set_options(a.dir, skip_confirm=True, skip_confirm_at=_now())
+        if want_confirm and _options(a.dir).get("skip_confirm"):   # 「やっぱり界隈の確認をしたい」（確認の前なら戻せる。過ぎていれば redo の confirm）
+            _set_options(a.dir, skip_confirm=False, skip_confirm_undone_at=_now())
         av = _acq_view(a)
         if av:
             if av["state"] == "cancelled":   # やめた取得は終わらないので「終わったら続けて」とは言わない。やり直し方を書く
@@ -1442,10 +1668,13 @@ def next_task(user_id: str, ref: str | None = None, skip_confirm: bool = False) 
             fresh = _recut_queued_now(a)
             if fresh:
                 return fresh
-        if is_w1(a) and t is not None and t["type"] == "confirm" and _options(a.dir).get("skip_confirm"):
+        if is_w1(a) and t is not None and t["type"] == "confirm" and _options(a.dir).get("skip_confirm") \
+                and not (t.get("params") or {}).get("no_auto"):   # 「界隈の確認からやり直して」は、確認を省く設定でも止まる
             t = _auto_confirm(a, st, t)
         if t is None:
             t = st["tasks"][-1]
+        if t["kind"] == "done" and t["status"] != "done" and _pending(a):
+            return _done_then_pending(user_id, a, st, t)
         rendered = _render(a, t, st)
         now = _now()
         if t["kind"] != "done":
@@ -1488,6 +1717,25 @@ def next_task(user_id: str, ref: str | None = None, skip_confirm: bool = False) 
         _write_text(a.outputs("prompts", f"{t['n']:02d}-{t['type']}.md"), text)
         return {"text": text, "task_id": t["task_id"], "kind": t["kind"], "analysis_id": a.id,
                 "progress": _progress(st)}
+
+
+def _done_then_pending(user_id: str, a: Analysis, st: dict, t: dict) -> dict:
+    """今の版の完了の知らせを出し、積んであった頼み（途中で頼まれた直し・掘り下げ・切り直し）を1つ始める"""
+    rendered = _render(a, t, st)
+    now = _now()
+    t.update({"status": "done", "done_at": now, "first_issued_at": t.get("first_issued_at") or now})
+    _write_json(a.state_path, st)
+    rows = _pending(a)
+    job = rows.pop(0)
+    _write_json(_pending_path(a), rows)
+    more = _apply_pending(user_id, a, job)
+    left = f"（ほかにも {len(rows)} 件の頼みが積んであり、これが済んだら続けて始める）" if rows else ""
+    text = (rendered["text"] + f"\n\n---\n## 続けて: 途中で頼まれていた{PENDING_KINDS.get(job.get('kind'), '')}{left}\n\n" + more
+            + "\n\n（AI へ: まず利用者に、この版ができたことを短く伝える。続けて、頼まれていたことに進む。"
+              "上の文が「止まる」と言っていればそこで止まり、そうでなければ next_task を呼んで続ける）")
+    a.log(event="issue", task_id=t["task_id"], kind="done", chars=len(text), pending=job.get("kind"))
+    _write_text(a.outputs("prompts", f"{t['n']:02d}-{t['type']}.md"), text)
+    return {"text": text, "task_id": t["task_id"], "kind": "done", "analysis_id": a.id, "progress": _progress(st)}
 
 
 def submit(user_id: str, task_id: str, output) -> dict:
@@ -1705,8 +1953,44 @@ def _paginate(units: list) -> list:
     return pages
 
 
+READ_EXTRA = {"chapters": "章の名前の一覧（chapter:<名前> で読む）", "appendix": "付録（集めた本数・UGC の合計など）",
+              "memo": "確認メモ（出どころ・推測で書いたところ）", "verify": "検算の結果"}
+
+
+def _read_names(a: Analysis) -> str:
+    names = ["taxonomy_sample", "label_set", "weekly", "comments:<seq>", "taxonomy", "taxonomy_proposal", "sheet:NN", "xsheet:NN",
+             "kb:glossary", "kb:style", "kb:cards", "kb:community", "note:<記事>", "past:<番号>", "synthesis", "pathway", "outline",
+             "refs", "research", "era", "chapter:<名前>", "note_chapter:<名前>", "labeled:<界隈>"] + list(READ_EXTRA)
+    return "・".join(names)
+
+
 def _pages_of(a: Analysis, name: str) -> list:
     """長い Markdown を、動画の区切り（### seq）でページに分ける"""
+    if name == "glossary" and is_w1(a):   # W1 の用語集は知識ベースにある（前は試作の置き場を読んで、呼び直しても直らないエラーになっていた）
+        name = "kb:glossary"
+    if name in READ_EXTRA:
+        out = a.dir / "outputs"
+        if name == "chapters":
+            chs = sorted(p.stem for p in (out / "chapters").glob("*.md")) if (out / "chapters").is_dir() else []
+            if not chs:
+                raise RunnerError("章はまだ書かれていません")
+            return [("章の名前（chapter:<名前> で本文、note_chapter:<名前> で note 用の仕上げを読む）:\n"
+                     + "\n".join(f"- {c}" for c in chs))]
+        if name == "appendix":
+            md = (out / "REPORT.md").read_text(encoding="utf-8") if (out / "REPORT.md").exists() else ""
+            i = md.find("\n## 9")
+            if i < 0:
+                raise RunnerError("付録はまだありません（レポートの完成のときに作る）")
+            return _paginate([md[i:]])
+        if name == "memo":
+            if not (out / "EDITOR_NOTES.md").exists():
+                raise RunnerError("確認メモはまだありません（レポートの完成のときに作る）")
+            return _paginate(re.split(r"(?m)^(?=## )", (out / "EDITOR_NOTES.md").read_text(encoding="utf-8")))
+        if name == "verify":
+            v = _read_json(out / "verify.json")
+            if v is None:
+                raise RunnerError("検算はまだです（レポートの完成のときにする）")
+            return [json.dumps(v, ensure_ascii=False, indent=1)]
     if is_w1(a):
         import flow_w1
         units = flow_w1.units_of(a, name, None)
@@ -1729,7 +2013,8 @@ def _pages_of(a: Analysis, name: str) -> list:
             raise RunnerError(f"{name} はまだありません")
         units = [json.dumps(tax, ensure_ascii=False, indent=1)]
     else:
-        raise RunnerError(f"知らない資料の名前です: {name}")
+        raise RunnerError(f"知らない資料の名前です: {name}。読める名前: {_read_names(a)}"
+                          "（楽曲ページ・音源・本数・版などの質問は info で）")
     return _paginate(units)
 
 
@@ -1768,21 +2053,84 @@ def read(user_id: str, ref: str | None, name: str, page: int = 1) -> dict:
 # ---------------------------------------------------------------------------
 # 完成後の直し（H5）と、指示の設定
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 途中で頼まれた直し・掘り下げ・切り直しを積む（2026-10-12 ユーザー「原理上できない事はない」。docs/PLAN_0_8.md 2-3）。
+# 前は「レポートがまだできていません。完成してから」「いま〇〇の途中です。終わってから」と断っていた。
+# 今の作業（第1版・掘り下げ・切り直し・取得）が終わって完了の知らせを出すときに、積んだ順に1つずつ始める
+# ---------------------------------------------------------------------------
+PENDING_KINDS = {"revise": "レポートの直し", "deepen": "界隈の掘り下げ", "recut": "界隈の切り直し"}
+MAX_REQUEST_CHARS = 8000   # 直し・掘り下げ・切り直しの頼みの言葉（前は 2000字。長い頼みも受ける）
+
+
+def _pending_path(a: Analysis) -> Path:
+    return a.dir / "state" / "pending.json"
+
+
+def _pending(a: Analysis) -> list:
+    return _read_json(_pending_path(a), []) or []
+
+
+def _queue_request(a: Analysis, kind: str, busy: str, **kw) -> dict:
+    rows = _pending(a)
+    rows.append({"kind": kind, "at": _now(), **kw})
+    _write_json(_pending_path(a), rows)
+    a.log(event="pending_added", kind=kind, n=len(rows))
+    what = str(kw.get("instruction") or "")[:60]
+    order = "" if len(rows) == 1 else f"（前に{len(rows) - 1}件の頼みが積んであり、その次）"
+    return {"text": f"「{a.title}」はいま{busy}です。それが終わったら、続けて{PENDING_KINDS[kind]}（「{what}」）にかかります{order}。"
+                    "途中で止めずに自動で進めます。\n（AI へ: 利用者にそう短く伝える。いま進めている作業があれば next_task で続ける。"
+                    "同じ頼みを言い換えて何度も呼ばない）", "analysis_id": a.id, "queued": kind}
+
+
+def _busy_label(a: Analysis, st: dict | None) -> str:
+    acq = a.meta.get("acquisition") or {}
+    if acq and acq.get("status") != "done":
+        return "TikTok から集めている途中"
+    if _deepen_view(a):
+        return "コメントを取り足している途中"
+    if st is not None:
+        cur = _current(st)
+        if cur is not None and cur["kind"] != "done":
+            if _recut_pending(st) or _recut_rest(st, cur):
+                return "界隈の切り直しの途中"
+            if any(t["type"] in DEEPEN_TASKS and t["status"] != "done" for t in st["tasks"]):
+                return "界隈の掘り下げの途中"
+            return "レポートの第1版を書いている途中" if not _written_once(a) else "レポートを書き直している途中"
+    return ""
+
+
+def _apply_pending(user_id: str, a: Analysis, job: dict) -> str:
+    kind = job.get("kind")
+    try:
+        if kind == "revise":
+            r = revise(user_id, a.id, job.get("instruction", ""))
+        elif kind == "deepen":
+            r = deepen(user_id, a.id, job.get("community", ""), job.get("instruction", ""))
+        elif kind == "recut":
+            r = recut(user_id, a.id, job.get("instruction", ""))
+        else:
+            return ""
+        return r["text"]
+    except RunnerError as e:
+        return f"頼まれていた{PENDING_KINDS.get(kind, '')}は始められませんでした（{e}）。利用者にそのまま伝える。"
+
+
 def revise(user_id: str, ref: str | None, instruction: str) -> dict:
     """「このレポートだけ」の直し。該当の章を書き直す仕事を足し、AI はそのまま next_task で片付ける"""
     instruction = (instruction or "").strip()
     if not instruction:
         raise RunnerError("直したい内容を教えてください")
-    if len(instruction) > 2000:
-        raise RunnerError("直しの指示は2000字までにしてください")
+    if len(instruction) > MAX_REQUEST_CHARS:
+        raise RunnerError(f"直しの指示は{MAX_REQUEST_CHARS}字までにしてください（分けて頼めば全部受けます）")
     with _lock:
         a = resolve(user_id, ref)
         if not is_w1(a):
             raise RunnerError("この分析（試作）は直しに対応していません")
-        st = _load_state(a)
-        cur = _current(st)
-        if cur is not None and cur["kind"] != "done":
-            raise RunnerError("レポートがまだできていません。完成してから直しを頼んでください")
+        acq = a.meta.get("acquisition")
+        st = _load_state(a) if not (acq and acq.get("status") != "done") else None
+        busy = _busy_label(a, st)
+        if busy:   # 途中の頼みは積んで、今の作業が終わったら始める（前は断っていた）
+            return _queue_request(a, "revise", busy, instruction=instruction)
         import flow_w1
         for t in st["tasks"]:   # 前の完了の知らせを AI が受け取らないまま会話が終わっていたら、済んだことにする（deepen・recut と同じ）
             if t["kind"] == "done" and t["status"] != "done":
@@ -1832,21 +2180,17 @@ def _match_community(tax: dict, text: str) -> str:
 def deepen(user_id: str, ref: str | None, community: str, instruction: str) -> dict:
     """完成したレポートの、ある界隈の掘り下げ。取る動画を決めて取得の待ち行列に入れ、AI の仕事を末尾に足す"""
     instruction = (instruction or "").strip() or "この界隈をもっと掘り下げて"
-    if len(instruction) > 2000:
-        raise RunnerError("頼みの言葉は2000字までにしてください")
+    if len(instruction) > MAX_REQUEST_CHARS:
+        raise RunnerError(f"頼みの言葉は{MAX_REQUEST_CHARS}字までにしてください（分けて頼めば全部受けます）")
     with _lock:
         a = resolve(user_id, ref)
         if not is_w1(a):
             raise RunnerError("この分析（試作）は掘り下げに対応していません")
-        st = _load_state(a)
-        cur = _current(st)
-        if cur is not None and cur["kind"] != "done":
-            if _recut_pending(st) or _recut_rest(st, cur):
-                raise RunnerError(f"いま界隈の切り直しの途中です。終わってから頼んでください（「{a.title}の分析を続けて」で進みます）")
-            if any(t["type"] in DEEPEN_TASKS and t["status"] != "done" for t in st["tasks"]):
-                raise RunnerError(f"いま界隈「{(a.meta.get('deepen') or {}).get('community')}」の掘り下げの途中です。"
-                                  f"終わってから頼んでください（「{a.title}の分析を続けて」で進みます）")
-            raise RunnerError("レポートがまだできていません。完成してから頼んでください")
+        acq = a.meta.get("acquisition")
+        st = _load_state(a) if not (acq and acq.get("status") != "done") else None
+        busy = _busy_label(a, st)
+        if busy:   # 途中の頼みは積んで、今の作業が終わったら始める（前は断っていた）
+            return _queue_request(a, "deepen", busy, community=community, instruction=instruction)
         tax = _taxonomy(a)
         k = _match_community(tax, community)
         from acquire import deepen as dp
@@ -1995,8 +2339,11 @@ def _recut_rest(st: dict, cur: dict) -> bool:
     """今の仕事が、切り直しのあとに続く仕事（段階の区切りから新しい版の仕上げまで）か。
     今の仕事より前にある最後の頼み（切り直し recut・掘り下げ dcomments・直し revise）が切り直しなら、その続き
     （2026-10-06 通し試験: 取り足しが済んで「続けて」の前に掘り下げ・切り直しを頼むと「レポートがまだできていません」だけ返っていた）"""
+    if (cur.get("params") or {}).get("redo"):   # やり直し（redo）が積んだ仕事は、切り直しの続きではない（2026-10-12）
+        return False
     i = st["tasks"].index(cur)
-    asks = [t["type"] for t in st["tasks"][:i] if t["type"] in ("recut", "dcomments", "revise")]
+    asks = [("redo" if (t.get("params") or {}).get("redo") else t["type"]) for t in st["tasks"][:i]
+            if t["type"] in ("recut", "dcomments", "revise") or (t.get("params") or {}).get("redo")]
     return bool(asks) and asks[-1] == "recut"
 
 
@@ -2005,25 +2352,17 @@ def recut(user_id: str, ref: str | None, instruction: str) -> dict:
     instruction = (instruction or "").strip()
     if not instruction:
         raise RunnerError("界隈をどう切り直したいかを、利用者の言葉で instruction に入れてください")
-    if len(instruction) > 2000:
-        raise RunnerError("頼みの言葉は2000字までにしてください")
+    if len(instruction) > MAX_REQUEST_CHARS:
+        raise RunnerError(f"頼みの言葉は{MAX_REQUEST_CHARS}字までにしてください（分けて頼めば全部受けます）")
     with _lock:
         a = resolve(user_id, ref)
         if not is_w1(a):
             raise RunnerError("この分析（試作）は界隈の切り直しに対応していません")
         acq = a.meta.get("acquisition")
-        if acq and acq.get("status") != "done":
-            raise RunnerError("コメントの取得が終わっていません。取得とレポートが済んでから頼んでください")
-        if _deepen_view(a):
-            raise RunnerError(f"いまコメントの取り足しの途中です。終わってから頼んでください（「{a.title}の分析を続けて」で進みます）")
-        st = _load_state(a)
-        cur = _current(st)
-        if cur is not None and cur["kind"] != "done":
-            if _recut_pending(st) or _recut_rest(st, cur):
-                raise RunnerError(f"いま界隈の切り直しの途中です。「{a.title}の分析を続けて」で進みます")
-            if any(t["type"] in DEEPEN_TASKS and t["status"] != "done" for t in st["tasks"]):
-                raise RunnerError(f"いま界隈の掘り下げの途中です。終わってから頼んでください（「{a.title}の分析を続けて」で進みます）")
-            raise RunnerError("レポートがまだできていません。完成してから頼んでください")
+        st = _load_state(a) if not (acq and acq.get("status") != "done") else None
+        busy = _busy_label(a, st)
+        if busy:   # 途中の頼みは積んで、今の作業が終わったら始める（前は断っていた。界隈の確認の前なら、確認の答えで直せる）
+            return _queue_request(a, "recut", busy, instruction=instruction)
         import flow_w1
         for t in st["tasks"]:   # 前の完了の知らせを AI が受け取らないまま会話が終わっていたら、済んだことにする
             if t["kind"] == "done" and t["status"] != "done":
@@ -2131,6 +2470,8 @@ def _stoppable(user_id: str, restart: bool = False) -> list:
     mine = list_analyses(user_id)
     out = []
     for a in mine:
+        if _set_aside(a):   # 取り直した・しまった分析は候補にしない
+            continue
         acq = a.meta.get("acquisition") or {}
         st, dp = acq.get("status"), (a.meta.get("deepen") or {}).get("status")
         if st == "running":
@@ -2145,10 +2486,27 @@ def _stoppable(user_id: str, restart: bool = False) -> list:
     return sorted(out, key=lambda x: x[0].meta.get("created_at", ""))
 
 
+def _state_label(a: Analysis) -> str:
+    """分析の様子の短い名前（一覧で、どれのことか利用者に聞くとき）"""
+    acq = a.meta.get("acquisition") or {}
+    st = acq.get("status")
+    if st in ("queued", "running"):
+        return "取得中" if st == "running" else "順番待ち"
+    if st == "failed":
+        return "取得が止まっている"
+    if st == "cancelled":
+        return "取得をやめた"
+    if _written_once(a):
+        return "レポート完成"
+    return "集め終わり・レポートを書く前か途中"
+
+
 def _ask_which(cands: list, restart: bool = False) -> dict:
     """候補が2つ以上: どれもやめずに一覧を返し、どれのことか AI に利用者へ1回聞かせる
     （2026-10-06 ユーザーの決定。前は新しいほうを黙ってやめていた）"""
-    kinds = "取得中・順番待ち・止まった" if any(label == "止まっている" for _, label in cands) else "取得中・順番待ちの"
+    kinds = ("取得中・順番待ち・止まった" if any(label == "止まっている" for _, label in cands) else "取得中・順番待ちの") \
+        if all(label in ("止まっている", "順番待ち") or label.startswith("取得中") or label.startswith("取り足し") for _, label in cands) \
+        else ""
     which = "どちら" if len(cands) == 2 else "どれ"
     listing = "、".join(f"{a.title}（{label}。分析 ID: {a.id}）" for a, label in cands)
     tool, verb = ("restart_analysis", "やり直す") if restart else ("cancel_analysis", "やめる")
@@ -2170,8 +2528,19 @@ def cancel_analysis(user_id: str, ref: str | None) -> dict:
                 return _ask_which(cands)
         a = resolve(user_id, ref)
         acq = a.meta.get("acquisition") or {}
+        dp = a.meta.get("deepen") or {}
+        if acq.get("status") == "done" and dp.get("status") in ("queued", "running"):
+            # 掘り下げ・切り直しの取り足しをやめる（2026-10-12: 一覧には「やめられる」と出すのに、呼ぶと断っていた）。取れた分は使う
+            m = _read_json(a.dir / "analysis.json")
+            m["deepen"].update({"status": "cancelled", "cancelled_at": _now(), "cancel_reason": "利用者がやめた"})
+            _write_json(a.dir / "analysis.json", m)
+            LOCAL.request_stop(a.id)
+            what = "界隈の切り直し" if dp.get("kind") == "recut" else "界隈の掘り下げ"
+            return {"text": f"「{a.title}」の{what}のコメントの取り足しをやめました（UGC Analyzer が数秒で止めます）。"
+                            f"取れた分だけで書き直すなら「{a.title}の分析を続けて」と言ってください。", "analysis_id": a.id}
         if acq.get("status") == "done":
-            raise RunnerError(f"「{a.title}」の取得はもう終わっています")
+            raise RunnerError(f"「{a.title}」の取得はもう終わっていて、やめるものがありません"
+                              "（集め直すなら restart_analysis、AI の作業をやり直すなら redo）")
         if acq.get("status") == "cancelled":
             return {"text": f"「{a.title}」の取得はもうやめてあります。", "analysis_id": a.id}
         m = _read_json(a.dir / "analysis.json")
@@ -2183,83 +2552,277 @@ def cancel_analysis(user_id: str, ref: str | None) -> dict:
 
 
 def restart_analysis(user_id: str, ref: str | None, music_url: str = "", music_urls: list | None = None,
-                     replies: bool | None = None, min_plays: int | None = None) -> dict:
-    """取得をやめて、やり直す（取得アプリの形）。music_url・music_urls があればそのページ（複数なら全部合わせて）で、
-    無ければ楽曲ページ探しから最初に
-    （2026-10-04 ユーザー「〇〇の取得をやめて、このページでやり直して」「止めて初めからもう一度やって、正しい楽曲ページを抽出できるか試したい」）。
-    前の分析は「やめた」にして、取得アプリが係を止める（印のファイル）。
-    分析を言わずに頼まれ、やり直せる分析が2つ以上あれば、やめずに一覧を返す"""
+                     replies: bool | None = None, min_plays: int | None = None, add_music_urls: list | None = None,
+                     remove_music_urls: list | None = None, fan_sounds: bool | None = None, read_more=None,
+                     refresh: bool = False, resume: bool = False) -> dict:
+    """TikTok から集め直す（取得アプリの形）。どの状態の分析でも受ける
+    （2026-10-12 ユーザー「原理上できない事はない」「時間がかかるなら一回警告すりゃあいい話」。docs/PLAN_0_8.md 2-1。
+    前は取得が済んだ分析を断り、start_analysis は前の分析に戻すので、友達が「最初から」「このページも足して」を頼めなかった）。
+    - resume: 止まった・やめた取得を、済んだ段の続きから（同じ分析）
+    - それ以外: 新しい分析として取り直し、前の分析は消さずに「取り直した」の印を付けて残す（前のレポートも残る）。
+      music_url・music_urls（このページで）／add_music_urls（足す）／remove_music_urls（外す）／fan_sounds（ファンの音源を探すか）／
+      read_more（詳しく読む本数。数か "all"）／refresh（最新の数字で取り直す。属性も取り直す）／replies／min_plays。
+      どれも無ければ「最初から」（楽曲ページ探し・ファンの音源探しから全部、今の版の決まりで）。
+      前の分析で取った属性・サムネ・コメントは、使えるときは使い回す（重なる動画は TikTok に取りに行かない）
+    分析を言わずに頼まれ、当てはまる分析が2つ以上あれば、どれも触らずに一覧を返す"""
     if LOCAL is None:
         raise RunnerError("取得のやり直しは、このサービスでは使えません（運営に連絡してください）")
-    urls = _clean_urls([music_url] + list(music_urls or []))
-    bad = [u for u in [music_url] + list(music_urls or [])
+    lists = {"music_urls": [music_url] + list(music_urls or []), "add_music_urls": list(add_music_urls or []),
+             "remove_music_urls": list(remove_music_urls or [])}
+    bad = [u for xs in lists.values() for u in xs
            if (u or "").strip() and not MUSIC_URL_RE.match((u or "").strip().split("?")[0])]
     if bad:
         raise RunnerError("楽曲ページの URL は https://www.tiktok.com/music/曲名-数字 の形です: " + ", ".join(bad))
+    given, add, remove = (_clean_urls(lists[k]) for k in ("music_urls", "add_music_urls", "remove_music_urls"))
+    if read_more not in (None, "", 0):
+        if str(read_more).strip().lower() in ("all", "全部", "すべて"):
+            read_more = "all"
+        else:
+            try:
+                read_more = max(1, int(read_more))
+            except (TypeError, ValueError):
+                raise RunnerError("read_more は詳しく読む動画の本数（数）か \"all\"（台帳を全部読む）です")
     with _lock:
         if not (ref or "").strip():
             cands = _stoppable(user_id, restart=True)
             if len(cands) >= 2:
                 return _ask_which(cands, restart=True)
+            if not cands:
+                mine = [b for b in list_analyses(user_id) if not _set_aside(b)]
+                if len(mine) >= 2:
+                    return _ask_which([(b, _state_label(b)) for b in sorted(mine, key=lambda b: b.meta.get("created_at", ""))],
+                                      restart=True)
         a = resolve(user_id, ref)
-        acq = a.meta.get("acquisition") or {}
-        if acq.get("status") == "done":
-            raise RunnerError(f"「{a.title}」の取得はもう終わっています。別の楽曲ページで取り直すなら、新しく分析を頼んでください")
-        # すでにやめた分析（「〇〇の取得をやめて」のあとの「このページでやり直して」）は、やめるのを飛ばして新しく始める
-        was_cancelled = acq.get("status") == "cancelled"
-        old_urls = [u for u in (a.meta.get("music_urls") or [a.meta.get("music_url")]) if u]
-        old = "・".join(old_urls) or "楽曲ページ不明"
         m = _read_json(a.dir / "analysis.json")
+        acq = m.get("acquisition") or {}
+        st = acq.get("status")
         song = (m.get("song") or {}).get("title") or a.title
         artist = (m.get("song") or {}).get("artist") or ""
-        rep = wants_replies(m) if replies is None else bool(replies)   # 省けば前の分析の指定を引き継ぐ
+        if m.get("superseded_by") and m["superseded_by"] != SUPERSEDING:
+            nb = m["superseded_by"]
+            raise RunnerError(f"「{a.title}」（分析 ID: {a.id}）は取り直し済みで、新しい分析は {nb} です。"
+                              f"やり直すなら analysis_id={nb} で呼び直してください")
+        if resume:
+            if st in ("failed", "cancelled"):
+                acq.update({"status": "queued", "requeued_at": _now(), "resumed_by": "利用者が続きからと頼んだ"})
+                m["acquisition"] = acq
+                m.setdefault("collector", {})["retries"] = 0
+                _write_json(a.dir / "analysis.json", m)
+                LOCAL.ensure_app()
+                from acquire import launch
+                p = launch.progress(a.id)
+                eta = p.get("eta_seconds")
+                back = come_back_line(eta, "TikTok から動画とコメントを集めるの", a.title,
+                                      "そこからレポートを書きます" + CONFIRM_ONCE + "。")
+                return {"text": f"「{a.title}」の取得を、済んだところの続きから取ります（分析 ID: {a.id}）。"
+                                "そのあいだ Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）。\n"
+                                f"「{back}」\n（AI へ: この内容を利用者に短く伝えて止まる。下の「」の文はそのまま入れる）",
+                        "analysis_id": a.id, "created": False, "eta_seconds": eta}
+            if st in ("queued", "running"):
+                return {"text": f"「{a.title}」はいま取得中・順番待ちです（続きから取っています）。" + (_acq_view(a) or {}).get("message", ""),
+                        "analysis_id": a.id, "state": "acquiring"}
+            return {"text": f"「{a.title}」の取得はもう終わっています（続きは残っていません）。"
+                            "（AI へ: そのまま next_task で進める。集め直すなら resume を付けずに restart_analysis を呼ぶ）",
+                    "analysis_id": a.id, "kind": "resume"}
+        rep_old = wants_replies(m)
+        rep_ = rep_old if replies is None else bool(replies)
         mp = min_plays_of(m) if min_plays is None else int(min_plays)
-        skip = bool(_options(a.dir).get("skip_confirm"))   # 界隈の確認を省く頼みも引き継ぐ
-
-    def cancel_old():
-        """前の取得を「やめた」にして、取得アプリに係を止めさせる。新しいページを読んで選び終えてから呼ぶ
-        （先にやめると、ページを読む所で失敗したとき前の取得も新しい取得も無くなる。2026-10-06 通し試験）"""
-        with _lock:
-            m2 = _read_json(a.dir / "analysis.json")
-            st2 = (m2.get("acquisition") or {}).get("status")
-            if st2 == "cancelled":
-                return
-            if st2 == "done":   # ページを読んでいる間に取得が終わった
-                raise RunnerError(f"「{a.title}」の取得はもう終わっています。別の楽曲ページで取り直すなら、新しく分析を頼んでください")
-            m2["acquisition"].update({"status": "cancelled", "cancelled_at": _now(),
-                                      "cancel_reason": f"利用者が別の楽曲ページでやり直した（{'・'.join(urls) or '楽曲ページ探しから'}）"})
-            _write_json(a.dir / "analysis.json", m2)
-            LOCAL.request_stop(a.id)   # 取得アプリが、この分析を取っている係を止める
-
-    did = "はもうやめてあります" if was_cancelled else "をやめました"
-    if not urls:   # 最初から: 楽曲ページを探し直す（AI が検索して start_analysis を呼ぶ）
-        cancel_old()
-        res = _music_search_hint(song, artist, f"「{a.title}」の前の取得（{old}）{'はもうやめてある' if was_cancelled else 'をやめた'}。"
-                                               "楽曲ページ探しから最初にやり直す。")
-        if rep:
-            res["text"] += "\n（AI へ: この分析は返信も取る指定。start_analysis を呼ぶときは replies=true を付ける）"
-        if mp is not None:
-            res["text"] += f"\n（AI へ: この分析は再生の下限の指定あり。start_analysis を呼ぶときは min_plays={mp} を付ける）"
-        if skip:
-            res["text"] += "\n（AI へ: この分析は界隈の確認を省く指定。start_analysis を呼ぶときは skip_confirm=true を付ける）"
-        res["cancelled"] = a.id
-        return res
-    res = start_analysis(user_id, song, artist, music_urls=urls, replies=rep, min_plays=mp, skip_confirm=skip,
-                         before_create=cancel_old)   # やり直しは利用者が選んだページで（複数なら全部）
+        skip = bool(_options(a.dir).get("skip_confirm"))
+        old_set = m.get("acquisition_settings") or {}
+        old_urls = _urls_of(a)
+        changes = []
+        if given:
+            base = given
+            changes.append("楽曲ページを入れ替える")
+        else:
+            base = list(old_urls)
+        have = _ids(base)
+        new_add = [u for u in add if _ids([u]) - have]
+        if new_add:
+            base += new_add
+            changes.append(f"楽曲ページを{len(new_add)}つ足す")
+        if remove:
+            drop = _ids(remove)
+            kept = [u for u in base if not (_ids([u]) & drop)]
+            if len(kept) < len(base):
+                changes.append(f"楽曲ページを{len(base) - len(kept)}つ外す")
+            base = kept
+        if not base:
+            raise RunnerError("外すと楽曲ページが1つも残りません。残すページか、新しいページの URL を教えてください")
+        extra = {k: old_set[k] for k in ("read_select", "read_normal", "read_cap") if k in old_set}
+        if read_more == "all":
+            extra.update({"read_select": 0})
+            changes.append("台帳の動画を全部詳しく読む")
+        elif read_more:
+            extra.update({"read_select": 1, "read_normal": int(read_more), "read_cap": max(1000, int(read_more))})
+            changes.append(f"詳しく読む動画を約{int(read_more)}本に")
+        if refresh:
+            changes.append("最新の数字で取り直す")
+        if fan_sounds is not None:
+            changes.append("ファンの音源を探す" if fan_sounds else "ファンの音源は探さない")
+        if replies is not None and bool(replies) != rep_old:
+            changes.append("返信も取る" if replies else "返信は取らない")
+        if min_plays is not None and int(min_plays) != (min_plays_of(m) or 0):
+            changes.append(f"週ごとに選ぶ動画の再生の下限を{int(min_plays):,}に")
+        full = not (given or new_add or remove or read_more or refresh or fan_sounds is not None
+                    or replies is not None or min_plays is not None)
+    if full:   # 最初から: 楽曲ページ探し・ファンの音源探しから、今の版の決まりで全部
+        res = start_analysis(user_id, song, artist, replies=rep_, min_plays=mp, skip_confirm=skip,
+                             fresh=True, supersede=a.id)
+        what = "楽曲ページ探しから最初に取り直します"
+    else:
+        fs = (int(old_set.get("fan_sounds", 1) or 0) == 1) if fan_sounds is None else bool(fan_sounds)
+        seed = {"from": a.id, "enriched": not refresh, "comments": not (rep_ and not rep_old)}
+        res = start_analysis(user_id, song, artist, music_urls=base, replies=rep_, min_plays=mp, skip_confirm=skip,
+                             fresh=True, supersede=a.id, fan_sounds=fs, extra_settings=extra, seed=seed)
+        what = "・".join(changes) or "取り直します"
     if not res.get("analysis_id"):
-        # 渡されたページが全部、日本の地域で使えなかった（分析は作っていない。前の取得はやめる前なので、そのまま）。
-        # 呼び直すのは start_analysis でなく restart_analysis（同じ曲の取得が残っていると、start_analysis は受け付け済みを返すため）
-        body = _unavailable_hint(song, artist, res["unavailable"])["text"] if res.get("unavailable") else res["text"]
-        res["text"] = (f"「{a.title}」の前の取得（{old}）は{'もうやめてあります' if was_cancelled else 'まだやめていません'}。\n"
-                       + body.replace("music_urls に入れて start_analysis を呼び直す",
-                                      f"music_urls に入れて restart_analysis（analysis_id={a.id}）を呼び直す")
-                       + "\n（AI へ: start_analysis は呼ばない。" + ("" if was_cancelled else
-                                                                    "前の取得は、ほかの楽曲ページで restart_analysis を呼んだときにやめる。")
-                       + "返信・再生の下限・界隈の確認の指定は引き継ぐので付けなくてよい）")
+        # 楽曲ページを読めなかった・地域で使えない（新しい分析は作っていない。前の分析・前の取得はそのまま）
+        body = res["text"]
+        if not full:   # 渡されたページで呼び直すのは restart_analysis（start_analysis は前の分析に寄せることがある）
+            body = body.replace("music_urls に入れて start_analysis を呼び直す",
+                                f"music_urls に入れて restart_analysis（analysis_id={a.id}）を呼び直す")
+            body = re.sub(r"\n（AI へ: [^\n]*start_analysis を呼び直すとき[^\n]*）", "", body)   # start_analysis 向けの注は外す
+            body += "\n（AI へ: start_analysis は呼ばない。返信・再生の下限・界隈の確認の指定は引き継ぐので付けなくてよい）"
+        head = (f"「{a.title}」の前の取得（{'・'.join(old_urls) or '楽曲ページ不明'}）はまだやめていません。"
+                if st in ("queued", "running") else f"「{a.title}」はまだ取り直していません（前の分析はそのままです）。")
+        res["text"] = head + "\n" + body
         return res
-    res["text"] = (f"「{a.title}」の前の取得（{old}）{did}。\n" + res["text"])
-    res["cancelled"] = a.id
+    res["text"] = (f"「{a.title}」を取り直します（{what}）。\n" + res["text"]
+                   + "\n（AI へ: 集め終わったあと、AI がレポートを最初から書く（界隈の確認のあと 40分〜1時間・Claude Pro の5時間枠の約7割）"
+                     "ことも一言伝える）")
+    res["superseded"] = res["cancelled"] = a.id   # cancelled は前の名前（呼ぶ側・試験が見る）
     return res
+
+
+REDO_FROM = ("axes", "confirm", "label", "phases", "ccomments", "refs", "research", "era", "outline", "write", "finish")
+
+
+def redo(user_id: str, ref: str | None, frm: str = "", chapters=None, instruction: str = "", restore: str = "") -> dict:
+    """集めたデータのまま、AI の作業を段からやり直す（完成の前でも後でも）。restore なら前の版に戻す
+    （2026-10-12 ユーザー「ここの分析をここからやり直してみたい、に柔軟に対応できる道具を」。docs/PLAN_0_8.md 2-2・flow_w1.redo）"""
+    instruction = (instruction or "").strip()
+    if len(instruction) > MAX_REQUEST_CHARS:
+        raise RunnerError(f"頼みの言葉は{MAX_REQUEST_CHARS}字までにしてください（分けて頼めば全部受けます）")
+    frm = (frm or "").strip().lower()
+    if not restore and frm not in REDO_FROM:
+        raise RunnerError(f"from_step は {' / '.join(REDO_FROM)} のどれかです（前の版に戻すなら restore）")
+    if isinstance(chapters, str):
+        chapters = [c.strip() for c in re.split(r"[,、\s]+", chapters) if c.strip()] or None
+    import flow_w1
+    with _lock:
+        a = resolve(user_id, ref)
+        if not is_w1(a):
+            raise RunnerError("この分析（試作）はやり直しに対応していません")
+        acq = a.meta.get("acquisition") or {}
+        if acq and acq.get("status") != "done":
+            # 集め終わる前は AI の作業が始まっていない（集め終わったら最初から書く）。頼みの言葉は、書くときの頼みとして残す
+            if instruction:
+                _queue_request(a, "revise", "TikTok から集めている途中", instruction=instruction)
+            return {"text": f"「{a.title}」はまだ TikTok から集めている途中で、AI の作業は始まっていません。集め終わったら最初から書きます"
+                            + ("（頼みの言葉は、書き終えたあとの直しとして積みました）" if instruction else "")
+                            + "。（AI へ: 利用者にそう短く伝えて止まる）", "analysis_id": a.id}
+        st = _load_state(a)
+        if restore:
+            r = flow_w1.restore_version(a, st, restore)
+            _write_json(a.state_path, r["st"])
+            a.log(event="restore_requested", which=restore, restored=r.get("restored_id"))
+            text = (f"「{a.title}」のレポートを{r.get('restored') or '前の版'}に戻します（今の版も消さずに残してあります）。"
+                    "（AI へ: 続けて next_task を呼び、完了の知らせまで進める）")
+            return {"text": text, "analysis_id": a.id}
+        r = flow_w1.redo(a, st, frm, chapters=chapters, instruction=instruction or None)
+        _write_json(a.state_path, r["st"])
+        a.log(event="redo_requested", frm=frm, round=r.get("round"), chapters=r.get("chapters"), chars=len(instruction))
+    what = r.get("from_name") or frm
+    lines = [f"「{a.title}」を{what}からやり直します。"]
+    if r.get("deferred"):
+        lines.append(f"いまはまだ{what}の前の段を進めているので、そこに来たら頼みを活かして書きます（消したものはありません）。")
+    else:
+        if r.get("redone"):
+            lines.append("作り直すもの: " + "・".join(r["redone"]) + "。")
+        if r.get("reused"):
+            lines.append("使い回すもの: " + "・".join(r["reused"]) + "。")
+        lines.append("前の版は消さずに残してあり、戻すこともできます。")
+    if r.get("est_text"):
+        lines.append(f"見込み: {r['est_text']}。")
+    if _deepen_view(a):
+        lines.append("いまコメントの取り足しの途中なので、取り足しが終わってから進みます。")
+    ai = "（AI へ: この内容を利用者に短く伝え、確かめを求めずに、続けて next_task を呼んで進める。"
+    if r.get("asks_user"):
+        ai += "界隈の確認で一度止まるので、そこでは案を見せて答えを待つ。"
+    ai += "見込みの時間が長いときも、伝えるだけで進める）"
+    lines.append(ai)
+    return {"text": "\n".join(lines), "analysis_id": a.id}
+
+
+INFO_ABOUT = ("overview", "sounds", "video", "report", "app")
+
+
+def info(user_id: str, ref: str | None = None, about: str = "overview", target: str = "") -> dict:
+    """分析・アプリについての質問に、記録から答える（読むだけ。docs/PLAN_0_8.md 第3章・analysis_info.py）"""
+    import analysis_info
+    about = (about or "overview").strip().lower()
+    if about not in INFO_ABOUT:
+        raise RunnerError(f"about は {' / '.join(INFO_ABOUT)} のどれかです")
+    if about == "app":
+        fn = getattr(LOCAL, "app_info", None) if LOCAL is not None else None
+        try:
+            data = fn() if fn else None
+        except Exception as e:
+            data = {"recent_problems": [f"アプリの状態を読めなかった（{type(e).__name__}）"]}
+        return {"text": analysis_info.app(data)}
+    with _lock:
+        a = resolve(user_id, ref)
+        if about == "overview":
+            text = analysis_info.overview(a, sys.modules[__name__])
+        elif about == "sounds":
+            text = analysis_info.sounds(a, target)
+        elif about == "video":
+            text = analysis_info.video(a, target)
+        else:
+            versions = None
+            if is_w1(a):
+                import flow_w1
+                fv = getattr(flow_w1, "versions", None)
+                if fv:
+                    try:
+                        versions = fv(a)
+                    except Exception:
+                        versions = None
+            text = analysis_info.report(a, sys.modules[__name__], versions)
+        a.log(event="info", about=about, chars=len(text))
+        return {"text": text + "\n\n（AI へ: ここに無いことは「UGC Analyzer の記録には無い」と言い、推測で埋めない）", "analysis_id": a.id}
+
+
+def archive_analysis(user_id: str, ref: str | None, restore: bool = False) -> dict:
+    """分析をしまう（一覧・曲名での引き当て・「分析して」の再開に出さない。消さない）／戻す
+    （2026-10-12: 古い分析が溜まると、一覧が長くなり、曲名の取り違えも増える。docs/PLAN_0_8.md 第6章）"""
+    if not (ref or "").strip():
+        raise RunnerError("しまう（戻す）分析の曲名か分析 ID を教えてください")
+    with _lock:
+        mine = list_analyses(user_id)
+        ref_n = ref.strip().lower()
+        hits = [b for b in mine if b.id.lower() == ref_n] or \
+            [b for b in mine if ref_n in b.title.lower() and bool(b.meta.get("archived_at")) == bool(restore)]
+        if not hits:
+            raise RunnerError(f"「{ref}」に当たる{'しまってある' if restore else ''}分析がありません")
+        if len(hits) >= 2 and not any(b.id.lower() == ref_n for b in hits):
+            return {"text": "当たる分析が複数あります: " + "、".join(f"{b.title}（{_state_label(b)}・{str(b.meta.get('created_at') or '')[:10]}・"
+                                                         f"分析 ID: {b.id}）" for b in hits)
+                            + "。（AI へ: どれか利用者に1回聞き、分析 ID で呼び直す）"}
+        a = hits[0]
+        if not restore and _acq_status(a) in ("queued", "running"):
+            raise RunnerError(f"「{a.title}」は取得中です。しまう前に取得をやめてください（cancel_analysis）")
+        m = _read_json(a.dir / "analysis.json")
+        if restore:
+            m.pop("archived_at", None)
+            msg = f"「{a.title}」（{a.id}）を戻しました。"
+        else:
+            m["archived_at"] = _now()
+            msg = (f"「{a.title}」（{a.id}）をしまいました（消してはいません。レポートのフォルダもそのまま）。"
+                   "戻すときは「〇〇の分析を戻して」。")
+        _write_json(a.dir / "analysis.json", m)
+        return {"text": msg, "analysis_id": a.id}
 
 
 def update_knowledge(user_id: str) -> dict:

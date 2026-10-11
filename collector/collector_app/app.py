@@ -239,31 +239,70 @@ class Controller:
 
     def _handle_cancels(self):
         """Claude の道具が「この取得をやめる」の印を置いたら、その分析を取っている係を止める（2026-10-04、取得のやり直し）。
-        係を止めたあと、分析の状態を「やめた」に書き直す（係が最後に書いた状態で上書きされていることがあるため）"""
+        係を止めたあと、分析の状態を「やめた」に書き直す（係が最後に書いた状態で上書きされていることがあるため）。
+
+        掘り下げ・切り直しの取り足し（analysis.json の deepen）もやめられる（2026-10-12。前は取得が済んだ分析でも取得の状態を
+        「やめた」に書き直していた）。道具は deepen に status=cancelled・cancelled_at を書いてから同じ印を置く。見分け方:
+          - 取得（acquisition）が順番待ち・取得中でなく、deepen が順番待ち・取得中か、道具が書いた cancelled_at がある → 取り足しをやめる
+            （係の deepen.Run は自分の項目だけを足して書くので、上書きされても cancelled_at は残る）
+          - それ以外 → 取得をやめる（今までどおり）。ただし取得が済んでいる（done）なら、取得の状態は書き換えない。
+            例外は、道具がやめると書いた（cancelled_at）直後に係が取り終えて done で上書きしたとき（係は項目を足して書くので
+            cancelled_at が残る。そのあと取り直していない）。これは「やめた」に戻す（取り足しと同じ考え方）
+        係を止めるのは、係がこの分析を取っているとき（取得なら acquisition.pid、取り足しなら deepen.pid が係の PID）だけ"""
+        import json as _json
+        from acquire import pipeline
         for flag in config.LOCK_DIR.glob("cancel-*"):
             aid = flag.name[len("cancel-"):]
             p = config.ANALYSES_DIR / aid / "analysis.json"
             try:
-                import json as _json
                 m = _json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 flag.unlink(missing_ok=True)
                 continue
             acq = m.get("acquisition") or {}
+            dp = m.get("deepen") or {}
+            for_deepen = acq.get("status") not in ("queued", "running") and bool(dp) and \
+                (dp.get("status") in ("queued", "running") or bool(dp.get("cancelled_at")))
+            part = dp if for_deepen else acq
+            overwritten = not for_deepen and acq.get("status") == "done" and bool(acq.get("cancelled_at")) and \
+                str(acq.get("cancelled_at")) > str(acq.get("requeued_at") or "")
             wpid = self.worker.pid()
             # 係は1つで分析を順に取る。やめた分析が止まったあと、同じ係がもう別の分析を取っていれば、その係は止めない
-            if wpid and acq.get("pid") == wpid and self.worker.running() and not self._busy_with_other(aid, wpid):
-                self.worker.stop(f"利用者がやめた（{aid}）")
-            if acq.get("status") != "cancelled":
-                from acquire import pipeline
+            # （取得はやめた印より前に係が書いた running のまま・取り足しは道具が cancelled に書いたあとのこともあるので、PID で見る）
+            if wpid and part.get("pid") == wpid and (part.get("status") != "done" or overwritten) and self.worker.running() \
+                    and not self._busy_with_other(aid, wpid):
+                self.worker.stop(f"利用者がやめた（{aid}{'・取り足し' if for_deepen else ''}）")
+            # 係が止まる前に書いた状態を読み直してから直す（止める前に読んだものを書き戻すと、係が書いた進みを消す）
+            m = pipeline.read_json(p, m) or m
+            title = m.get("title") or aid
+            if for_deepen:
+                dp = m.get("deepen") or {}
+                if dp.get("status") != "cancelled":
+                    dp.update({"status": "cancelled", "cancelled_at": dp.get("cancelled_at") or pipeline.now(),
+                               "cancel_reason": dp.get("cancel_reason") or "利用者がやめた"})
+                    m["deepen"] = dp
+                    pipeline.write_json(p, m)
+                self.known_deepen[(aid, dp.get("round"))] = "cancelled"
+                flag.unlink(missing_ok=True)
+                self.log.info("取り足しをやめました（利用者の頼み）: %s %s回目", aid, dp.get("round"))
+                notify.send(f"「{title}」のコメントの取り足しをやめました", "レポートは今のまま読めます")
+                continue
+            acq = m.get("acquisition") or {}
+            if acq.get("status") != "cancelled" and (acq.get("status") != "done" or overwritten):   # 済んだ取得は「やめた」にしない
                 acq.update({"status": "cancelled", "cancelled_at": acq.get("cancelled_at") or pipeline.now()})
                 m["acquisition"] = acq
                 pipeline.write_json(p, m)
-            self.known[aid] = "cancelled"
+            self.known[aid] = acq.get("status")
             self.pending_retry.pop(aid, None)
             flag.unlink(missing_ok=True)
+            if acq.get("status") == "done":
+                self.log.info("やめる印がありましたが、取得はもう済んでいます（そのまま）: %s", aid)
+                continue
             self.log.info("取得をやめました（利用者の頼み）: %s", aid)
-            notify.send(f"「{m.get('title') or aid}」の取得をやめました", "別の楽曲ページでやり直します")
+            # 取り直しでやめたのか、ただ「やめて」と言われたのかで文を分ける（2026-10-12）
+            again = m.get("superseded_by")
+            notify.send(f"「{title}」の取得をやめました",
+                        "新しい分析で取り直します" if again else "また集めるときは、Claude（ChatGPT）に頼んでください")
 
     @staticmethod
     def _busy_with_other(aid: str, pid) -> bool:
@@ -615,6 +654,7 @@ class CollectorApp(rumps.App):
         self.ctl = ctl
         self._autolink_at = 0.0
         self._autolinking = False
+        self._alerting = False
         self._restarting = set()       # 開き直している最中の AI のアプリ
         self._restart_lock = threading.Lock()
         self.status_item = rumps.MenuItem("起動中…")
@@ -683,6 +723,7 @@ class CollectorApp(rumps.App):
         rumps.Timer(self.refresh, 2).start()
 
     def refresh(self, _):
+        self._startup_alert_tick()
         self._autolink_tick()
         t = self.ctl.status_text + ("（電池で動作中・電源につないでください）" if self.ctl.on_battery else "")
         if self.status_item.title != t:
@@ -707,6 +748,21 @@ class CollectorApp(rumps.App):
             want = ("★ " if not r["ok"] else "") + r["title"] + ("（編集済み）" if r["edited"] else "")
             if item.title != want:
                 item.title = want
+
+    def _startup_alert_tick(self):
+        """起動のときに積んだ窓（版を上げた・.app が2つある）を1つずつ出す。窓は答えるまで止まるので、出している間はほかを出さない"""
+        if self._alerting or not startup_alerts:
+            return
+        self._alerting = True
+        try:
+            a = startup_alerts.pop(0)
+            r = rumps.alert(a["title"], a["message"], ok=a["ok"], cancel=a["cancel"])
+            if r == 1:
+                for n in a.get("restart") or []:
+                    threading.Thread(target=self._restart_claude if n == "Claude" else self._restart_chatgpt,
+                                     daemon=True).start()
+        finally:
+            self._alerting = False
 
     # --- 自動でつなぐ（2026-10-05。友達は「〇〇につなぐ」を押さなくてよい。メニューの項目は手でつなぎ直すときのため） ---
     def _autolink_tick(self):
@@ -947,10 +1003,18 @@ class CollectorApp(rumps.App):
         rumps.quit_application()
 
 
+# 起動のときに出す窓（run loop が回ってから、画面のタイマー CollectorApp.refresh が1つずつ出す。起動を止めないため）。
+# {"title", "message", "ok", "cancel", "restart": [開き直す AI の名前]}
+startup_alerts: list = []
+
+
 def version_notice(st: dict, log) -> None:
     """アプリを新しくしたあと初めて開いたとき（版が変わった）、開いている Claude（ChatGPT）を開き直すよう1回だけ知らせる。
     AI の道具（--mcp）は Claude（ChatGPT）が起こしたまま動き続けるので、開き直すまで前の版の中身のまま
-    （.app を置き換えたあとは、前の版の道具が部品を読めずに止まることもある）。st は起動したときの state.json"""
+    （.app を置き換えたあとは、前の版の道具が部品を読めずに止まることもある）。st は起動したときの state.json。
+    前の版の道具の処理（--mcp・--wait。install.sh と同じ見分け方、system.old_tool_processes）が動いていれば、通知は見落とされやすいので
+    窓でも出し、「開き直す」で 0.6.6 の開き直し（_restart_ai・system.relaunch_app）を使う（2026-10-12。友達は 0.7.5 に入れ替えたあと、
+    開き直すまで 0.6.4 の道具で話していた。docs/PLAN_0_8.md 3-4）。動いていなければ今までどおり通知だけ"""
     if st.get("app_version") == VERSION:
         return
     config.save_state(app_version=VERSION)
@@ -958,10 +1022,53 @@ def version_notice(st: dict, log) -> None:
         return   # 初めて入れた（前の版は無い）
     names = [name for _, name, link, _, is_running in AI_LINKS
              if link.status() == "connected" and getattr(link, is_running)()]
-    log.info("版が変わりました: %s → %s（開いている AI: %s）", st.get("app_version") or "前の版", VERSION, "、".join(names) or "なし")
+    try:
+        old = system.old_tool_processes()
+    except Exception as e:
+        log.info("前の版の道具の処理を確かめられませんでした: %s", e)
+        old = []
+    log.info("版が変わりました: %s → %s（開いている AI: %s・前の版の道具の処理: %s）", st.get("app_version") or "前の版", VERSION,
+             "、".join(names) or "なし", "、".join(f"{p['kind']}（PID {p['pid']}・{p['version'] or '0.7.5 まで'}）" for p in old) or "なし")
     if names:
         notify.send(f"{config.APP_NAME} を {VERSION} にしました",
                     f"{'と'.join(names)} を開き直してください。開き直すと、新しい版の UGC Analyzer が使えます（話している途中の会話は保存されています）")
+    if not old:
+        return
+    # 開き直すのは、開いている AI（つないだかに関わらず。道具を起こしたのは開いている AI のどれか）
+    running = [name for _, name, link, _, is_running in AI_LINKS if getattr(link, is_running)()]
+    who = "と".join(running) or "Claude（ChatGPT）"
+    msg = (f"{who} を開き直すと新しい版が使えます（話している途中の会話は消えません）。\n"
+           f"開き直すまでは、{who} の中の UGC Analyzer は前の版のまま動きます。")
+    startup_alerts.append({"title": f"{config.APP_NAME} を {VERSION} にしました",
+                           "message": msg if running else msg + f"\n\n{who} を前に出して ⌘Q で終了し、もう一度開いてください。",
+                           "ok": "開き直す" if running else "OK", "cancel": "あとで" if running else None,
+                           "restart": running})
+
+
+def duplicate_notice(log) -> None:
+    """UGC Analyzer の .app が2つ以上ある（「両方とも残す」でできた「UGC Analyzer 2.app」など）と分かったら、窓で知らせる（2026-10-12）。
+    2つあると、あとから開いた方が Claude・ChatGPT の設定を自分に書き直し、古い方を開くと前の版に戻る。自動では消さない（どれを残すかは利用者）"""
+    try:
+        apps = system.find_app_bundles()
+    except Exception as e:
+        log.info("入っている .app を確かめられませんでした: %s", e)
+        return
+    if len(apps) < 2:
+        return
+    newest, olds = apps[0], apps[1:]
+    log.warning("UGC Analyzer が%s個あります: %s", len(apps),
+                "、".join(f"{a['path']}（{a['version'] or '版不明'}{'・動いているもの' if a['running'] else ''}）" for a in apps))
+    lines = [f"・{Path(a['path']).stem}（{a['version'] or '版が読めません'}{'・いま動いているもの' if a['running'] else ''}）"
+             f"{' ← 新しい版' if a is newest else ''}" for a in apps]
+    old_names = "」「".join(Path(a["path"]).stem for a in olds)
+    msg = ("アプリケーションフォルダに UGC Analyzer が2つ以上あります。\n" + "\n".join(lines) + "\n\n"
+           f"新しい版を1つ残して、ほか（「{old_names}」）をゴミ箱に入れてください。残した方は、名前がそのままでも使えます。\n"
+           "2つあると、あとから開いた方が Claude・ChatGPT とのつなぎを自分に書き直すので、古い版に戻ってしまうことがあります。")
+    if not newest["running"]:
+        msg += (f"\n\nいま動いているのは古い方です。メニューバーの UGC Analyzer の「終了」で終えてから古い方をゴミ箱に入れ、"
+                f"「{Path(newest['path']).stem}」を開いてください。")
+    startup_alerts.append({"title": "UGC Analyzer が2つ入っています", "message": msg, "ok": "OK", "cancel": None,
+                           "restart": []})
 
 
 def run():
@@ -1005,6 +1112,7 @@ def run():
                 except Exception as e:   # 作業フォルダの中身が想定と違っても、アプリの起動は止めない（記録だけ）
                     log.warning("Code タブ用の作業フォルダを整えられませんでした: %s", e)
             version_notice(st, log)
+            duplicate_notice(log)
     ctl = Controller(code, log)
     system.watch_sleep(ctl.on_sleep, ctl.on_wake)
     app = CollectorApp(ctl)

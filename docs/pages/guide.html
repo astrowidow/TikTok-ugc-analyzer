@@ -159,6 +159,7 @@ footer p { margin: 0; }
       <li><a href="#prepare">はじめの準備</a></li>
       <li><a href="#ask">分析を頼む</a></li>
       <li><a href="#fix">直す・深める</a></li>
+      <li><a href="#update">新しい版にするとき</a></li>
       <li><a href="#trouble">困ったとき</a></li>
       <li><a href="#rules">守ってほしいこと</a></li>
     </ul>
@@ -380,8 +381,8 @@ footer p { margin: 0; }
       </div>
       <div class="card">
         <h3>ある界隈の話が浅い・もっと知りたい（掘り下げ）</h3>
-        <p>その界隈のコメントを Mac が取り足してから、書き直します。AI は「約25分かかります」と返していったん止まるので、Mac に「取り足しが終わりました」と通知が出たら「〇〇の分析を続けて」と送ります。</p>
-        <span class="when">待ち時間: 取り足しに約25分 → 「続けて」→ 書き直しに10〜20分</span>
+        <p>その界隈のコメントを Mac が取り足してから、書き直します。AI が最初の返事で取り足しにかかる時間を教えてくれていったん止まるので、Mac に「取り足しが終わりました」と通知が出たら「〇〇の分析を続けて」と送ります。</p>
+        <span class="when">待ち時間: 取り足し（実例では約16分。界隈の大きさしだい）→ 「続けて」→ 書き直しに10〜20分</span>
         <div class="prompt-row"><span class="who">あなた（実際に送った言葉）</span><p class="prompt">きゃわぽっぴんどぅーのレポートで、8月以降の「君だけにこっそり教えてあげる」の匂わせや、文化祭の高校生のところ、推測が多くて根拠が弱い気がする。もっとコメントを取って掘り下げて</p></div>
       </div>
       <div class="card">
@@ -391,11 +392,61 @@ footer p { margin: 0; }
         <div class="prompt-row"><span class="who">あなた（実際に送った言葉）</span><p class="prompt">きゃわぽっぴんどぅーのレポートの界隈の分け方を変えたい。「今日好き・若手モデル」に、今日好きの出演者と、番組に出ていない若手モデルが混ざってる。この2つは分けて、界隈の切り直しからやり直して</p></div>
       </div>
       <div class="card">
+        <h3>途中からやり直したい・集め直したい</h3>
+        <p>「ここからやり直して」と送れば、そこから作り直します。前の版は消えずに残ります。書いている途中に頼んでも大丈夫です（今の作業が終わったら、続けてやります）。時間がかかるときは、AI が最初にかかる時間を教えてくれます。UGC Analyzer 0.8.0 以降の版で使えます。</p>
+        <span class="when">待ち時間: AI の作業だけなら10分〜1時間。TikTok から集め直すときは、集めるのに約1〜2時間 → 書くのに40分〜1時間</span>
+        <div class="prompt-row"><span class="who">あなた（例）</span><p class="prompt">きゃわぽっぴんどぅーを最初から分析し直して</p></div>
+        <div class="prompt-row"><span class="who">あなた（例）</span><p class="prompt">きゃわぽっぴんどぅーに、この音源も入れて集め直して https://www.tiktok.com/music/…</p></div>
+        <div class="prompt-row"><span class="who">あなた（例）</span><p class="prompt">きゃわぽっぴんどぅーの分析を、段階の分け方からやり直して。3つに分けたい</p></div>
+        <div class="prompt-row"><span class="who">あなた（例）</span><p class="prompt">きゃわぽっぴんどぅーのレポートの3章と5章を書き直して</p></div>
+        <p>どの音源で集めたか、何本集めたかなども、聞けば答えます。</p>
+        <div class="prompt-row"><span class="who">あなた（例）</span><p class="prompt">きゃわぽっぴんどぅーの分析は、どの音源で集めた？ファンの音源は入ってる？</p></div>
+      </div>
+      <div class="card">
         <h3>これからずっと変えたい</h3>
         <p>次の分析からもずっと効かせたいことは、頭に「UGC Analyzer で」を付けて送ります。</p>
         <div class="prompt-row"><span class="who">あなた（例）</span><p class="prompt">UGC Analyzer で、今後はレポートの文体をもっとくだけた感じにして</p></div>
       </div>
     </div>
+  </section>
+
+  <section id="update">
+    <h2>新しい版にするとき</h2>
+    <p class="sub">運営から「UGC Analyzer を新しくしました」と連絡が来たら、このとおりに入れ替えてください。10分ほどです。前から進めていた分析とレポートは、そのまま残ります。</p>
+    <ol class="steps">
+      <li><div>
+        <b class="t">集めている途中でないか見る</b>
+        <p class="muted">割れた音符のアイコンを押して、いちばん上の行を見ます。「取得中」「取り足し中」なら、終わってから入れ替えるのがおすすめです（途中で入れ替えても、続きから集めます）。</p></div></li>
+      <li><div>
+        <b class="t">今の UGC Analyzer を終了する</b>
+        <p class="muted">割れた音符 → いちばん下の<b>「終了」</b>。</p></div></li>
+      <li><div>
+        <b class="t">新しいものを入れる</b>
+        <p class="muted">下のボタンで <code>UGC-Analyzer.dmg</code> を落とし、最初と同じように「UGC Analyzer」を「アプリケーション」へドラッグします。「置き換えますか？」と聞かれたら<b>「置き換える」</b>を押します。<b>「両方とも残す」は押さないでください</b>（UGC Analyzer が2つになって、古いほうが動いてしまいます）。</p>
+        <a class="dl" href="https://github.com/astrowidow/TikTok-ugc-analyzer/releases/latest/download/UGC-Analyzer.dmg">UGC Analyzer をダウンロード</a></div></li>
+      <li><div>
+        <b class="t">新しい UGC Analyzer を開く</b>
+        <p class="muted">「アプリケーション」の「UGC Analyzer」をダブルクリックします。「開いていません」と出たら、<a href="#prepare">はじめの準備</a>の手順3と同じように「このまま開く」で開きます。</p></div></li>
+      <li><div>
+        <b class="t">Claude（ChatGPT）を開き直す（いちばん大事）</b>
+        <p class="muted">Claude（ChatGPT）の窓を前に出して <b>⌘Q</b> で終了し、もう一度開きます。「Claudeはまだ作業中です」と出たら「このまま終了」を押します。話していた会話は消えません。新しい UGC Analyzer が「開き直す」のボタンの付いた窓を出したら、それを押しても同じです。</p>
+        <p class="muted">これをしないと、Claude（ChatGPT）の中では前の版の UGC Analyzer が動き続けて、直したところが効かなかったり、エラーが続いたりします。必ず新しい UGC Analyzer を開いた<b>あと</b>に開き直してください。</p></div></li>
+      <li><div>
+        <b class="t">確かめる</b>
+        <p class="muted">割れた音符のメニューの、いちばん下（「終了」の上）に新しい番号（例:「UGC Analyzer 0.8.0」）が出ていれば完了です。</p></div></li>
+    </ol>
+    <h3>前から進めていた分析はどうなる？</h3>
+    <dl class="qa">
+      <div><dt>集めている途中だった</dt><dd>新しい UGC Analyzer を開けば、続きから集めます。新しい版の集め方は、残りの部分にだけ効きます</dd></div>
+      <div><dt>集め終わって、書く前・書いている途中だった</dt><dd>「〇〇の分析を続けて」で、前に集めたデータのまま続きから書きます。新しい版の集め方（新しく集めるようになったものなど）で集め直したいときは「〇〇を最初から分析し直して」（集めるのに約1〜2時間。前の分析とレポートは消えずに残ります）</dd></div>
+      <div><dt>レポートが完成していた</dt><dd>そのまま残ります。直し・掘り下げ・切り直しは、新しい版で動きます。新しい版で集め直したいときも「〇〇を最初から分析し直して」</dd></div>
+    </dl>
+    <h3>入れ替えたあとに困ったとき</h3>
+    <dl class="qa">
+      <div><dt>AI が「UGC Analyzer が新しくなりました。開き直してください」と言う・「部品を読めませんでした」「サービス側のエラー」が続く</dt><dd>Claude（ChatGPT）を ⌘Q で終了して、開き直す</dd></div>
+      <div><dt>「UGC Analyzer が2つ入っています」と出た</dt><dd>窓に出た古い版のほうを、Finder でゴミ箱に入れる。そのあと新しい UGC Analyzer を開き、Claude（ChatGPT）を開き直す</dd></div>
+      <div><dt>メニューの番号が古いまま</dt><dd>もう一度、手順2から入れ替える</dd></div>
+    </dl>
   </section>
 
   <section id="trouble">
@@ -462,7 +513,7 @@ footer p { margin: 0; }
     </ul>
     <h3>運営への連絡</h3>
     <p>わからないこと・変だと思ったことは、何でも LINE でどうぞ。「レポートのここが変」という感想も助かります。</p>
-    <p>運営から「UGC Analyzer を新しくしました」と連絡が来たら、割れた音符 →「終了」→ 手順2と同じボタン（<a href="https://github.com/astrowidow/TikTok-ugc-analyzer/releases/latest/download/UGC-Analyzer.dmg">UGC Analyzer をダウンロード</a>。いつも新しい版が落ちてきます）から <code>.dmg</code> を落として、最初と同じように「アプリケーション」へドラッグしてください。「置き換える」を選んで OK です。データとログインはそのまま残ります。</p>
+    <p>運営から「UGC Analyzer を新しくしました」と連絡が来たら、<a href="#update">新しい版にするとき</a>のとおりに入れ替えてください。最後に Claude（ChatGPT）を開き直すのを忘れずに。データとログインはそのまま残ります。</p>
   </section>
 
   <footer>

@@ -31,10 +31,26 @@ SERVER_NAME = "ugc-analyzer"
 CHATGPT_APPS = [Path("/Applications/ChatGPT.app"), Path.home() / "Applications" / "ChatGPT.app"]
 # 道具（mcp_proto.py。tests/check_local_mcp.py で、道具の一覧と同じかを確かめる）
 TOOLS = ("start_analysis", "status", "next_task", "submit", "read", "revise", "deepen", "recut", "settings", "prompts",
-         "update_knowledge", "cancel_analysis", "restart_analysis")
+         "update_knowledge", "cancel_analysis", "restart_analysis",
+         "info", "redo", "archive_analysis")   # 2026-10-12（0.8.0）: 調べる・AI の段のやり直し・しまう
 STARTUP_TIMEOUT_SEC = 60    # 入れた直後の初回は、macOS の検査で起動が遅いことがある
 TOOL_TIMEOUT_SEC = 300      # start_analysis（30〜40秒）と、仕事の合間のサービスの工程（組み立て・Excel 用 ZIP）
 MARK = "# UGC Analyzer の道具（メニュー「ChatGPT につなぐ」が書いた。この節は UGC Analyzer が書き直す）"
+
+# 分析・アプリについての質問とやり直しの頼みの決まり（mcp_proto.ASK_RULE と同じ文。tests/test_app_080.py で同じかを確かめる）。
+# mcp_proto はアプリの中で読むと重いので、写しを持つ（2026-10-12）
+ASK_RULE = (
+    "分析やアプリについての質問（どの楽曲ページ・音源を取ったか、ファンの音源を探したか、この動画・音源は入っているか、何本・何件取ったか、"
+    "取得の版・日時・設定、レポートの版、ログイン・通知・アプリの版）には、まず info（読むだけ）で確かめてから答える。"
+    "道具の返事に無いことは「UGC Analyzer の記録には無い」と言い、推測で埋めない。推測を言うときは推測だと言い、確かめ方を添える。"
+    "Bash などでアプリのフォルダ（~/Library/Application Support/UGC Analyzer）やログを直接開かない・書き換えない・動かさない"
+    "（ログの英語のエラー文には想定どおりのものがある）。利用者に案内する設定の操作は、道具の返事にあるものだけ。"
+    "\n「最初から」「やり直して」「取り直して」「このページも足して・入れて」「〇〇からやり直して」の頼みには、道具で応える: "
+    "TikTok から集め直す頼み（最初から・ページを足す／外す・ファンの音源・もっと多くの動画・新しい投稿・再生の下限・返信）は restart_analysis、"
+    "集めたデータのまま AI の作業を段からやり直す頼み（界隈の案から・段階から・構成から・〇章を書き直して など）は redo。"
+    "どちらも完成の前でも後でも使える。時間がかかるときは、道具が返す見込みを利用者に一度伝えてそのまま進める（確かめを求めない）。"
+    "道具が断ったら、その理由を利用者にそのまま伝える。同じ頼みを言い換えて何度も呼ばない。できないことを「します」と言わない。"
+)
 
 # いつ使うかは道具の案内（mcp_proto.USE_RULE）と同じ。ChatGPT は道具の案内を会話に入れないので、ここにも書く
 SKILL_MD = """---
@@ -44,7 +60,7 @@ description: UGC Analyzer（この Mac のアプリ。TikTok の楽曲の UGC �
 
 # UGC Analyzer
 
-道具は MCP サーバー `ugc-analyzer`。道具の一覧（ALL_TOOLS など）で `ugc_analyzer` を探す: start_analysis・status・next_task・submit・read・revise・deepen・recut・settings・prompts・update_knowledge・cancel_analysis・restart_analysis。
+道具は MCP サーバー `ugc-analyzer`。道具の一覧（ALL_TOOLS など）で `ugc_analyzer` を探す: start_analysis・status・next_task・submit・read・revise・deepen・recut・settings・prompts・update_knowledge・cancel_analysis・restart_analysis・info・redo・archive_analysis。
 
 - 「UGC Analyzer で〇〇／△△を分析して」→ `start_analysis`（曲名とアーティスト名。30〜40秒かかる）
 - 名指しの無い「〇〇を分析して」→ 道具を使わず、ふつうに答える
@@ -55,8 +71,15 @@ description: UGC Analyzer（この Mac のアプリ。TikTok の楽曲の UGC �
 - 「界隈の確認はいらない」「確認なしで最後まで書いて」と言われたら、そのとき呼ぶ `start_analysis` か `next_task` に skip_confirm=true を付ける（界隈の案で止まらず、案のまま最後まで書く。使った界隈は完了の知らせで伝わる）
 - 完成したレポートの「△△界隈のところが浅い・もっとコメントを取って掘り下げて」→ `deepen`（界隈と、利用者の言葉そのまま）。Mac がコメントを取り足すので止まる。終わったあと利用者が「〇〇の分析を続けて」と言ったら `next_task` で書き直しを片付ける
 - 完成したレポートの「界隈を分けて・まとめて・切り直して」→ `recut`（利用者の言葉そのまま）。そのまま `next_task` を続ける。コメントが足りなければ kind が wait で止まるので、返ってきた一文を伝える。終わったあと利用者が「〇〇の分析を続けて」と言ったら `next_task` で続ける
-- そのほか（進み具合・取得をやめる・やり直す・レポートの直し）は、道具の説明に従う。道具の説明と返事に書いてある決まりが、ここより優先する
-"""
+- 分析やアプリについての質問（「自己紹介の音源は入ってる？」「どのページで取った？」「アプリの版は？」「通知が来ない」など）→ まず `info`（読むだけ。about に overview・sounds・video・report・app）で確かめてから答える
+- 「最初から分析し直して」「このページも足して取り直して」→ `restart_analysis`（TikTok から集め直す。見込みを伝えて止まる）
+- 「界隈の案から・構成から・〇章をやり直して」→ `redo`（集めたデータのまま AI の作業を段からやり直す。待たずにそのまま `next_task` を続ける）
+- 「〇〇の分析をしまって・一覧から消して」「しまった〇〇を戻して」→ `archive_analysis`（消さない。restore=true で戻す）
+- そのほか（進み具合・取得をやめる・レポートの直し）は、道具の説明に従う。道具の説明と返事に書いてある決まりが、ここより優先する
+
+## 質問とやり直しの決まり
+
+""" + ASK_RULE + "\n"
 
 OPENAI_YAML = """interface:
   display_name: "UGC Analyzer"

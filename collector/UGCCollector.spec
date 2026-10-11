@@ -38,7 +38,7 @@ datas += collect_data_files("selenium")   # Selenium Manager（chromedriver を�
 # 部品が使うライブラリ（部品は解析されないので、ここで名前を挙げる）
 hidden = ["csv", "argparse", "collections", "contextlib", "math", "random", "smtplib", "email.message", "ctypes",
           "unicodedata", "logging.handlers", "urllib.parse", "secrets", "socket", "traceback", "hashlib", "statistics",
-          "sqlite3", "zipfile", "io", "typing", "fcntl", "html", "difflib",
+          "sqlite3", "zipfile", "io", "typing", "fcntl", "html", "difflib", "filecmp",
           "pandas", "numpy", "requests", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont", "websocket",
           "UserNotifications", "AppKit", "Foundation", "objc"]
 hidden += collect_submodules("selenium.webdriver.chrome") + collect_submodules("selenium.webdriver.common") \

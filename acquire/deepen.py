@@ -1,7 +1,7 @@
 """
 界隈の掘り下げ: 完成したレポートの、ある界隈のコメントを取り足す（2026-10-06 ユーザー）。docs/DEEPEN_COMMUNITY.md
 
-- plan(): 取る動画を決め、約25分に収まるように配る（AI にも TikTok にも触らない）
+- plan(): 取る動画を決める（AI にも TikTok にも触らない）。2026-10-12 から時間では切らずに全部取り、見込みを伝える
 - request(): analysis.json の "deepen" に積む（道具 deepen が呼ぶ。取得の係が拾う）
 - Run: 取得の係（acquire/worker.py）が取る。ロック・設定・Chrome・要求の間隔は本線（acquire/pipeline.py の Run）のものをそのまま使う
 - merge(): 取った行を原本（raw/comments.jsonl）に足し、derived/comments を作り直す
@@ -9,7 +9,8 @@
 取る動画（ユーザーの答え Q1・Q2）:
   新しく取る … その界隈のラベルがあり、コメントが無い動画。再生の下限はその分析の週ごとの下限（min_plays_weekly）
   続きを取る … その界隈でコメントはあるが、上限40件で止まり、上位リストがまだ続く動画。上限120件で取り直す
-  新しく取る動画を再生の多い順に、残った時間で続きを再生の多い順に、目安25分に詰める
+  新しく取る動画を再生の多い順に、続きを再生の多い順に。前は目安25分に詰めていたが、2026-10-12 ユーザー
+  「時間がかかるからとか言って勝手に切ってる…一回警告すりゃあいい話」で、時間では切らない（budget_min 0）
 
 本線の analysis/pool.py・acquire/pipeline.py の DEFAULTS は変えない（コメント取得の戦略のセッションが触る）。spatest も引数だけで使う。
 
@@ -32,7 +33,8 @@ from acquire import pipeline  # noqa: E402
 
 # 時間の見込み（分）と上限（件）
 EST = {
-    "budget_min": 25.0,        # 1回の取得の目安（2026-10-06 ユーザー「25分程度の取得時間に収まるように配分」）
+    # 1回の取得の目安（分）。0 は切らない（2026-10-12 から。前は 25: 2026-10-06 ユーザー「25分程度の取得時間に収まるように配分」）
+    "budget_min": 0,
     # 2026-10-06 の実機の試験（シルエットの写し・dancer、docs/DEEPEN_COMMUNITY.md 10 章）で直した:
     # グリッドが 2141本に増えていて、見つからない1本を探してスクロールの上限（150回×2秒）まで回し5.5分。新しく取る7本で6.5分、続き2本で各2.5〜2.9分
     # 2026-10-06 のきゃわの事例（本物の分析、楽曲ページ2つ）で直した: 6分・1.3分では見込み 23.7分 → 実際 7分、切り直しは 14.2分 → 1分。
@@ -166,13 +168,13 @@ def candidates(d: Path, community: str, min_plays: int | None = None) -> dict:
 
 def plan(d: Path, community: str, minutes: float | None = None, min_plays: int | None = None) -> dict:
     """取る動画を決めて、目安の時間に収まるように配る。新しく取る動画を先に、残った時間で続きを"""
-    budget = float(minutes or EST["budget_min"])
+    budget = float(minutes if minutes is not None else EST["budget_min"])
     c = candidates(Path(d), community, min_plays)
     pages, used, take = set(), 0.0, []
     for kind, cost in (("new", EST["new_min"]), ("more", EST["more_min"])):
         for x in c[kind]:
             add = cost + (EST["page_min"] if x["page"] not in pages else 0.0)
-            if used + add <= budget:
+            if budget <= 0 or used + add <= budget:
                 take.append(x)
                 pages.add(x["page"])
                 used += add

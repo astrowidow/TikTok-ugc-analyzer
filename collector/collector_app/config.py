@@ -1,11 +1,14 @@
 """置き場所と定数。取得の部品（acquire/）と AI の相手（proto_runner・flow_w1）は環境変数で置き場所を受け取るので、
 読み込む前に setup_env() を呼ぶ。"""
+import contextlib
 import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sys
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -44,7 +47,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CODE_FILES = ["acquire", "analysis/pool.py", "analysis/attr_cluster.py", "analysis/enrich.py", "analysis/build_llm_input.py",
               "analysis/prep_sample.py", "analysis/prep_comments.py", "scraper.py", "log_setup.py", "tiktok_lock.py",
               "proto_runner.py", "flow_w1.py", "user_settings.py", "mcp_proto.py", "kb_update.py", "prompt_store.py",
-              "store.py", "service_prompts"]
+              "store.py", "analysis_info.py", "service_prompts"]
 
 
 def bundled_code_dir() -> Path:
@@ -136,6 +139,166 @@ def sync_shipped_knowledge(src: Path, dst: Path) -> list:
     return done
 
 
+SHIPPED_MARK = ".shipped.json"   # 知識ベースの置き場に置く: 運営の同梱物を届けた記録（ファイルごとの中身の印）
+# この Mac で直していなければ、運営の新しい版に入れ替えるもの（distilled/ の中）
+SHIPPED_REPLACE = ("README.md", "STYLE_GUIDE.md", "GLOSSARY.md")
+
+
+def _sha_file(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _shipped_stamp(src: Path) -> str:
+    """同梱物の印（中身は読まず、名前・大きさ・時刻だけ。起動のたびに見るので軽く）"""
+    h = hashlib.sha256(VERSION.encode())
+    for p in sorted(src.rglob("*")):
+        if p.is_file():
+            st = p.stat()
+            h.update(f"{p.relative_to(src)}\0{st.st_size}\0{st.st_mtime_ns}\n".encode())
+    return h.hexdigest()[:16]
+
+
+def sync_shipped_kb(src: Path, kb: Path) -> dict:
+    """運営の同梱物（記事・INDEX.json・用語集・文体ガイド・README・カード）を、すでに入れた Mac にも届ける（2026-10-12。docs/PLAN_0_8.md 第6章）。
+    前は最初の写しのあと、COMMUNITY_GUIDE.md と community_defs.jsonl しか届かなかった（sync_shipped_knowledge）。
+    この Mac で足した分は失わない:
+      - notes/: 無い記事は足す。ある記事は、この Mac で書き換えていなければ運営の版に（note から取った記事は残る）
+      - INDEX.json: 運営の一覧に、この Mac で新着として足した記事（added_at のあるもの）を後ろに残す
+      - distilled/cards.jsonl: 運営のカードに、この Mac で取り込んだ記事（update_state.json の ingested）のカードを後ろに残す
+      - distilled/README.md・STYLE_GUIDE.md・GLOSSARY.md: この Mac で書き換えていなければ入れ替える。用語集を整理の仕事で
+        書き直した Mac（kb_update が新しい記事の語を章に溶かし込んだ）や、利用者が手で直したものは、そのまま残す
+      - GLOSSARY_ADDITIONS.json・update_state.json・COMMUNITY の2つ（sync_shipped_knowledge）には触らない
+    「書き換えていない」の見分け: 前に届けたときの中身の印（.shipped.json）と同じか。記録の無い最初の1回（0.7.5 までに入れた Mac）は、
+    kb_update の記録で見る: 用語集は整理の仕事をしていなければ（update_state.json の merged も GLOSSARY.md.bak-* も無い）、記事は
+    この Mac で新着として取ったもの（INDEX.json の added_at）でなければ、書き換えていないとみなす。README・文体ガイドはアプリが書き換えない。
+    （ファイルの時刻では見分けられない: 運営の Mac の知識ベースは、最初の写しのときの時刻になっていた。2026-10-12 に確かめた）
+    記録の無い最初の1回に入れ替える distilled/ のファイルは、入れ替える前の中身を <名前>.bak-ship-<日時> に残す（手で直していても失わない）。
+    kb_update と同じ錠を取る（AI の道具が同時に取り込みを書いているかもしれないため）。何をしたかを返す"""
+    import kb_update
+    mark_p = kb / SHIPPED_MARK
+    try:
+        mark = json.loads(mark_p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        mark = {}
+    mark = mark if isinstance(mark, dict) else {}
+    stamp = _shipped_stamp(src)
+    if mark.get("stamp") == stamp:
+        return {}
+    known = dict(mark.get("files") or {})
+    stamp_now = time.strftime("%Y%m%d-%H%M%S")
+    done = {"replaced": [], "kept": [], "backup": [], "notes_added": 0, "notes_updated": 0, "index": "", "cards": ""}
+    files = {}
+    try:
+        same = Path(kb_update.kb_dir()).resolve() == Path(kb).resolve()
+    except OSError:
+        same = False
+    with (kb_update._locked() if same else contextlib.nullcontext()):   # noqa: SLF001
+        try:
+            kb_state = json.loads((kb / "update_state.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            kb_state = {}
+        kb_state = kb_state if isinstance(kb_state, dict) else {}
+        try:
+            cur_index = json.loads((kb / "INDEX.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cur_index = []
+        cur_index = [x for x in cur_index if isinstance(x, dict)] if isinstance(cur_index, list) else []
+        fetched_here = {x.get("file") for x in cur_index if x.get("added_at")}   # この Mac で note から取った記事
+        merged_here = bool(kb_state.get("merged")) or any(   # kb_update の整理が残す控え（GLOSSARY.md.bak-<日時>）
+            re.fullmatch(r"GLOSSARY\.md\.bak-\d{8}-\d{6}", x.name) for x in (kb / "distilled").glob("GLOSSARY.md.bak-*"))
+
+        def untouched(p: Path, rel: str) -> bool:
+            if not p.exists():
+                return True
+            if rel in known:
+                return _sha_file(p) == known[rel]
+            if rel.startswith("notes/"):
+                return p.name not in fetched_here
+            if rel == "distilled/GLOSSARY.md":
+                return not merged_here
+            return True
+        # 記事
+        notes = src / "notes" if (src / "notes").exists() else src
+        (kb / "notes").mkdir(parents=True, exist_ok=True)
+        for f in sorted(notes.glob("*.md")):
+            rel = f"notes/{f.name}"
+            p = kb / rel
+            data = f.read_bytes()
+            if p.exists() and p.read_bytes() == data:
+                files[rel] = hashlib.sha256(data).hexdigest()
+                continue
+            if not untouched(p, rel):
+                continue   # この Mac で note から取り直した記事など
+            existed = p.exists()
+            shutil.copy2(f, p)
+            files[rel] = hashlib.sha256(data).hexdigest()
+            done["notes_updated" if existed else "notes_added"] += 1
+        # 記事の一覧
+        if (src / "INDEX.json").exists():
+            ship = json.loads((src / "INDEX.json").read_text(encoding="utf-8"))
+            cur = cur_index
+            keys = {x.get("key") for x in ship}
+            mine = [x for x in cur if isinstance(x, dict) and x.get("added_at") and x.get("key") not in keys]
+            new = ship + mine
+            if new != cur:
+                text = json.dumps(new, ensure_ascii=False, indent=1)
+                tmp = kb / f"INDEX.json.tmp{os.getpid()}"
+                tmp.write_text(text, encoding="utf-8")
+                os.replace(tmp, kb / "INDEX.json")
+                done["index"] = f"{len(cur)}→{len(new)}本"
+        # 用語集・文体ガイド・README
+        dd = kb / "distilled"
+        for name in SHIPPED_REPLACE:
+            f = src / "distilled" / name
+            if not f.exists():
+                continue
+            rel = f"distilled/{name}"
+            p = dd / name
+            data = f.read_bytes()
+            if p.exists() and p.read_bytes() == data:
+                files[rel] = hashlib.sha256(data).hexdigest()
+                continue
+            if not untouched(p, rel):
+                done["kept"].append(name)
+                continue
+            if p.exists() and rel not in known:   # 記録の無い最初の1回: 入れ替える前の中身を残す
+                b = dd / f"{name}.bak-ship-{stamp_now}"
+                shutil.copy2(p, b)
+                done["backup"].append(b.name)
+            tmp = dd / f"{name}.tmp{os.getpid()}"
+            shutil.copy2(f, tmp)
+            os.replace(tmp, p)
+            files[rel] = hashlib.sha256(data).hexdigest()
+            done["replaced"].append(name)
+        # カード
+        f = src / "distilled" / "cards.jsonl"
+        if f.exists():
+            ship_lines = [x for x in f.read_text(encoding="utf-8").splitlines() if x.strip()]
+            p = dd / "cards.jsonl"
+            cur_lines = [x for x in p.read_text(encoding="utf-8").splitlines() if x.strip()] if p.exists() else []
+
+            def file_of(line):
+                try:
+                    return json.loads(line).get("file")
+                except (ValueError, AttributeError):
+                    return None
+            have = {file_of(x) for x in ship_lines}
+            here = {x.get("file") for x in kb_state.get("ingested") or [] if isinstance(x, dict)}
+            mine = [x for x in cur_lines if file_of(x) in here and file_of(x) not in have]
+            new = ship_lines + mine
+            if new != cur_lines:
+                tmp = dd / f"cards.jsonl.tmp{os.getpid()}"
+                tmp.write_text("\n".join(new) + "\n", encoding="utf-8")
+                os.replace(tmp, p)
+                done["cards"] = f"{len(cur_lines)}→{len(new)}本"
+        mark = {"stamp": stamp, "version": VERSION, "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "files": {**known, **files}, "kept": done["kept"]}
+        tmp = kb / f"{SHIPPED_MARK}.tmp{os.getpid()}"
+        tmp.write_text(json.dumps(mark, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, mark_p)
+    return {k: v for k, v in done.items() if v}
+
+
 def seed_data(log=None) -> dict:
     """最初の起動（とアプリを新しくしたとき）: 知識ベースと指示書を置く。何をしたかを返す"""
     done = {}
@@ -158,14 +321,22 @@ def seed_data(log=None) -> dict:
             shutil.rmtree(tmp, ignore_errors=True)
     if src and (KB_DIR / "distilled").exists():
         done["knowledge_sync"] = sync_shipped_knowledge(src / "distilled", KB_DIR / "distilled")
+        try:   # 用語集・文体ガイド・記事・カードも（届けられなくても、アプリと道具の起動は止めない。次の起動でまた試す）
+            ship = sync_shipped_kb(src, KB_DIR)
+            if ship:
+                done["knowledge_ship"] = ship
+        except Exception as e:
+            done["knowledge_ship_error"] = f"{type(e).__name__}: {e}"
     try:
         import prompt_store
         done["prompts"] = prompt_store.seed()
     except Exception as e:   # 指示書が置けなくても、初期の指示書で動く
         done["prompts_error"] = str(e)
-    if log and (done.get("knowledge") or done.get("knowledge_sync")
+    if log and (done.get("knowledge") or done.get("knowledge_sync") or done.get("knowledge_ship")
                 or any((done.get("prompts") or {}).get(k) for k in ("copied", "updated"))):
         log.info("知識ベース・指示書を置きました: %s", done)
+    if log and done.get("knowledge_ship_error"):
+        log.info("知識ベースの同梱物を届けられませんでした（次の起動でまた試します）: %s", done["knowledge_ship_error"])
     return done
 
 

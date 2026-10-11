@@ -236,8 +236,13 @@ class TestMemoAndNames(Base):
         folder.mkdir(parents=True)
         (folder / "REPORT.md").write_text("前の版の名前で置いた写し", encoding="utf-8")
         links = flow_w1.done_materials(self.a)["links"]
-        names = sorted(p.name for p in folder.iterdir())
-        self.assertEqual(names, sorted(["レポート.md", "レポート（根拠の番号つき）.md", "確認メモ.md", flow_w1.WEEKLY_CSV]))
+        names = sorted(p.name for p in folder.iterdir() if not p.name.startswith("."))   # 「.」で始まるのはフォルダの印（隠しファイル）
+        self.assertEqual(names, sorted(["レポート.md", "レポート（根拠の番号つき）.md", "確認メモ.md", flow_w1.WEEKLY_CSV,
+                                        flow_w1.PREV_FOLDER]))
+        # 前の名前で置いた写し（中身が今の版と違う）は、消さずに「前の版」へ移す（2026-10-12〜）
+        prev = list((folder / flow_w1.PREV_FOLDER).iterdir())
+        self.assertEqual([p.name for p in prev[0].iterdir()], ["REPORT.md"])
+        self.assertIn("前の版: 同じフォルダの「前の版」", links)
         self.assertLess(links.index("[レポート.md]"), links.index("[レポート（根拠の番号つき）.md]"))   # 読むほうを先に
         for s in ("読む・note に貼るのはこれ", "仕上げる前の原稿", "推測で書いたところ"):
             self.assertIn(s, links)

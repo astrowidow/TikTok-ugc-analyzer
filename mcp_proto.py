@@ -56,6 +56,23 @@ START_CUT_RULE = (
     "その曲の分析がまだ無ければ、start_analysis を呼び直す。"
 )
 
+# 分析・アプリについての質問と、やり直しの頼み（2026-10-12 友達の会話: Claude が道具で答えられず、Bash でアプリのフォルダを覗いて
+# 「60秒の音源に入っている可能性が高い」と推測で答えた。想定どおりのログの英語の一行を読み違えて、できない通知の設定を案内した。
+# 取り直しを曲名を変えて何度も呼び、できない取り直しを「します」と言った。docs/PLAN_0_8.md 第3章）。
+# ChatGPT のスキル（collector_app/codex_link.SKILL_MD）と Code タブの CLAUDE.md（code_link.CLAUDE_MD）にも同じ文を入れる
+ASK_RULE = (
+    "分析やアプリについての質問（どの楽曲ページ・音源を取ったか、ファンの音源を探したか、この動画・音源は入っているか、何本・何件取ったか、"
+    "取得の版・日時・設定、レポートの版、ログイン・通知・アプリの版）には、まず info（読むだけ）で確かめてから答える。"
+    "道具の返事に無いことは「UGC Analyzer の記録には無い」と言い、推測で埋めない。推測を言うときは推測だと言い、確かめ方を添える。"
+    "Bash などでアプリのフォルダ（~/Library/Application Support/UGC Analyzer）やログを直接開かない・書き換えない・動かさない"
+    "（ログの英語のエラー文には想定どおりのものがある）。利用者に案内する設定の操作は、道具の返事にあるものだけ。"
+    "\n「最初から」「やり直して」「取り直して」「このページも足して・入れて」「〇〇からやり直して」の頼みには、道具で応える: "
+    "TikTok から集め直す頼み（最初から・ページを足す／外す・ファンの音源・もっと多くの動画・新しい投稿・再生の下限・返信）は restart_analysis、"
+    "集めたデータのまま AI の作業を段からやり直す頼み（界隈の案から・段階から・構成から・〇章を書き直して など）は redo。"
+    "どちらも完成の前でも後でも使える。時間がかかるときは、道具が返す見込みを利用者に一度伝えてそのまま進める（確かめを求めない）。"
+    "道具が断ったら、その理由を利用者にそのまま伝える。同じ頼みを言い換えて何度も呼ばない。できないことを「します」と言わない。"
+)
+
 INSTRUCTIONS = (
     "UGC Analyzer（TikTok の楽曲 UGC 分析サービス）への接続です。分析の手順・指示書・検査はサービスが持っていて、"
     "あなたは「次の仕事を聞く → 指示書どおりにやる → 返す」を繰り返す係です。\n"
@@ -68,6 +85,7 @@ INSTRUCTIONS = (
     "\n利用者が「界隈の確認はいらない」「確認なしで最後まで書いて」と頼んだら、そのとき呼ぶ start_analysis か next_task に skip_confirm=true を付ける"
     "（界隈の案で止まらず、案のまま最後まで書く。使った界隈は完了の知らせで伝わる）。"
     + "\n" + START_CUT_RULE
+    + "\n" + ASK_RULE
 )
 
 
@@ -124,7 +142,7 @@ def add_user(user_id: str, name: str) -> str:
 # ---------------------------------------------------------------------------
 # MCP の道具
 # ---------------------------------------------------------------------------
-def _build_server(user_of=None, local: bool = False):
+def _build_server(user_of=None, local: bool = False, version: str | None = None):
     """道具をそろえた MCP サーバー。
 
     - Windows 機のサービス（attach）: 利用者は秘密の URL から分かる
@@ -136,7 +154,7 @@ def _build_server(user_of=None, local: bool = False):
     from mcp.types import ToolAnnotations
 
     mcp = MCPServer(name="ugc-analyzer", title="UGC Analyzer" if local else "UGC Analyzer（試作）",
-                    instructions=INSTRUCTIONS, version="app-1" if local else "proto-1")
+                    instructions=INSTRUCTIONS, version=version or ("app-1" if local else "proto-1"))
 
     def _user(ctx: Context) -> str:
         if user_of is not None:
@@ -190,12 +208,30 @@ def _build_server(user_of=None, local: bool = False):
 
     def _call(fn, *args):
         t0 = time.time()
+        # アプリを新しくしたのに、この道具の処理（Claude・ChatGPT が起こしたもの）が前の版のまま: 仕事をせずに開き直しを頼む
+        # （2026-10-12: 前の版の道具が新しい版の分析を書くと材料が欠け、.app を置き換えたあとは部品を読めずに落ち続ける。docs/PLAN_0_8.md 3-4）
+        check = getattr(runner.LOCAL, "version_check", None)
+        if check is not None:
+            try:
+                stale = check()
+            except Exception:
+                stale = None
+            if stale:
+                raise ToolError(stale)
         try:
             return fn(*args)
         except runner.RunnerError as e:
             raise ToolError(str(e)) from e
+        except SystemExit as e:
+            # アプリを置き換えたあと、前の版の道具が部品を読めないと SystemExit になる（2026-10-12 の調べ。Exception では捕まらず処理が落ちる）
+            logger.exception("道具の実行で SystemExit: %s", fn.__name__)
+            raise ToolError("UGC Analyzer の部品を読めませんでした。アプリを新しくした直後なら、Claude（ChatGPT）を一度終了（⌘Q）して"
+                            "開き直してください。会話と分析は消えません") from e
         except Exception as e:
             logger.exception("道具の実行で例外: %s", fn.__name__)
+            if type(e).__name__ in ("error", "ZipImportError", "ModuleNotFoundError") and "zlib" in type(e).__module__ + str(e):
+                raise ToolError("UGC Analyzer の部品を読めませんでした。アプリを新しくした直後なら、Claude（ChatGPT）を一度終了（⌘Q）して"
+                                "開き直してください。会話と分析は消えません") from e
             raise ToolError(f"サービス側のエラーです（{type(e).__name__}）。少し待って同じ道具を呼び直してください") from e
         finally:   # 道具ごとにかかった時間（Claude のチャットは道具1回 約60秒まで。超えたかを記録で見られるように）
             logger.info("道具の中身 %s: %.1f秒", fn.__name__, time.time() - t0)
@@ -223,9 +259,12 @@ def _build_server(user_of=None, local: bool = False):
                      "min_plays は、週ごとに選ぶ動画の再生の下限（既定10万。起点・大型ヒット・本人・公式などは再生に関わらず取る）。"
                      "利用者が「再生〇万以上の動画だけで」「小さい動画も見て」などと頼んだときだけ数で指定する。"
                      "skip_confirm は、利用者が「界隈の確認はいらない」「確認なしで最後まで書いて」と頼んだときだけ true（取得のあと、界隈の案で止まらずに最後まで書く）。"
-                     + "返ってきた内容を利用者に短く伝えて止まる（取得を待たない・見に来ない）。"
+                     + "fresh は、利用者が「最初から」「最初から分析し直して」「取り直して」と頼んだときだけ true"
+                     "（同じ曲を集め終わっていても書き始めず、新しく集め直す。前の分析は消さずに残る）。"
+                     "返ってきた内容を利用者に短く伝えて止まる（取得を待たない・見に来ない）。"
                      "ただし返事に「このまま書き始めます」とあれば（その曲はもう集め終わっている）、止まらずに、"
-                     "「〇〇の分析を続けて」と言われたときと同じに next_task から進める。" + START_CUT_RULE + rule),
+                     "「〇〇の分析を続けて」と言われたときと同じに next_task から進める。"
+                     "すでにある分析に楽曲ページを足す・外す・設定を変えて集め直す頼みは restart_analysis。" + START_CUT_RULE + rule),
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=True),
     )
@@ -233,10 +272,13 @@ def _build_server(user_of=None, local: bool = False):
                              video_url: str | None = None, candidate_urls: list[str] | None = None,
                              only_one: bool = False, music_urls: list[str] | None = None,
                              video_urls: list[str] | None = None, replies: bool = False,
-                             min_plays: int | None = None, skip_confirm: bool = False) -> str:
-        return _waiting_text(ctx, _call(runner.start_analysis, _user(ctx), song, artist, music_url or "", video_url or "",
-                                        candidate_urls or [], only_one, music_urls or [], video_urls or [], bool(replies),
-                                        min_plays, bool(skip_confirm)))
+                             min_plays: int | None = None, skip_confirm: bool = False, fresh: bool = False) -> str:
+        def start_analysis_fresh(*a):   # 記録の名前（道具の中身 〇〇: 〇秒）を start_analysis のままにする
+            return runner.start_analysis(*a, fresh=True) if fresh else runner.start_analysis(*a)
+        start_analysis_fresh.__name__ = "start_analysis"
+        return _waiting_text(ctx, _call(start_analysis_fresh, _user(ctx), song, artist,
+                                        music_url or "", video_url or "", candidate_urls or [], only_one, music_urls or [],
+                                        video_urls or [], bool(replies), min_plays, bool(skip_confirm)))
 
     @mcp.tool(
         title="分析の状態",
@@ -254,11 +296,16 @@ def _build_server(user_of=None, local: bool = False):
                     "analysis_id は分析 ID か曲名（省略するとその利用者の分析）。"
                     "kind: ai=指示書どおりにやって submit／ask_user=内容を利用者に見せて答えを submit／"
                     "wait=取得中なので止まる／done=完了なので止まる。"
-                    "skip_confirm=true は、利用者が「界隈の確認はいらない」「確認なしで最後まで書いて」と頼んだとき（界隈の確認で止まらず、案のまま進める）。" + rule,
+                    "skip_confirm=true は、利用者が「界隈の確認はいらない」「確認なしで最後まで書いて」と頼んだとき（界隈の確認で止まらず、案のまま進める）。"
+                    "want_confirm=true は、確認を省く頼みを取り消して「やっぱり界隈の確認をしたい」と言われたとき"
+                    "（確認がもう済んでいたら、redo の from=confirm で確認からやり直す）。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=False),
     )
-    async def next_task(ctx: Context, analysis_id: str | None = None, skip_confirm: bool = False) -> str:
+    async def next_task(ctx: Context, analysis_id: str | None = None, skip_confirm: bool = False,
+                        want_confirm: bool = False) -> str:
+        if want_confirm:
+            return _waiting_text(ctx, _call(runner.next_task, _user(ctx), analysis_id, bool(skip_confirm), True))
         return _waiting_text(ctx, _call(runner.next_task, _user(ctx), analysis_id, bool(skip_confirm)))
 
     @mcp.tool(
@@ -366,28 +413,36 @@ def _build_server(user_of=None, local: bool = False):
         return _call(runner.prompts, _user(ctx), action, name, text)["text"]
 
     @mcp.tool(
-        title="取得をやめてやり直す",
-        description="**利用者が「〇〇の取得をやめて、このページでやり直して」「〇〇の取得をやめて、最初からやり直して」「外したページも入れて」のように頼んだときだけ使う**。"
-                    "取得中・順番待ち・止まった分析の取得をやめ、music_url（https://www.tiktok.com/music/…）があればその楽曲ページで取り直す。"
-                    "楽曲ページを2つ以上で取り直すとき（外したページを足すときは、進めていたページも含めて全部）は music_urls に入れる（全部から取って合わせる）。"
-                    "music_url を省くと、楽曲ページ探しから最初にやり直す（返ってくる探し方に従って検索し、start_analysis を呼ぶ）。"
-                    "replies は返信も取るか、min_plays は週ごとに選ぶ動画の再生の下限（どちらも省くと前の分析の指定を引き継ぐ。利用者が頼んだときだけ渡す）。"
-                    "analysis_id は分析 ID か曲名。返ってきた内容を利用者に短く伝える。"
-                    "analysis_id を省いて、やり直せる分析が2つ以上あると、どれもやめずに一覧が返るので、どれをやり直すか利用者に1回聞いて、"
-                    "答えの曲名か分析 ID で呼び直す。" + rule,
-        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False,
+        title="TikTok から集め直す",
+        description="すでにある分析を、TikTok から集め直す。**どの状態の分析でも使える**（取得中・止まった・集め終わった・書いている途中・完成済み）。"
+                    "利用者が「最初から取り直して」「最初からやり直して」「このページ（ファンの音源）も足して・入れて」「このページは外して」"
+                    "「ファンの音源も探して」「もっと多くの動画を読んで」「新しい投稿も入れて・最新の数字で」「再生の下限を〇万に」「返信も取って」"
+                    "「止まった取得を続きから」と頼んだときだけ使う（自分の判断では使わない）。"
+                    "集め直すときは新しい分析を作り、前の分析とレポートは消さずに残る（前に取った属性・コメントは使い回し、重なる動画は取りに行かない）。"
+                    "引数（頼まれたものだけ渡す。何も渡さなければ「最初から」＝楽曲ページ探し・ファンの音源探しから全部）: "
+                    "music_url・music_urls は「このページで（入れ替える）」、add_music_urls は「このページも足す」（今のページは残る）、"
+                    "remove_music_urls は「このページは外す」、fan_sounds は同じ曲のファンの音源を探すか、"
+                    "read_more は詳しく読む動画の本数（数か \"all\"）、refresh=true は最新の数字で取り直す、"
+                    "replies は返信も取るか、min_plays は週ごとに選ぶ動画の再生の下限、resume=true は止まった取得を済んだところの続きから（同じ分析）。"
+                    "analysis_id は分析 ID か曲名。返ってきた内容（集め終わる見込みを含む）を利用者に短く伝えて止まる（確かめを求めない）。"
+                    "analysis_id を省いて、当てはまる分析が2つ以上あると、どれも触らずに一覧が返るので、どれをやり直すか利用者に1回聞いて、"
+                    "答えの曲名か分析 ID で呼び直す。集めたデータのまま AI の作業だけをやり直す頼みは redo。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
                                     open_world_hint=True),
     )
     async def restart_analysis(ctx: Context, music_url: str | None = None, analysis_id: str | None = None,
                                music_urls: list[str] | None = None, replies: bool | None = None,
-                               min_plays: int | None = None) -> str:
+                               min_plays: int | None = None, add_music_urls: list[str] | None = None,
+                               remove_music_urls: list[str] | None = None, fan_sounds: bool | None = None,
+                               read_more: str | None = None, refresh: bool = False, resume: bool = False) -> str:
         return _waiting_text(ctx, _call(runner.restart_analysis, _user(ctx), analysis_id, music_url or "", music_urls or [],
-                                        replies, min_plays))
+                                        replies, min_plays, add_music_urls or [], remove_music_urls or [], fan_sounds,
+                                        read_more, bool(refresh), bool(resume)))
 
     @mcp.tool(
         title="取得をやめる",
-        description="**利用者が「〇〇の取得をやめて」と頼んだときだけ使う**（やり直しまで頼まれたら restart_analysis）。"
-                    "取得中・順番待ちの分析の取得をやめる。analysis_id は分析 ID か曲名。"
+        description="**利用者が「〇〇の取得をやめて」「取り足しをやめて」と頼んだときだけ使う**（やり直しまで頼まれたら restart_analysis）。"
+                    "取得中・順番待ちの分析の取得と、掘り下げ・切り直しのコメントの取り足しをやめる。analysis_id は分析 ID か曲名。"
                     "analysis_id を省いて、やめられる分析が2つ以上あると、どれもやめずに一覧が返るので、どれをやめるか利用者に1回聞いて、"
                     "答えの曲名か分析 ID で呼び直す。" + rule,
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True,
@@ -395,6 +450,53 @@ def _build_server(user_of=None, local: bool = False):
     )
     async def cancel_analysis(ctx: Context, analysis_id: str | None = None) -> str:
         return _call(runner.cancel_analysis, _user(ctx), analysis_id)["text"]
+
+    @mcp.tool(
+        title="AI の作業を段からやり直す",
+        description="集めたデータ（TikTok から取ったもの）はそのままで、AI の作業を、指定した段からやり直す。**完成の前でも後でも使える**。"
+                    "利用者が「〇〇の分析を、界隈の案から・界隈の確認から・段階の分け方から・コメントの分析から・構成から やり直して」"
+                    "「参考記事を選び直して」「ウェブで調べ直して」「〇章と〇章を書き直して」「全章を書き直して」「note 用の仕上げだけやり直して」"
+                    "「前の版に戻して」と頼んだときに使う。"
+                    "from_step: axes（界隈の案から）／confirm（界隈の確認から。案はそのまま見せ直す）／label（ラベル付けから）／phases（段階の分け方から）／"
+                    "ccomments（界隈ごとのコメントの分析から）／refs（参考記事の選び直し）／research（ウェブの調べ直し）／era（時代背景）／"
+                    "outline（構成から）／write（本文の書き直し。chapters に章の名前を並べる。省けば全章）／finish（note 用の仕上げ）。"
+                    "章の名前は read の chapters で分かる。instruction は利用者の言葉そのまま（どう変えたいか）。"
+                    "restore に「前の版」「第1版」などを入れると、残してある前の版に戻す（from_step は要らない）。"
+                    "前の版は消さずに残る。返事に見込みの時間が出るので利用者に伝え、確かめを求めずに next_task で進める。"
+                    "TikTok から集め直す頼み（ページを足す・最初から取り直す など）は restart_analysis。"
+                    "1つの章の言い回しや足したい考察だけなら revise でもよい。界隈の分け方を変える（分ける・まとめる）は recut。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                    open_world_hint=False),
+    )
+    async def redo(ctx: Context, from_step: str = "", analysis_id: str | None = None, chapters: list[str] | None = None,
+                   instruction: str = "", restore: str = "") -> str:
+        return _call(runner.redo, _user(ctx), analysis_id, from_step, chapters, instruction, restore)["text"]
+
+    @mcp.tool(
+        title="分析とアプリのことを調べる",
+        description="読むだけ。分析やアプリについての質問に、UGC Analyzer の記録から答える。**推測で答える前に必ずこれで確かめる**。"
+                    "about: overview（どの楽曲ページで取ったか・外したページと理由・集めた本数・コメントの件数・設定・取得の日時と版・AI の進み。既定）／"
+                    "sounds（音源ごとの長さ・本数、同じ曲のファンの音源を探したか・見つけたもの・入れたもの・外したもの。"
+                    "target に楽曲ページの URL を入れると、それが入っているか）／"
+                    "video（target に動画の URL か番号。一覧にあるか・詳しく読んだか・コメントの件数・界隈）／"
+                    "report（レポートの版・検算・界隈ごとの本数・ウェブで調べたか・界隈の確認の答え）／"
+                    "app（アプリの版・この会話の道具の版・TikTok のログイン・最近のエラー・通知の出し方。analysis_id は要らない）。"
+                    "analysis_id は分析 ID か曲名（省くとその利用者の分析）。記録に無いことは「記録に無い」と返るので、そのまま伝える。" + rule,
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    async def info(ctx: Context, about: str = "overview", analysis_id: str | None = None, target: str | None = None) -> str:
+        return _call(runner.info, _user(ctx), analysis_id, about, target or "")["text"]
+
+    @mcp.tool(
+        title="分析をしまう・戻す",
+        description="**利用者が「〇〇の分析をしまって・片付けて・一覧から消して」「しまった〇〇を戻して」と頼んだときだけ使う**。"
+                    "しまった分析は一覧・曲名での引き当てに出なくなる（消さない。レポートのフォルダもそのまま）。restore=true で戻す。"
+                    "analysis_id は分析 ID か曲名。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
+                                    open_world_hint=False),
+    )
+    async def archive_analysis(ctx: Context, analysis_id: str, restore: bool = False) -> str:
+        return _call(runner.archive_analysis, _user(ctx), analysis_id, bool(restore))["text"]
 
     @mcp.tool(
         title="知識ベースを新しくする",

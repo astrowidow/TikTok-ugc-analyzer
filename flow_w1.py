@@ -19,6 +19,9 @@ dcomments → outline_revise →（書き直し）→ review →（直し・仕�
 完成後の界隈の切り直し（recut、2026-10-06〜。docs/RECUT_COMMUNITY.md）は、recut（分類軸を利用者の指示どおりに直す）を末尾に足し、
 受け付けたら label×（顔ぶれが変わりうる界隈の動画だけ）→ recut_check［service: 新しい界隈の必ず読みたい動画にコメントがあるか。
 無ければ取り足しを積む（acquire/recut.py）］→ phases → plan（以降はふつうの流れ）を足す。前の版は outputs/history/recut_r<回>/。
+AI の段のやり直し（redo、2026-10-12〜。docs/PLAN_0_8.md 2-2）は、今の版を outputs/history/redo_r<回>/ に残し、段ごとの「消す表」で
+その段から後ろを片付けて、その段から後ろの仕事を積み直す（参考記事・ウェブの調べ・時代背景は、頼まれない限り使い回す）。
+残した版は versions で一覧にし、restore_version で戻せる（戻す前の版も restore_r<回>/ に残す）。
 2026-10-03 に、代表の選定（reps）→ 1本ずつのコメント分析（comments）→ 界隈ごとの統合（synthesis）を、界隈ごとのコメント分析（ccomments）に
 まとめ、執筆の前に参考記事・構成案を足した（ユーザー）。前の形で始めた分析は、前の形のまま最後まで回る（reps・comments・synthesis を残してある）。
 """
@@ -700,6 +703,10 @@ def render(a, t: dict, st: dict) -> dict:
             mat["summary"] = deepen_summary(a, t["params"]["deepen"]) + "\n\n" + mat["summary"]
         if t["params"].get("recut"):
             mat["summary"] = recut_summary(a, t["params"]["recut"]) + "\n\n" + mat["summary"]
+        if t["params"].get("redo"):
+            mat["summary"] = redo_summary(a, t["params"]["redo"]) + "\n\n" + mat["summary"]
+        if t["params"].get("restore"):
+            mat["summary"] = restore_summary(a, t["params"]["restore"]) + "\n\n" + mat["summary"]
         # 界隈の確認を省いたことは、最初の完了の知らせでだけ伝える（あとの直しの完了では繰り返さない。切り直しのあとは利用者が決めた界隈）
         first_done = next((x for x in st.get("tasks") or [] if x.get("kind") == "done"), None)
         is_first = first_done is None or first_done.get("task_id") == t.get("task_id")
@@ -709,7 +716,8 @@ def render(a, t: dict, st: dict) -> dict:
 
     else:
         raise pr.RunnerError(f"知らない仕事の種類です: {typ}")
-    return {"text": text, "catalog": cat}
+    # やり直しの頼み（利用者の言葉）は、指示書の本文の外で後ろに足す（指示書に新しい印を足すと、利用者が直した指示書が初期に戻るため）
+    return {"text": text + redo_block(a, t), "catalog": cat}
 
 
 # --- 界隈の確認（F1〜F3）---
@@ -772,18 +780,135 @@ SHOWN = {"NOTE_BODY.md": ("レポート.md", "読む・note に貼るのはこ�
          "EDITOR_NOTES.md": ("確認メモ.md", "ウェブで調べた数字の出どころと、推測で書いたところ（公開の前に確かめたいとき）")}
 
 
-def report_folder(a) -> Path:
-    """この Mac で成果物を置くフォルダ（取得アプリの形だけ）。曲名と分析を作った日で名前を付ける"""
+# レポートのフォルダの印（隠しファイル）。どの分析のフォルダかを残す。別の分析が同じ題・同じ日でフォルダが重なったとき、
+# 上書きせずに「（2）」を付けた別のフォルダにするため（2026-10-12。docs/PLAN_0_8.md 第6章。利用者に見える名前に分析 ID は出さない）
+REPORT_MARK = ".ugc_analyzer.json"
+PREV_FOLDER = "前の版"   # 新しい版を置く前に、前の版のファイルを「前の版/第N版（日時）/」へ移す（2026-10-12。上書きで消していた）
+
+
+def _folder_base(a) -> str:
     title = re.sub(r'[\\/:*?"<>|\s]+', "_", a.title).strip("_")[:60] or a.id
     day = str(a.meta.get("created_at") or "")[:10]
-    return Path(REPORTS_DIR) / (f"{title}（{day}）" if day else title)
+    return f"{title}（{day}）" if day else title
+
+
+def _folder_owner(d: Path):
+    """フォルダの印にある分析 ID（印が無い・読めないなら None）"""
+    try:
+        return (pr._read_json(d / REPORT_MARK, {}) or {}).get("analysis_id")
+    except (OSError, ValueError):
+        return None
+
+
+def _same_file(p: Path, q: Path) -> bool:
+    """2つのファイルの中身が同じか（filecmp はアプリの同梱に入っていないので使わない）"""
+    try:
+        return p.is_file() and q.is_file() and p.stat().st_size == q.stat().st_size and p.read_bytes() == q.read_bytes()
+    except OSError:
+        return False
+
+
+def _legacy_mine(a, d: Path, base: str) -> bool:
+    """印の無いフォルダ（0.8.0 より前に置いた）が、この分析のものか。同じ名前になるほかの分析が無ければこの分析のもの。
+    あれば、置いてあるレポートの中身で見分け、決め手が無ければ先に作った分析のもの"""
+    try:
+        others = [b for b in pr.list_analyses(a.owner) if b.id != a.id and _folder_base(b) == base]
+    except Exception:   # noqa: BLE001  一覧が読めなくても、成果物は置く
+        others = []
+    if not others:
+        return True
+    rep = next((d / n for n in ("レポート.md", "NOTE_BODY.md") if (d / n).exists()), None)
+    if rep is not None:
+        if _same_file(rep, a.outputs("NOTE_BODY.md")):
+            return True
+        if any(_same_file(rep, b.outputs("NOTE_BODY.md")) for b in others):
+            return False
+    mine = str(a.meta.get("created_at") or "")
+    return all(mine <= str(b.meta.get("created_at") or "") for b in others)
+
+
+def report_folder(a) -> Path:
+    """この Mac で成果物を置くフォルダ（取得アプリの形だけ）。曲名と分析を作った日で名前を付ける。
+    同じ名前のフォルダがほかの分析のもの（中の印で見分ける）なら、「（2）」「（3）」を付けた別のフォルダ（2026-10-12）"""
+    base = _folder_base(a)
+    root = Path(REPORTS_DIR)
+    for i in range(1, 100):
+        d = root / (base if i == 1 else f"{base}（{i}）")
+        if not d.exists():
+            return d
+        owner = _folder_owner(d)
+        if owner == a.id or (owner is None and _legacy_mine(a, d, base)):
+            return d
+    return root / f"{base}（{a.id[-4:]}）"   # 来ないはず（同じ題・同じ日の分析が100）
+
+
+def _claim_folder(a) -> Path:
+    """レポートのフォルダを作り、この分析の印を置く"""
+    d = report_folder(a)
+    d.mkdir(parents=True, exist_ok=True)
+    if _folder_owner(d) != a.id:
+        pr._write_json(d / REPORT_MARK, {"analysis_id": a.id, "title": a.title, "at": pr._now()})
+    return d
+
+
+def _version_files(a) -> dict:
+    """レポートのフォルダの、版ごとに変わるファイル（置いた名前 → 分析フォルダの元）。前の名前（0.6.1 まで）で置いた写しも"""
+    out = {}
+    for name in ("NOTE_BODY.md", "REPORT.md", "EDITOR_NOTES.md", "data.zip"):
+        src = a.dir / DELIVERABLES[name]
+        out[SHOWN[name][0] if name in SHOWN else name] = src
+        if name in SHOWN:
+            out[name] = src
+    return out
+
+
+def _prev_label(a, d: Path, present: list) -> str:
+    """前の版のフォルダの名前: 版の一覧（versions）の名前と、その版を作った日時（「第2版（2026-10-12 14時05分）」）。
+    どの版か分からなければ日時だけ"""
+    when = datetime.datetime.fromtimestamp((d / present[0]).stat().st_mtime).strftime("%Y-%m-%d %H時%M分")
+    pairs = (("レポート.md", "NOTE_BODY.md"), ("NOTE_BODY.md", "NOTE_BODY.md"),
+             ("レポート（根拠の番号つき）.md", "REPORT.md"), ("REPORT.md", "REPORT.md"))
+    try:
+        vs = versions(a)
+    except Exception:   # noqa: BLE001  版の一覧が読めなくても、前の版は移す
+        vs = []
+    for v in reversed(vs):
+        for shown, src in pairs:
+            if (d / shown).exists() and (Path(v["where"]) / src).exists():
+                if _same_file(d / shown, Path(v["where"]) / src):
+                    return f"{v['name']}（{when}）"
+                break
+    return f"{when}の版"
+
+
+def archive_previous(a):
+    """新しい版を置く前に、レポートのフォルダにある前の版のファイルを「前の版/第N版（日時）/」へ移す（消さずに残す。2026-10-12）。
+    置いてあるものが今の版と同じなら何もしない（完了の知らせは何度も出し直すので）。移した先か None"""
+    if not REPORTS_DIR:
+        return None
+    d = report_folder(a)
+    if not d.exists():
+        return None
+    files = _version_files(a)
+    present = [n for n in files if (d / n).exists()]
+    if not present or all(_same_file(d / n, files[n]) for n in present):
+        return None
+    dest = d / PREV_FOLDER / _prev_label(a, d, present)
+    k = 2
+    while dest.exists():
+        dest = dest.with_name(f"{dest.name.rsplit('（その', 1)[0]}（その{k}）")
+        k += 1
+    dest.mkdir(parents=True)
+    for n in present:
+        shutil.move(str(d / n), str(dest / n))
+    a.log(event="report_prev_kept", to=str(dest.relative_to(d)), files=present)
+    return dest
 
 
 def folder_lines(a) -> list:
     """成果物のフォルダ（取得アプリの形だけ）: フォルダへのリンクと、リンクが開かないときの場所の文字"""
     from urllib.parse import quote
-    d = report_folder(a)
-    d.mkdir(parents=True, exist_ok=True)
+    d = _claim_folder(a)
     shown = str(d).replace(str(Path.home()), "~", 1)
     return [f"- フォルダ: [{d.name}](file://{quote(str(d))}/)",
             f"  （場所: `{shown}`。UGC Analyzer のメニュー「レポートのフォルダを開く」でも開けます）"]
@@ -793,8 +918,7 @@ def dl_url(a, name: str) -> str:
     if REPORTS_DIR:
         from urllib.parse import quote
         src = a.dir / DELIVERABLES[name]
-        dst = report_folder(a) / (SHOWN[name][0] if name in SHOWN else name)
-        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst = _claim_folder(a) / (SHOWN[name][0] if name in SHOWN else name)
         if src.exists():
             shutil.copy2(src, dst)
             if name in SHOWN and (report_folder(a) / name).exists():   # 前の版の名前（REPORT.md など）で置いた写しは消す
@@ -834,8 +958,7 @@ def copy_materials(a) -> None:
     else:
         w.writerow(["週", "投稿数", "再生の合計"])
         w.writerows(rows[1:])
-    d = report_folder(a)
-    d.mkdir(parents=True, exist_ok=True)
+    d = _claim_folder(a)
     (d / WEEKLY_CSV).write_text(buf.getvalue(), encoding="utf-8-sig")
 
 
@@ -1159,16 +1282,26 @@ def recut_prev_dir(a, n) -> Path:
     return a.outputs("history", f"recut_r{n}")
 
 
-def keep_version(a, kind: str, n, replace: bool = False) -> Path:
+VERSION_META = "_version.json"   # 残した版の記録（何の前に残したか・いつ）。2026-10-12〜
+VERSION_TASKS = "_tasks.json"    # 残したときの仕事の状態（state/tasks.json の写し。途中の版に戻すとき、残りの仕事を積み直すのに使う）
+
+
+def keep_version(a, kind: str, n, replace: bool = False, st: dict | None = None, what: str = "") -> Path:
     """書き直す前の版（outputs の全部。prompts・history・ZIP の作業場は除く）を outputs/history/<kind>_r<n>/ に写す。
-    切り直し（recut）と掘り下げ（deepen）の受け付けで使う。replace=False なら、もう写してあれば写し直さない（同じ回の2回目は後の版になるため）"""
+    切り直し（recut）・掘り下げ（deepen）・やり直し（redo）・直し（revise）・前の版に戻す（restore）の受け付けで使う。
+    replace=False なら、もう写してあれば写し直さない（同じ回の2回目は後の版になるため）。
+    2026-10-12〜: 版の一覧（versions）と戻す（restore_version）のために、記録（_version.json）と仕事の状態の写し（_tasks.json）も置く"""
     prev = a.outputs("history", f"{kind}_r{n}")
     if prev.exists():
         if not replace:
             return prev
         shutil.rmtree(prev)
     top = a.outputs()
+    top.mkdir(parents=True, exist_ok=True)
     shutil.copytree(top, prev, ignore=lambda d, names: [x for x in names if Path(d) == top and x in ("history", "prompts", "_zip")])
+    pr._write_json(prev / VERSION_META, {"kind": kind, "round": n, "at": pr._now(), **({"what": what} if what else {})})
+    if st is not None:
+        pr._write_json(prev / VERSION_TASKS, st)
     return prev
 
 
@@ -1248,7 +1381,7 @@ def accept_recut(a, t, raw, st) -> list:
                 ex.setdefault(keep[k], []).extend(x for x in v if x not in ex.get(keep[k], []))
         tax["examples"] = ex
     # 前の版を写してから、作り直すものを片付ける（参考記事・直しの記録・Excel 用 ZIP は残す）
-    keep_version(a, "recut", n, replace=True)
+    keep_version(a, "recut", n, replace=True, st=copy.deepcopy(st))
     for dd in RECUT_CLEAR_DIRS:
         shutil.rmtree(a.outputs(dd), ignore_errors=True)
     for f in RECUT_CLEAR_FILES:
@@ -1368,15 +1501,22 @@ def recut_summary(a, n) -> str:
     return "\n".join(lines)
 
 
-def recut_write_note(a, n, ch) -> str:
-    """切り直しのあとの執筆に添える: 利用者の頼み・前の版の章の読み方・前の版で利用者が頼んだ直し"""
-    rec = recut_record(a, n)
+def revise_requests(a) -> list:
+    """前の版で利用者が頼んだ直し（revisions/NNN.json）の行。複数の章の直し（0.8.0〜の chapters）も"""
     revs = []
     d = a.outputs("revisions")
     for p in sorted(d.glob("[0-9][0-9][0-9].json")) if d.exists() else []:
         r = pr._read_json(p, {}) or {}
         if r.get("instruction"):
-            revs.append(f"- 「{str(r['instruction'])[:300]}」（前の版の `{r.get('chapter')}` を直した）")
+            chs = r.get("chapters") or [r.get("chapter")]
+            revs.append(f"- 「{str(r['instruction'])[:300]}」（前の版の " + "・".join(f"`{c_}`" for c_ in chs) + " を直した）")
+    return revs
+
+
+def recut_write_note(a, n, ch) -> str:
+    """切り直しのあとの執筆に添える: 利用者の頼み・前の版の章の読み方・前の版で利用者が頼んだ直し"""
+    rec = recut_record(a, n)
+    revs = revise_requests(a)
     s = ("#### 界隈の切り直し（この版を書く理由）\n"
          f"- 利用者の頼み: {rec.get('instruction', '')}\n- 切り直し: {rec.get('note_to_user', '')}\n"
          f"- 前の版の同じ章は read の `prev:{ch}` で読める（あれば）。界隈の分け方が古いので、構成・界隈の話・界隈の名前は写さない。"
@@ -1384,6 +1524,599 @@ def recut_write_note(a, n, ch) -> str:
     if revs:
         s += "\n- 前の版で利用者が頼んだ直し（新しい版でも当てはまるものは活かす）:\n" + "\n".join(revs)
     return s
+
+
+# --- AI の段のやり直し・版の一覧・前の版に戻す（2026-10-12〜。docs/PLAN_0_8.md 2-2）---
+# 利用者の「〇〇からやり直して」に応える（完成の前でも後でも。運営の方針「原理上できる頼みは断らない。前の結果は消さずに残す」）。
+# 集めたデータはそのままで、AI の作業だけをやり直す。今の版を outputs/history/redo_r<回>/ に残し、段ごとの「消す表」で
+# その段から後ろを片付けて、その段から後ろの仕事を積み直す。参考記事・ウェブの調べ・時代背景は、頼まれない限り使い回す
+# （記事の組み立てと曲の外のことは、界隈や段階に依らない。切り直しと同じ考え）。
+REDO_STAGES = ("axes", "confirm", "label", "phases", "ccomments", "refs", "research", "era", "outline", "write", "finish")
+STAGE_NAMES = {"axes": "界隈の案", "confirm": "界隈の確認", "label": "ラベル", "phases": "段階", "ccomments": "コメント分析",
+               "refs": "参考記事", "research": "ウェブの調べ", "era": "時代背景", "outline": "構成", "write": "本文",
+               "finish": "note 用の仕上げ"}
+# 段ごとの「消す表」: その段が作るもの（outputs/ の中の (フォルダ, ファイル)）。やり直す段のものを消してから作り直す
+STAGE_OUT = {"axes": ((), ("taxonomy_proposal.json",)),
+             "confirm": ((), ("taxonomy.json", "confirm_answer.json")),
+             "label": (("labels",), ("labels.tsv",)),
+             "phases": ((), ("phases.json", "pathway.md")),
+             "ccomments": (("synthesis", "video_analysis"), ("video_analysis.jsonl",)),   # video_analysis は前の形（10/03 より前）の分析
+             "refs": (("references",), ()),
+             "research": ((), ("research.json", "research.md")),
+             "era": ((), ("era.md",)),
+             "outline": ((), ("outline.json", "outline.md")),
+             "write": (("chapters",), ()),
+             "finish": (("note_chapters",), ("note_meta.json",))}
+REDO_REPORT_FILES = ("REPORT.md", "NOTE_BODY.md", "EDITOR_NOTES.md", "verify.json")   # 組み立て・検算（いつも作り直す）
+# やり直したら作り直す段（その段から後ろで、その段の結果を使うもの）
+REDO_AFTER = {"axes": ("axes", "confirm", "label", "phases", "ccomments", "outline", "write", "finish"),
+              "confirm": ("confirm", "label", "phases", "ccomments", "outline", "write", "finish"),
+              "label": ("label", "phases", "ccomments", "outline", "write", "finish"),
+              "phases": ("phases", "ccomments", "outline", "write", "finish"),
+              "ccomments": ("ccomments", "outline", "write", "finish"),
+              "refs": ("refs", "outline", "write", "finish"),
+              "research": ("research", "era", "outline", "write", "finish"),   # W番号が変わるので構成から後ろも
+              "era": ("era", "outline", "write", "finish"),
+              "outline": ("outline", "write", "finish"),
+              "write": ("write", "finish"),
+              "finish": ("finish",)}
+TYPE_STAGE = {"axes": "axes", "confirm": "confirm", "recut": "confirm", "label": "label", "recut_check": "label", "phases": "phases",
+              "plan": "ccomments", "reps": "ccomments", "comments": "ccomments", "synthesis": "ccomments", "ccomments": "ccomments",
+              "dcomments": "ccomments", "ref_select": "refs", "ref_digest": "refs", "research": "research", "era": "era",
+              "outline": "outline", "outline_revise": "outline", "write": "write", "review": "write", "revise": "write",
+              "finish": "finish", "finish_title": "finish"}   # ほか（assemble・verify・export・done）は "end"
+_RANK = {s: i for i, s in enumerate(REDO_STAGES + ("end",))}
+REQUEST_HEADS = ("revise", "dcomments", "recut")   # 利用者の頼みの頭（まだ受け付けていなければ、やり直しのあとに回す）
+# 前の版に戻すときに入れ替えないもの（記録・渡した指示書の写し・残した版）
+VERSION_KEEP = ("history", "prompts", "_zip", "revisions", "recut", "versions", "settings_used.jsonl")
+KEPT_RE = re.compile(r"(deepen|recut|redo|revise|restore)_r(\d+)")
+VERSION_KINDS = {"first": "最初のレポート", "deepen": "界隈の掘り下げ", "recut": "界隈の切り直し", "redo": "やり直し",
+                 "revise": "直し", "restore": "前の版に戻した"}
+# 見込みの目安（第1版の実測。段の全部の分。2026-10-08 きゃわの通し試験）。この分析の実測（task_log の elapsed_s）があればそちら
+EST_MIN = {"axes": 6.2, "label": 6.1, "phases": 1.4, "ccomments": 8.3, "refs": 2.0, "research": 5.5, "era": 1.5, "outline": 2.1,
+           "write": 10.7, "finish": 5.0, "finish_title": 0.6}
+EST_GROUP = {"ref_select": "refs", "ref_digest": "refs"}
+FIRST_VERSION_MIN, FIRST_VERSION_PRO = 42.0, 0.7   # 第1版の AI の作業 約42分が、Claude Pro の5時間の利用枠の約7割
+
+
+def stage_of(t: dict) -> str:
+    return TYPE_STAGE.get(t.get("type"), "end")
+
+
+def chapter_name(ch: str) -> str:
+    return CHAPTER_TITLES.get(ch) or f"拡大経路 {ch[5:]}"
+
+
+def redo_record_path(a, n) -> Path:
+    return a.outputs("versions", f"redo_r{n}.json")
+
+
+def redo_record(a, n) -> dict:
+    return pr._read_json(redo_record_path(a, n), {}) or {}
+
+
+def redo_title(rec: dict) -> str:
+    s = f"{STAGE_NAMES.get(rec.get('from'), '?')}からやり直し"
+    if rec.get("chapters"):
+        s += "（" + "・".join(chapter_name(c_) for c_ in rec["chapters"]) + "）"
+    return s
+
+
+def _next_round(a, kind: str) -> int:
+    ns = []
+    for d in (a.outputs("history"), a.outputs("versions")):
+        if d.exists():
+            ns += [int(m.group(1)) for p in d.iterdir() if (m := re.fullmatch(rf"{kind}_r(\d+)(?:\.json)?", p.name))]
+    return max(ns, default=0) + 1
+
+
+def split_tasks(st: dict) -> tuple:
+    """仕事の列を (済んだ仕事, 今の流れの残り, 積まれたままの頼み) に分ける。受け取られないままの完了の知らせは済んだことにする
+    （revise・deepen・recut の受け付けと同じ）。積まれたままの頼み = まだ受け付けていない直し・掘り下げ・切り直しの頭から後ろ"""
+    tasks = st["tasks"]
+    i = next((k for k, x in enumerate(tasks) if x["status"] != "done" and x["kind"] != "done"), len(tasks))
+    for x in tasks[:i]:
+        if x["kind"] == "done" and x["status"] != "done":
+            x.update({"status": "done", "done_at": pr._now()})
+    rest = tasks[i:]
+    j = next((k for k, x in enumerate(rest) if x["type"] in REQUEST_HEADS and x["status"] != "done"), len(rest))
+    return tasks[:i], rest[:j], rest[j:]
+
+
+def _run_kind(st: dict, run: list) -> str:
+    """今の流れの残りが何の続きか: "main"（最初の流れ・やり直し・切り直し）か "revise"・"deepen"（完成した版への直し）"""
+    if not run:
+        return "none"
+    tasks = st["tasks"]
+    for x in reversed(tasks[:tasks.index(run[0])]):
+        if x["kind"] == "done":
+            return "main"
+        if x["type"] == "revise":
+            return "revise"
+        if x["type"] == "dcomments":
+            return "deepen"
+        if x["type"] == "recut":
+            return "main"
+    return "main"
+
+
+def _redo_chapters(a, st, frm: str, chapters):
+    """本文・仕上げのやり直しの章（章の順）。省けば全章（None）"""
+    if frm not in ("write", "finish") or not chapters:
+        return None
+    if isinstance(chapters, str):
+        chapters = [x for x in re.split(r"[,、\s]+", chapters) if x]
+    chs = [str(c_).strip().strip("`") for c_ in chapters if str(c_).strip()]
+    if not chs or any(c_ in ("all", "全章", "全部") for c_ in chs):
+        return None
+    allc = chapter_order(a, st) if phases(a) else None
+    ok = allc or ["intro", "branch", "music", "result"]
+    bad = [c_ for c_ in chs if c_ not in ok and not (allc is None and re.fullmatch(r"path_P\d+", c_))]
+    if bad:
+        raise pr.RunnerError(f"章の id は {ok} から選んでください（受け取った: {bad}）")
+    order = allc or chs
+    return sorted(set(chs), key=lambda c_: order.index(c_) if c_ in order else 99)
+
+
+def task_minutes(a) -> dict:
+    """この分析の実測（state/task_log.jsonl の elapsed_s）: 仕事の種類 → 1つあたりの分（中央値。1時間を超えたものは席を外していたとみて除く）"""
+    by = collections.defaultdict(list)
+    p = a.log_path
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            el = r.get("elapsed_s")
+            if r.get("event") != "done" or not isinstance(el, (int, float)) or not 0 < el <= 3600:
+                continue
+            by[re.sub(r"^\d+-", "", str(r.get("task_id", "")).rsplit("/", 1)[-1])].append(el / 60)
+    return {k: sorted(v)[len(v) // 2] for k, v in by.items()}
+
+
+def est_text(minutes: float, share: float) -> str:
+    wari = share * 10
+    s = ("1割未満" if wari < 1 else f"約{int(round(wari))}割" if wari < 9.5 else
+         "1回分ほどか、それを超える（途中で上限に届いたら、枠が戻ってから「続けて」）")
+    return f"AI の作業 約{max(1, int(round(minutes)))}分（Claude Pro の5時間の利用枠の{s}）"
+
+
+def estimate(a, counts: dict, full: dict) -> dict:
+    """AI の作業の見込み。counts は仕事の種類 → 数、full はその段のふつうの数（実測が無い種類は、第1版の目安 EST_MIN を
+    ふつうの数との比で割る）。利用枠の割合は「第1版 約42分 ＝ Pro の5時間の枠の約7割」の比から"""
+    meas = task_minutes(a)
+    total = 0.0
+    for typ, k in counts.items():
+        if not k:
+            continue
+        if typ in meas:
+            total += meas[typ] * k
+        else:
+            total += EST_MIN.get(EST_GROUP.get(typ, typ), 2.0) * k / max(1, full.get(typ, k))
+    share = total / FIRST_VERSION_MIN * FIRST_VERSION_PRO
+    return {"est_min": round(total, 1), "est_pro_share": round(share, 2), "est_text": est_text(total, share)}
+
+
+def _redo_counts(a, st, redone, write_chs, finish_chs, n_label, n_comm) -> tuple:
+    c = cfg(a)
+    n_ch = len(phases(a)) + 4 if phases(a) else 7
+    counts, full = {}, {}
+    for s in ("axes", "phases", "research", "era", "outline"):
+        if s in redone:
+            counts[s] = 1
+    if "label" in redone:
+        counts["label"] = full["label"] = n_label
+    if "ccomments" in redone:
+        counts["ccomments"] = full["ccomments"] = n_comm
+    if "refs" in redone:
+        counts.update({"ref_select": 1, "ref_digest": c["n_refs"]})
+        full.update({"ref_select": 1 + c["n_refs"], "ref_digest": 1 + c["n_refs"]})
+    if "write" in redone:
+        counts["write"], full["write"] = (n_ch if write_chs is None else len(write_chs)), n_ch
+    if "finish" in redone:
+        counts["finish"], full["finish"] = (n_ch if finish_chs is None else len(finish_chs)), n_ch
+        counts["finish_title"] = 1
+    return counts, full
+
+
+def _tag_later(tasks: list, frm: str, chs, n) -> list:
+    """まだ渡していない仕事のうち、その段から後ろ（章の指定があればその章）にやり直しの回を付ける（指示書の後ろに頼みが付く）"""
+    deps = set(REDO_AFTER[frm])
+    out = []
+    for x in tasks:
+        s = stage_of(x)
+        hit = x["kind"] == "done" or (s in deps and not (chs and x["type"] == "finish_title")
+                                      and (x["type"] not in ("write", "finish") or not chs or x["params"].get("chapter") in chs))
+        if hit:
+            x["params"]["redo"] = n
+            out.append(x["task_id"])
+    return out
+
+
+def _pending_list(st: dict) -> list:
+    """まだ来ていない段で受けた頼み（st["redo_pending"]。古い順の列。前は1つの dict）"""
+    p = st.get("redo_pending")
+    return [p] if isinstance(p, dict) else list(p or [])
+
+
+def _older_asks(a, st, run, n, instruction) -> list:
+    """今の流れの残りの仕事に付いていた、前のやり直しの頼みと、まだ来ていない段で受けた頼み（新しい頼みと同じものは除く）"""
+    rounds = [x["params"].get("redo") for x in run if x["params"].get("redo")] + [p["round"] for p in _pending_list(st)]
+    out = []
+    for m in dict.fromkeys(rounds):
+        if m == n:
+            continue
+        rec = redo_record(a, m)
+        for ins in [rec.get("instruction")] + list(rec.get("also") or []):
+            ins = str(ins or "").strip()
+            if ins and ins != instruction and ins not in out:
+                out.append(ins)
+    return out
+
+
+def _side_tasks(a, st, stages, extra: dict) -> list:
+    """使い回す段（参考記事・ウェブの調べ・時代背景）の仕事"""
+    return _flow_tail(a, st, refs="refs" in stages, research="research" in stages, era="era" in stages,
+                      write=[], finish=[], title=False, tail=False, extra=extra)
+
+
+def redo(a, st: dict, frm: str, chapters=None, instruction=None) -> dict:
+    """AI の段のやり直し（道具 redo の中身）。proto_runner.redo がロックの中で呼び、返った st を書く（ここでは書かない）。
+    frm: axes・confirm・label・phases・ccomments・refs・research・era・outline・write・finish。chapters は write・finish の章の id（省けば全章）。
+    - その段まで進んでいれば: 今の版を outputs/history/redo_r<回>/ に残し（仕事の状態の写しも）、消す表でその段から後ろを片付け、
+      今の流れの残りの仕事を外して、その段から後ろの仕事を積み直す（next_n は戻さない）。まだ受け付けていない直し・掘り下げ・切り直しは後ろに回す
+    - まだその段に来ていなければ（deferred）: 何も消さず、その段から後ろの仕事に頼みを付けておく（plan がまだなら、plan が足す仕事に付く）
+    instruction（利用者の言葉）は、積み直した仕事の指示書の後ろに足す（render。指示書の本文は変えない）。
+    返す: st・from・from_name・round・deferred・chapters・redone・reused・queued・dropped・asks_user・kept・kept_id・est_min・est_pro_share・est_text"""
+    frm = str(frm or "").strip()
+    if frm not in REDO_STAGES:
+        raise pr.RunnerError("どの段からやり直すかは次から: " + "、".join(f"{s}（{STAGE_NAMES[s]}）" for s in REDO_STAGES))
+    instruction = str(instruction or "").strip()
+    chs = _redo_chapters(a, st, frm, chapters)
+    snapshot = copy.deepcopy(st)
+    done, run, queued = split_tasks(st)
+    kind = _run_kind(st, run)
+    cur_rank = _RANK["end"] if not run or kind in ("revise", "deepen") else _RANK[stage_of(run[0])]
+    n = _next_round(a, "redo")
+    rec = {"round": n, "from": frm, "chapters": chs or [], "instruction": instruction, "at": pr._now()}
+    if cur_rank < _RANK[frm]:
+        return _redo_later(a, st, run, frm, chs, n, rec, snapshot)
+
+    # --- 作り直すものと仕事を決める（ここまでは何も書き換えない）---
+    old_labs = labels(a)
+    n_comm = len(comment_seqs(a)) if old_labs else 0
+    redone = list(REDO_AFTER[frm])
+    via_plan = frm in ("axes", "confirm", "label", "phases", "ccomments")
+    side_have = {"refs": refs_ready(a), "research": a.outputs("research.json").exists(),
+                 "era": a.outputs("era.md").exists() and a.outputs("research.json").exists()}
+    if frm in ("axes", "confirm", "label", "phases", "ccomments", "refs", "research", "era", "outline"):
+        redone += [s for s in ("refs", "research", "era") if s not in redone and not side_have[s]]   # 無ければ作る（使い回せない）
+    redone = sorted(set(redone), key=REDO_STAGES.index)
+    reused = [s for s in ("refs", "research", "era") if s not in redone and _RANK[frm] <= _RANK["outline"]]
+    write_chs = finish_chs = None
+    if frm in ("write", "finish"):
+        allc = chapter_order(a, st)
+        want = set(chs or allc)
+        wset = (want if frm == "write" else set()) | {c_ for c_ in allc if not a.outputs("chapters", f"{c_}.md").exists()}
+        fset = wset | (want if frm == "finish" else set()) | {c_ for c_ in allc if not a.outputs("note_chapters", f"{c_}.md").exists()}
+        write_chs, finish_chs = [c_ for c_ in allc if c_ in wset], [c_ for c_ in allc if c_ in fset]
+        redone = (["write"] if write_chs else []) + ["finish"]
+    extra = {"redo": n}
+    new, n_label = [], 0
+    if via_plan:
+        if frm == "axes":
+            new.append(_task(st, "axes", "ai", "分類軸（界隈など）の案を作る", dict(extra)))
+        if frm in ("axes", "confirm"):   # 「界隈の確認から」と頼まれたら、確認を省く設定でも利用者に聞く（no_auto）
+            new.append(_task(st, "confirm", "ask_user", "界隈の確認（利用者に聞く）", {**extra, **({"no_auto": True} if frm == "confirm" else {})}))
+        if frm in ("axes", "confirm", "label"):
+            seqs = sorted(set(label_seqs(a)) | set(old_labs))
+            make_extra_sheets(a, seqs)
+            b = cfg(a)["label_batch"]
+            batches = [seqs[i:i + b] for i in range(0, len(seqs), b)]
+            n_label = len(batches)
+            new += [_task(st, "label", "ai", f"ラベル付け（{i}/{len(batches)}）", {"batch": i, "n_batches": len(batches), "seqs": bb, **extra})
+                    for i, bb in enumerate(batches, 1)]
+        if frm != "ccomments":
+            new.append(_task(st, "phases", "ai", "段階の区切りと拡散経路の下書き", dict(extra)))
+        new.append(_task(st, "plan", "service", "以降の仕事の準備（サービス）", dict(extra)))
+    else:
+        new = _flow_tail(a, st, refs="refs" in redone, research="research" in redone, era="era" in redone,
+                         outline="outline" in redone, write=write_chs if frm in ("write", "finish") else None,
+                         finish=finish_chs if frm in ("write", "finish") else None,
+                         export=frm not in ("write", "finish") or not a.outputs("data.zip").exists(),
+                         extra=extra, done_title="完了（やり直し）")
+    est = estimate(a, *_redo_counts(a, st, redone, write_chs, finish_chs, n_label, n_comm or 1))
+
+    # --- 今の版を残してから、消す表で片付ける ---
+    kept = keep_version(a, "redo", n, st=snapshot, what=redo_title(rec))
+    cleared = []
+    for s in redone:
+        dirs, files = STAGE_OUT[s]
+        if s in ("write", "finish") and frm in ("write", "finish"):   # 章を指定したやり直し: その章だけ
+            sub = "chapters" if s == "write" else "note_chapters"
+            files = [f"{sub}/{c_}.md" for c_ in (write_chs if s == "write" else finish_chs)] + (["note_meta.json"] if s == "finish" else [])
+            dirs = ()
+        for dd in dirs:
+            if a.outputs(dd).exists():
+                shutil.rmtree(a.outputs(dd))
+                cleared.append(dd + "/")
+        for f in files:
+            if a.outputs(f).exists():
+                a.outputs(f).unlink()
+                cleared.append(f)
+    for f in REDO_REPORT_FILES:
+        if a.outputs(f).exists():
+            a.outputs(f).unlink()
+            cleared.append(f)
+    for x in queued:   # 渡したまま受け付けていない頼みは、やり直しのあとで渡し直す
+        if x["status"] == "issued":
+            x["status"] = "pending"
+    also = _older_asks(a, st, run, n, instruction)   # 外す仕事に付いていた前の頼み・まだ来ていない段で受けた頼みは、このやり直しに含める
+    st.pop("redo_pending", None)
+    st["tasks"] = done + new + queued
+    rec.update({"deferred": False, "redone": redone, "reused": reused, "write": write_chs, "finish": finish_chs,
+                "also": also, "dropped": [x["task_id"] for x in run], "cleared": cleared,
+                "kept": f"history/redo_r{n}", **est})
+    pr._write_json(redo_record_path(a, n), rec)
+    a.log(event="redo", round=n, frm=frm, chapters=chs, queued=len(new), dropped=len(run), est_min=est["est_min"],
+          chars=len(instruction))
+    return {"st": st, "from": frm, "from_name": STAGE_NAMES[frm], "round": n, "deferred": False, "chapters": chs or [],
+            "redone": [STAGE_NAMES[s] for s in redone], "reused": [STAGE_NAMES[s] for s in reused], "queued": len(new),
+            "dropped": len(run), "asks_user": frm in ("axes", "confirm"), "kept": str(kept), "kept_id": f"redo_r{n}", **est}
+
+
+def _redo_later(a, st, run, frm, chs, n, rec, snapshot) -> dict:
+    """まだその段に来ていないやり直しの頼み: 何も消さず、その段から後ろの仕事に頼みを付ける。plan（以降の仕事の準備）がまだなら、
+    plan が足す仕事に付くよう残す。使い回す段（参考記事など）を頼まれて、その仕事が列に無ければ足す"""
+    rec["also"] = _older_asks(a, st, run, n, rec.get("instruction"))
+    tagged = _tag_later(run, frm, chs, n)
+    for x in run:
+        if frm == "confirm" and x["type"] == "confirm":
+            x["params"]["no_auto"] = True
+    if any(x["type"] == "plan" for x in run):   # plan が足す仕事に付ける（前に受けた頼みも、順に当てる）
+        st["redo_pending"] = _pending_list(st) + [{"stage": frm, "round": n, "chapters": chs or []}]
+    added, kept = [], None
+    side = {"refs": ["refs"], "research": ["research", "era"], "era": ["era"]}.get(frm, [])
+    have = {stage_of(x) for x in run}
+    miss = [s for s in side if s not in have] if not st.get("redo_pending") else []
+    if miss:
+        kept = keep_version(a, "redo", n, st=snapshot, what=redo_title(rec))   # 使い回していたものを作り直すので、前の版を残す
+        added = _side_tasks(a, st, miss, {"redo": n})
+        at = next((x for x in run if _RANK[stage_of(x)] > _RANK[frm]), None)
+        tasks = st["tasks"]
+        i = tasks.index(at) if at is not None else (tasks.index(run[-1]) + 1 if run else len(tasks))
+        tasks[i:i] = added
+    est = estimate(a, *_redo_counts(a, st, miss, [], [], 0, 1)) if miss else {"est_min": 0.0, "est_pro_share": 0.0, "est_text": "追加の作業は無い"}
+    rec.update({"deferred": True, "tagged": tagged, "added": [x["task_id"] for x in added], "redone": miss,
+                "kept": f"history/redo_r{n}" if kept else None, **est})
+    pr._write_json(redo_record_path(a, n), rec)
+    a.log(event="redo", round=n, frm=frm, chapters=chs, deferred=True, tagged=len(tagged), queued=len(added))
+    return {"st": st, "from": frm, "from_name": STAGE_NAMES[frm], "round": n, "deferred": True, "chapters": chs or [],
+            "redone": [STAGE_NAMES[s] for s in miss], "reused": [], "queued": len(added), "dropped": 0,
+            "asks_user": frm == "confirm", "kept": str(kept) if kept else None, "kept_id": f"redo_r{n}" if kept else None, **est}
+
+
+def redo_block(a, t: dict) -> str:
+    """やり直しの仕事の指示書の後ろに足す、利用者の頼み（指示書の本文には入れない。新しい印を足すと利用者の指示書が初期に戻るため）"""
+    n = (t.get("params") or {}).get("redo")
+    if not n or t.get("kind") == "done":
+        return ""
+    rec = redo_record(a, n)
+    now = str(rec.get("instruction") or "").strip()
+    older = [str(x).strip() for x in rec.get("also") or [] if str(x or "").strip()]
+    if not now and not older:
+        return ""
+
+    def quote(x):
+        return "\n".join("> " + ln for ln in x.splitlines())
+    body = quote(now) if now else ""
+    if older:
+        body += ("\n\n" if body else "") + "前に受けた頼み（これもまだ活きている）:\n\n" + "\n\n".join(quote(x) for x in older)
+    return ("\n\n### 利用者の頼み（このやり直しのきっかけ）\n\n" + body + "\n\n"
+            f"（{STAGE_NAMES.get(rec.get('from'), '')}からやり直している。この仕事に関わるところは、この頼みに沿わせる。"
+            "関わらないところは、上の指示書どおり）\n")
+
+
+def redo_write_note(a, ch) -> str:
+    """やり直しの執筆に添える: やり直す前の版の章の読み方と、前の版で利用者が頼んだ直し"""
+    d = prev_version_dir(a)
+    if d is None or not (d / "chapters" / f"{ch}.md").exists():
+        return ""
+    s = ("#### やり直す前の版\n"
+         f"- やり直す前のこの章は read の `prev:{ch}` で読める。構成・主張が変わっていれば写さない。前の版にしかない利用者の考察や、"
+         "良い書き方を活かすときだけ使う")
+    revs = revise_requests(a)
+    if revs:
+        s += "\n- 前の版で利用者が頼んだ直し（新しい版でも当てはまるものは活かす）:\n" + "\n".join(revs)
+    return s
+
+
+def redo_summary(a, n) -> str:
+    """完了の知らせの頭: 何からやり直し、何を使い回したか（返答の 1 に使う）"""
+    rec = redo_record(a, n)
+    lines = [f"#### 今回の直し（{redo_title(rec)}）"]
+    asks = [str(x) for x in [rec.get("instruction")] + list(rec.get("also") or []) if x]
+    if asks:
+        lines.append("- 利用者の頼み: " + " ／ ".join(f"「{x}」" for x in asks))
+    if rec.get("deferred"):
+        lines.append(f"- {STAGE_NAMES.get(rec.get('from'), '')}の段に入る前に受けた頼みなので、その段から頼みを添えて書いた")
+    else:
+        if rec.get("redone"):
+            lines.append("- やり直した段: " + "、".join(STAGE_NAMES.get(s, s) for s in rec["redone"]))
+        if rec.get("reused"):
+            lines.append("- 前のものをそのまま使った段: " + "、".join(STAGE_NAMES.get(s, s) for s in rec["reused"]))
+        lines.append("- 前の版は残してある（「前の版に戻して」と頼めば戻せる）")
+    lines.append("- 返答の 1 では、拡散の流れに加えて、やり直して何が変わったかを1〜3文で伝える")
+    return "\n".join(lines)
+
+
+# --- 版の一覧（versions）と、前の版に戻す（restore_version）---
+def _mtime_iso(p: Path) -> str:
+    return datetime.datetime.fromtimestamp(p.stat().st_mtime).astimezone().isoformat(timespec="seconds")
+
+
+def _event_at(a, kind: str, n: int):
+    if kind == "deepen":
+        return deepen_job(a, n).get("requested_at")
+    if kind == "recut":
+        return recut_record(a, n).get("at")
+    if kind == "redo":
+        return redo_record(a, n).get("at")
+    return None
+
+
+def _kept_versions(a) -> list:
+    """残した版（outputs/history/<種類>_r<回>/。それぞれ、その頼みの前の版）を古い順に"""
+    d = a.outputs("history")
+    out = []
+    for p in (d.iterdir() if d.exists() else []):
+        m = KEPT_RE.fullmatch(p.name)
+        if not m or not p.is_dir():
+            continue
+        kind, n = m.group(1), int(m.group(2))
+        meta = pr._read_json(p / VERSION_META, {}) or {}
+        at = meta.get("at") or _event_at(a, kind, n) or _mtime_iso(p)
+        out.append({"id": p.name, "kind": kind, "round": n, "dir": p, "at": str(at), "meta": meta})
+    return sorted(out, key=lambda x: (x["at"], x["id"]))
+
+
+def _ask_line(s) -> str:
+    s = str(s or "").strip()
+    return f"。頼み: 「{s[:80]}{'…' if len(s) > 80 else ''}」" if s else ""
+
+
+def _event_what(a, k: dict) -> str:
+    """残した版のあとに来た頼み（＝次の版を作ったもの）の説明"""
+    kind, n = k["kind"], k["round"]
+    if kind == "deepen":
+        job = deepen_job(a, n)
+        return f"界隈「{job.get('community') or '?'}」の掘り下げ" + _ask_line(job.get("instruction"))
+    if kind == "recut":
+        rec = recut_record(a, n)
+        return "界隈の切り直し" + (f"（{rec['note_to_user']}）" if rec.get("note_to_user") else "") + _ask_line(rec.get("instruction"))
+    if kind == "redo":
+        rec = redo_record(a, n)
+        return redo_title(rec) + _ask_line(rec.get("instruction"))
+    return k["meta"].get("what") or VERSION_KINDS.get(kind, kind)
+
+
+def prev_version_dir(a):
+    """執筆の `prev:<章>` で読む前の版（いちばん新しい、切り直し・やり直しの前の版）。無ければ None"""
+    ks = [k for k in _kept_versions(a) if k["kind"] in ("recut", "redo")]
+    return ks[-1]["dir"] if ks else None
+
+
+def versions(a) -> list:
+    """レポートの版の一覧（古い順。info の about=report で使う）。残した版（outputs/history/<種類>_r<回>/）と今の版。
+    各版: name（第N版）・id（残した場所の名前。今の版は "current"。restore_version に渡せる）・kind（first・deepen・recut・redo・revise・restore）・
+    made（何をして作った版か）・made_at（その頼みの日時）・finished_at（レポートを組み立てた日時。未完成なら None）・complete・current・
+    where（分析フォルダの中の場所）・folder（利用者のレポートのフォルダで、その版が置いてある場所。無ければ None）・
+    edits（0.8.0 より前の直しで、その版に入ったもの。版を残していない）"""
+    kept = _kept_versions(a)
+    dirs = [k["dir"] for k in kept] + [a.outputs()]
+    out = []
+    for i, dd in enumerate(dirs):
+        prev = kept[i - 1] if i else None
+        rep = next((dd / f for f in ("NOTE_BODY.md", "REPORT.md") if (dd / f).exists()), None)
+        cur = i == len(kept)
+        out.append({"name": f"第{i + 1}版", "id": "current" if cur else kept[i]["id"], "kind": prev["kind"] if prev else "first",
+                    "made": _event_what(a, prev) if prev else VERSION_KINDS["first"],
+                    "made_at": prev["at"] if prev else str(a.meta.get("created_at") or ""),
+                    "finished_at": _mtime_iso(rep) if rep else None, "complete": rep is not None, "current": cur,
+                    "where": str(dd), "folder": None, "edits": []})
+    rd = a.outputs("revisions")
+    for p in sorted(rd.glob("[0-9][0-9][0-9].json")) if rd.exists() else []:
+        r = pr._read_json(p, {}) or {}
+        if r.get("round") or not r.get("instruction"):   # 0.8.0 からの直しは、直す前の版を残している（上の一覧の版になる）
+            continue
+        at = str(r.get("at") or "")
+        idx = next((i for i, k in enumerate(kept) if k["at"] > at), len(kept))
+        out[idx]["edits"].append({"at": at, "chapters": r.get("chapters") or [r.get("chapter")], "instruction": r.get("instruction")})
+    if REPORTS_DIR:
+        d = report_folder(a)
+        pv = d / PREV_FOLDER
+        for v in out:
+            if v["current"]:
+                v["folder"] = str(d) if _same_file(d / "レポート.md", a.outputs("NOTE_BODY.md")) else None
+            elif pv.exists():
+                hit = sorted(p for p in pv.iterdir() if p.name.startswith(v["name"] + "（"))
+                v["folder"] = str(hit[-1]) if hit else None
+    return out
+
+
+def find_version(vs: list, which) -> dict:
+    """戻す版を、id（deepen_r1 など）・名前（第1版・1）・「前の版」「最初」から当てる"""
+    w = re.sub(r"\s", "", str(which or ""))
+    old = [v for v in vs if not v["current"]]
+    if not old:
+        raise pr.RunnerError("戻せる前の版はありません（この分析は、まだ一度も書き直していません）")
+    hit = None
+    if w in ("", "前の版", "前", "ひとつ前", "一つ前", "1つ前", "直前", "prev", "previous"):
+        hit = old[-1]
+    elif w in ("最初", "最初の版", "初版", "第一版", "first"):
+        hit = vs[0]
+    else:
+        m = re.fullmatch(r"第?(\d+)版?", w)
+        if m:
+            hit = next((v for v in vs if v["name"] == f"第{int(m.group(1))}版"), None)
+        hit = hit or next((v for v in vs if w in (v["id"], v["name"])), None)
+    if hit is None or hit["current"]:
+        raise pr.RunnerError(f"「{which}」に当たる前の版がありません。戻せる版: " +
+                             "、".join(f"{v['name']}（{v['made']}。id={v['id']}）" for v in old))
+    return hit
+
+
+def restore_version(a, st: dict, which) -> dict:
+    """残した版に戻す（proto_runner がロックの中で呼び、返った st を書く）。今の版を outputs/history/restore_r<回>/ に残してから、
+    outputs の中身（記録・指示書の写し・残した版は除く）を、戻す版のものに入れ替える。今の流れの残りの仕事は外し、
+    完了の知らせ（done）を積む（next_task で出し直すと、レポートのフォルダにも置く。そのとき今の版は「前の版」へ移る）。
+    戻す版が途中の版なら、その版を残したときの残りの仕事を積み直す。まだ受け付けていない頼みは後ろに回す。
+    返す: st・restored（第N版）・restored_id・made・complete・queued・dropped・kept・kept_id"""
+    v = find_version(versions(a), which)
+    kdir = Path(v["where"])
+    snapshot = copy.deepcopy(st)
+    done, run, queued = split_tasks(st)
+    m = _next_round(a, "restore")
+    kept = keep_version(a, "restore", m, st=snapshot, what=f"{v['name']}に戻した")
+    top = a.outputs()
+    for p in list(top.iterdir()):
+        if p.name in VERSION_KEEP:
+            continue
+        shutil.rmtree(p) if p.is_dir() else p.unlink()
+    for p in kdir.iterdir():
+        if p.name in VERSION_KEEP or p.name in (VERSION_META, VERSION_TASKS):
+            continue
+        shutil.copytree(p, top / p.name) if p.is_dir() else shutil.copy2(p, top / p.name)
+    new = []
+    old = pr._read_json(kdir / VERSION_TASKS, None)
+    if not v["complete"] and isinstance(old, dict) and old.get("tasks"):
+        for x in split_tasks(old)[1]:
+            new.append(_task(st, x["type"], x["kind"], x["title"], copy.deepcopy(x.get("params") or {})))
+        dn = [x for x in new if x["kind"] == "done"]
+        if dn:
+            dn[-1]["params"]["restore"] = m
+    if not any(x["kind"] == "done" for x in new):
+        new.append(_task(st, "done", "done", f"完了（{v['name']}に戻した）", {"restore": m}))
+    for x in queued:
+        if x["status"] == "issued":
+            x["status"] = "pending"
+    st["tasks"] = done + new + queued
+    st.pop("redo_pending", None)
+    pr._write_json(a.outputs("versions", f"restore_r{m}.json"),
+                   {"round": m, "which": v["id"], "name": v["name"], "made": v["made"], "at": pr._now(),
+                    "kept": f"history/restore_r{m}", "dropped": [x["task_id"] for x in run], "complete": v["complete"]})
+    a.log(event="restore", round=m, which=v["id"], queued=len(new), dropped=len(run))
+    return {"st": st, "restored": v["name"], "restored_id": v["id"], "made": v["made"], "complete": v["complete"],
+            "queued": len(new), "dropped": len(run), "kept": str(kept), "kept_id": f"restore_r{m}"}
+
+
+def restore_summary(a, m) -> str:
+    rec = pr._read_json(a.outputs("versions", f"restore_r{m}.json"), {}) or {}
+    return "\n".join(["#### 今回の直し（前の版に戻した）",
+                      f"- 戻した版: {rec.get('name', '?')}（{rec.get('made', '')}）",
+                      "- 戻す前の版も残してある（もう一度戻せる）",
+                      "- 返答の 1 では、拡散の流れの要約の代わりに、どの版に戻したかを1文で伝える"])
 
 
 # --- 構成案（2026-10-03〜） ---
@@ -1889,7 +2622,12 @@ def write_prompt(a, t, base, st):
         materials += "\n\n" + recut_write_note(a, n_rc, ch)
         if (recut_prev_dir(a, n_rc) / "chapters" / f"{ch}.md").exists():
             cat.append(pr._catalog_line(f"prev:{ch}", "前の版（界隈を切り直す前）のこの章"))
-    if t["params"].get("rewrite"):   # 界隈の掘り下げの書き直し（前の原稿を生かす）
+    if t["params"].get("redo") and not t["params"].get("rewrite"):   # AI の段のやり直し（前の版の章を活かせるように）
+        note = redo_write_note(a, ch)
+        if note:
+            materials += "\n\n" + note
+            cat.append(pr._catalog_line(f"prev:{ch}", "やり直す前の版のこの章"))
+    if t["params"].get("rewrite") and t["params"].get("community"):   # 界隈の掘り下げの書き直し（前の原稿を生かす）
         k = t["params"].get("community")
         kb = f"この章は書き終えてある。文体・言い回しは前の原稿に合わせる。用語集（`kb:glossary`）{style[2]}は、必要なら read で読む。"
         spec = (f"**書き直し（界隈 `{k}` の掘り下げ）**: 前の原稿を read の `chapter:{ch}` で読み、次の点を直した**章の全文**を出す: "
@@ -1900,6 +2638,15 @@ def write_prompt(a, t, base, st):
         cat = [pr._catalog_line(f"chapter:{ch}", "この章の前の原稿"),
                pr._catalog_line("synthesis", "界隈ごとのコメント分析（掘り下げた界隈は書き直したもの）")] + \
             [x for x in cat if "synthesis" not in x]
+    elif t["params"].get("rewrite"):   # 利用者の直し（revise）で、章をまるごと書き直す（2026-10-12〜。複数の章・全章の直し）
+        kb = f"この章は書き終えてある。文体・言い回しは前の原稿に合わせる。用語集（`kb:glossary`）{style[2]}は、必要なら read で読む。"
+        spec = (f"**書き直し（利用者の直しの頼み）**: 前の原稿を read の `chapter:{ch}` で読み、次の点を直した**章の全文**を出す: "
+                f"{t['params'].get('why') or '利用者の頼みに合わせる'}\n"
+                f"利用者の頼み: {t['params'].get('instruction', '')}\n"
+                "頼みに関わらない部分は、前の原稿をなるべくそのまま残す（構成・引用・数字）。利用者の考察は、利用者の言葉を生かして本文に入れてよい"
+                "（データで言えないことは「〜と見ています」の形で）。\n\n"
+                "章の書き方の決まり（最初に書いたときと同じ）: " + spec)
+        cat = [pr._catalog_line(f"chapter:{ch}", "この章の前の原稿")] + cat
     title = CHAPTER_TITLES.get(ch) or f"拡大経路 {phmap[ch[5:]]['name']}"
     text = pr._fill(tpl("write.md"), {**base, "chapter_title": title, "i": t["params"]["i"], "n": t["params"]["n"],
                                       "kb_block": kb, "chapter_spec": spec, "materials": materials, "heading": heading,
@@ -2012,6 +2759,11 @@ def _safe_copy_materials(a) -> None:
 def done_materials(a) -> dict:
     ver = pr._read_json(a.outputs("verify.json"), {}) or {}
     links = []
+    if REPORTS_DIR:   # 前の版は上書きせず「前の版」へ移してから置く（2026-10-12）
+        try:
+            archive_previous(a)
+        except Exception as e:   # noqa: BLE001  移せなくても完了の知らせは出す
+            a.log(event="report_prev_error", error=f"{type(e).__name__}: {e}")
     _safe_copy_materials(a)
     for name in ("NOTE_BODY.md", "REPORT.md", "EDITOR_NOTES.md", "data.zip"):
         if not a.outputs(name).exists():
@@ -2037,6 +2789,8 @@ def done_materials(a) -> dict:
     note = "\n".join(notes)
     if REPORTS_DIR and links:   # 先頭にフォルダ（2026-10-03 ユーザー「最終の返答に、成果物フォルダや成果物へのリンクを含んで欲しい」）
         links = folder_lines(a) + links + [f"- 週ごとの投稿数と再生（{WEEKLY_CSV}）: 同じフォルダ（Excel で開けます）"]
+        if (report_folder(a) / PREV_FOLDER).exists():
+            links.append(f"- 前の版: 同じフォルダの「{PREV_FOLDER}」に、版ごとに残してあります")
     nb = a.outputs("NOTE_BODY.md")
     left = sorted({m.group(0) for m in PLACEHOLDER_RE.finditer(QUOTED_RE.sub("", nb.read_text(encoding="utf-8")))}) if nb.exists() else []
     if left:   # 0.6.2 より前に書いた章が残っている（前の形の分析の直し・掘り下げ）
@@ -2376,7 +3130,7 @@ def _accept(a, t: dict, raw: str, st: dict) -> list:
         if errs:
             return errs
         # 掘り下げで書き直す前の版（note 用の章・REPORT.md・NOTE_BODY.md も）を outputs/history/deepen_r<回>/ に残す（完了の知らせで「前の版は残してある」と伝える）
-        keep_version(a, "deepen", t["params"]["round"])
+        keep_version(a, "deepen", t["params"]["round"], st=copy.deepcopy(st))
         keep_history(a, a.outputs("synthesis", f"{k}.md"), f"r{t['params']['round']}")
         pr._write_text(a.outputs("synthesis", f"{k}.md"), md + "\n")
         return []
@@ -2412,7 +3166,9 @@ def _accept(a, t: dict, raw: str, st: dict) -> list:
             return errs
         idx = {x.get("file"): x for x in pr._read_json(KB_DIR / "INDEX.json", []) or []}
         pr._write_json(a.outputs("references", "selected.json"), {"references": refs, "at": pr._now()})
-        dig = [x for x in st["tasks"] if x["type"] == "ref_digest"]
+        # この仕事のあとの、まだ済んでいない章立ての抜き出し（やり直しで積み直したとき、前の版の済んだ仕事に書き込まない。2026-10-12）
+        i_t = st["tasks"].index(t) if t in st["tasks"] else -1
+        dig = [x for x in st["tasks"][i_t + 1:] if x["type"] == "ref_digest" and x["status"] != "done"]
         for x, r, f in zip(dig, refs, files):
             title = (idx.get(f) or {}).get("name") or ok[f].get("title") or f
             x["params"].update({"file": f, "title": title, "date": ok[f].get("date", ""), "why": r.get("why", "")})
@@ -2475,7 +3231,8 @@ def _accept(a, t: dict, raw: str, st: dict) -> list:
         if errs:
             return errs
         if t["params"].get("rewrite"):
-            keep_history(a, a.outputs("chapters", f"{ch}.md"), f"deepen-r{t['params'].get('round')}")
+            tag = (f"deepen-r{t['params'].get('round')}" if t["params"].get("community") else f"revise-r{t['params'].get('revise')}")
+            keep_history(a, a.outputs("chapters", f"{ch}.md"), tag)
         pr._write_text(a.outputs("chapters", f"{ch}.md"), pr._strip_fence(raw) + "\n")
         return []
 
@@ -2502,40 +3259,99 @@ def _accept(a, t: dict, raw: str, st: dict) -> list:
         return []
 
     if typ == "revise":
-        obj, err = pr._parse_json(raw)
-        if err:
-            return [err]
-        if not isinstance(obj, dict):
-            return ["{\"chapter\": \"<章の id>\", \"markdown\": \"直した章の全文\", \"note_to_user\": \"...\"} のオブジェクト1つにしてください"
-                    "（配列にしない。複数の章に当たる指示なら、いちばん当たる章を1つ）"]
-        ch = obj.get("chapter")
-        if ch not in chapter_order(a, st):
-            return [f"chapter は章の一覧の id から: {chapter_order(a, st)}"]
-        if not isinstance(obj.get("markdown"), str):
-            return ["markdown は直した章の全文（Markdown の文字列）にしてください"]
-        ph = phases(a)
+        return accept_revise(a, t, raw, st)
+
+    return [f"この仕事（{typ}）には提出は要りません"]
+
+
+REVISE_FORM = ('{"chapters": [{"chapter": "<章の id>", "markdown": "<直した章の全文>"}], '
+               '"rewrite": [{"chapter": "<章の id>", "why": "<その章で何をどう直すか>"}], "note_to_user": "..."}')
+
+
+def accept_revise(a, t, raw, st) -> list:
+    """完成後の直し（2026-10-12〜 複数の章・全章も）。その場で直した章（chapters。前の形の {"chapter", "markdown"} も受ける）は差し替え、
+    まるごと書き直す章（rewrite）は章ごとの書き直しの仕事を足す。直した章ごとに note 用の仕上げを足す。直す前の版は history/revise_r<回>/ に残す"""
+    obj, err = pr._parse_json(raw)
+    if err:
+        return [err]
+    if not isinstance(obj, dict):
+        return [f"{REVISE_FORM} のオブジェクト1つにしてください（配列にしない）"]
+    allc = chapter_order(a, st)
+    direct = []
+    if "chapter" in obj or "markdown" in obj:   # 前の形（1章だけ）
+        direct.append({"chapter": obj.get("chapter"), "markdown": obj.get("markdown")})
+    for key in ("chapters", "rewrite"):
+        v = obj.get(key)
+        if v is not None and (not isinstance(v, list) or not all(isinstance(x, dict) for x in v)):
+            return [f"{key} は配列にしてください（{REVISE_FORM}）"]
+    direct += obj.get("chapters") or []
+    rw = [{"chapter": x.get("chapter"), "why": str(x.get("why") or "").strip()} for x in obj.get("rewrite") or []]
+    if not direct and not rw:
+        return ["直した章がありません。chapters（その場で直した章の全文）か rewrite（まるごと書き直す章）に1章以上入れてください"]
+    ids = [x.get("chapter") for x in direct] + [x["chapter"] for x in rw]
+    errs = []
+    bad = [i for i in ids if i not in allc]
+    if bad:
+        errs.append(f"chapter は章の一覧の id から: {allc}（受け取った: {bad[:5]}）")
+    if len(set(map(str, ids))) != len(ids):
+        errs.append("同じ章が2回あります（1つの章は chapters か rewrite のどちらかに1回）")
+    many = len(ids) > 1
+    ph = phases(a)
+    for x in direct:
+        ch = x.get("chapter")
+        if ch not in allc:
+            continue
+        if not isinstance(x.get("markdown"), str):
+            errs.append((f"`{ch}` の " if many else "") + "markdown は直した章の全文（Markdown の文字列）にしてください")
+            continue
         heading = "## 1. バズの拡大経路" if ch == f"path_{ph[0]['id']}" else heading_of(a, ch)
-        errs = check_chapter(a, obj.get("markdown") or "", heading)
-        if errs:
-            return errs
+        errs += [(f"`{ch}`: " if many else "") + e for e in check_chapter(a, x["markdown"], heading)]
+    if [x for x in rw if not x["why"]]:
+        errs.append("rewrite の why（その章で何をどう直すか）を入れてください")
+    if errs:
+        return errs[:20]
+    changed = sorted(set(ids), key=allc.index)
+    r = _next_round(a, "revise")
+    keep_version(a, "revise", r, st=copy.deepcopy(st),
+                 what="直し（" + "・".join(chapter_name(c_) for c_ in changed) + "）" + _ask_line(t["params"].get("instruction")))
+    for x in direct:
+        ch = x["chapter"]
         old = a.outputs("chapters", f"{ch}.md")
         if old.exists():
             hist = a.outputs("chapters", "history", f"{ch}_{datetime.datetime.now():%Y%m%d-%H%M%S}.md")
             hist.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(old, hist)
-        pr._write_text(old, pr._strip_fence(obj["markdown"]) + "\n")
-        pr._write_json(a.outputs("revisions", f"{t['n']:03d}.json"),
-                       {"instruction": t["params"]["instruction"], "chapter": ch, "note": obj.get("note_to_user"), "at": pr._now()})
-        # 続く仕上げの仕事にこの章を渡す
-        i = st["tasks"].index(t)
-        for nt in st["tasks"][i + 1:]:
-            if nt["type"] == "finish" and nt["params"].get("chapter") is None:
-                nt["params"]["chapter"] = ch
-                nt["title"] = f"note 用に仕上げ直す（{ch}）"
-                break
-        return []
+        pr._write_text(old, pr._strip_fence(x["markdown"]) + "\n")
+    pr._write_json(a.outputs("revisions", f"{t['n']:03d}.json"),
+                   {"instruction": t["params"]["instruction"], "chapter": changed[0], "chapters": changed,
+                    "rewrite": rw, "note": obj.get("note_to_user"), "at": pr._now(), "round": r})
+    anchor = t
+    if rw:   # まるごと書き直す章は、章ごとの書き直しの仕事に分ける（1回の出力に全章を詰めない）
+        ws = _rewrite_tasks(a, st, t, rw, "直しの書き直し", {"revise": r, "instruction": t["params"].get("instruction", "")})
+        insert_after(st, t, ws)
+        anchor = ws[-1]
+    _queue_finish(st, anchor, changed, title="intro" in changed or len(changed) >= 3)
+    return []
 
-    return [f"この仕事（{typ}）には提出は要りません"]
+
+def _queue_finish(st, anchor, chs, title=False) -> None:
+    """直した章ごとに note 用の仕上げを積む。あとに「仕上げ直す（章は未定）」の仕事（revise の道具が足す）があればそれを使い、足りない分を足す"""
+    i = st["tasks"].index(anchor)
+    holder = next((x for x in st["tasks"][i + 1:] if x["type"] == "finish" and x["params"].get("chapter") is None
+                   and x["status"] != "done"), None)
+    order = sorted(chs, key=lambda c_: (c_ != "intro", chs.index(c_)))   # 仕上げは冒頭から（レポートの順）
+    fins = []
+    for k, ch in enumerate(order, 1):
+        title_ = f"note 用に仕上げ直す（{ch}）" if len(order) == 1 else f"note 用に仕上げ直す（{k}/{len(order)}: {chapter_name(ch)}）"
+        if k == 1 and holder is not None:
+            holder["params"].update({"chapter": ch, "i": 1, "n": len(order)})
+            holder["title"] = title_
+            continue
+        fins.append(_task(st, "finish", "ai", title_, {"chapter": ch, "i": k, "n": len(order)}))
+    if title:
+        fins.append(_task(st, "finish_title", "ai", "題名と確認メモ（直した章に合わせて）"))
+    if fins:
+        insert_after(st, holder or anchor, fins)
 
 
 def keep_history(a, p: Path, tag: str) -> None:
@@ -2551,13 +3367,15 @@ def _write_order(a) -> list:
     return [f"path_{p['id']}" for p in phases(a)] + ["branch", "music", "result", "intro"]
 
 
-def _rewrite_tasks(a, st, t, items: list, label: str) -> list:
+def _rewrite_tasks(a, st, t, items: list, label: str, extra: dict | None = None) -> list:
+    """章をまるごと書き直す仕事（前の原稿を生かす）。掘り下げ（界隈・回・頼み）と、利用者の直し（extra に {"revise": 回, "instruction"}。
+    2026-10-12〜 複数の章・全章の直し）で使う"""
     pm = t["params"]
     order = _write_order(a)
     items = sorted(items, key=lambda x: order.index(x["chapter"]))
-    return [_task(st, "write", "ai", f"{label}（{i}/{len(items)}: {CHAPTER_TITLES.get(x['chapter']) or '拡大経路 ' + x['chapter'][5:]}）",
-                  {"chapter": x["chapter"], "i": i, "n": len(items), "first": False, "rewrite": True, "why": x.get("why", ""),
-                   "community": pm["community"], "round": pm["round"], "instruction": pm["instruction"]})
+    base = extra if extra is not None else {"community": pm["community"], "round": pm["round"], "instruction": pm["instruction"]}
+    return [_task(st, "write", "ai", f"{label}（{i}/{len(items)}: {chapter_name(x['chapter'])}）",
+                  {"chapter": x["chapter"], "i": i, "n": len(items), "first": False, "rewrite": True, "why": x.get("why", ""), **base})
             for i, x in enumerate(items, 1)]
 
 
@@ -2708,8 +3526,9 @@ def accept_phases(a, obj) -> list:
     if not isinstance(obj, dict) or not isinstance(obj.get("phases"), list):
         return ["{\"phases\": [...], \"overlooked\": [...], \"pathway_md\": \"...\"} の形にしてください"]
     ph = obj["phases"]
-    if not 2 <= len(ph) <= 6:
-        errs.append(f"段階は3〜5個（2〜6まで受け付ける）。受け取った: {len(ph)}個")
+    # 目安は3〜5個（指示書のとおり）。利用者が数を頼んだとき（「段階を7つに分けて」）に差し戻さないよう、10まで受ける（2026-10-12。前は6まで）
+    if not 2 <= len(ph) <= 10:
+        errs.append(f"段階は3〜5個（2〜10まで受け付ける）。受け取った: {len(ph)}個")
     recs = records(a)
     labs = labels(a)
     dates = sorted(r["date"] for r in recs.values())
@@ -2894,38 +3713,67 @@ def service_plan(a, t: dict, st: dict) -> dict:
                     "cells_without_comments": [{"community": cl[0], "phase": cl[1], "labeled": n} for cl, n in missing]})
     comms = sorted(by_c, key=lambda k: recs[by_c[k][0]]["date"])
     rc = t["params"].get("recut")    # 界隈の切り直しのあと（参考記事の章立ては界隈に依らないので、前の版のものを使い回す）
-    reuse_refs = bool(rc) and refs_ready(a)
-    new = []
-    for i, k in enumerate(comms, 1):
-        new.append(_task(st, "ccomments", "ai", f"コメント分析（界隈ごと {i}/{len(comms)}: {k}）", {"community": k, "i": i, "n": len(comms)}))
-    if not reuse_refs:
-        new.append(_task(st, "ref_select", "ai", "参考にする過去記事を選ぶ"))
-        for i in range(1, c["n_refs"] + 1):
-            new.append(_task(st, "ref_digest", "ai", f"参考記事の章立てと論理（{i}/{c['n_refs']}）", {"i": i, "n": c["n_refs"], "file": None}))
+    rd = t["params"].get("redo")     # AI の段のやり直しのあと（2026-10-12〜。切り直しと同じく、あるものは使い回す）
+    pends = _pending_list(st)   # まだこの段に来ていないときに受けた、やり直しの頼み（その段から後ろの仕事に付ける）
+    st.pop("redo_pending", None)
+    force = {p["stage"] for p in pends}
+    reuse_refs = bool(rc or rd) and refs_ready(a) and "refs" not in force
     # ウェブで調べる・時代背景の材料（2026-10-06〜）。切り直しのあとは、前の版のものを使い回す（曲の外のことは界隈に依らない）
-    reuse_research = bool(rc) and research_ready(a)
-    if not reuse_research:
-        new.append(_task(st, "research", "ai", "ウェブで調べる（曲の情報・TikTok の外の指標・要のアカウント）"))
-        new.append(_task(st, "era", "ai", "時代背景の材料（似た位置づけの曲の記事と、同じ時期の流行を読む）"))
-    new.append(_task(st, "outline", "ai", "構成案（記事全体の主張と、章ごとの主張・根拠）"))
-    chs = [f"path_{p['id']}" for p in ph] + ["branch", "music", "result", "intro"]
-    for i, ch in enumerate(chs, 1):
-        new.append(_task(st, "write", "ai", f"執筆（{i}/{len(chs)}: {CHAPTER_TITLES.get(ch) or '拡大経路 ' + ch[5:]}）",
-                         {"chapter": ch, "i": i, "n": len(chs), "first": i == 1, **({"recut": rc} if rc else {})}))
-    new.append(_task(st, "assemble", "service", "レポートの組み立て（サービス）"))
-    order = ["intro"] + [f"path_{p['id']}" for p in ph] + REPORT_ORDER_FIXED
-    for i, ch in enumerate(order, 1):
-        new.append(_task(st, "finish", "ai", f"note 用に仕上げる（{i}/{len(order)}: {CHAPTER_TITLES.get(ch) or '拡大経路 ' + ch[5:]}）",
-                         {"chapter": ch, "i": i, "n": len(order)}))
-    new.append(_task(st, "finish_title", "ai", "題名と確認メモ"))
-    new.append(_task(st, "assemble", "service", "note 用原稿の組み立て（サービス）"))
-    new.append(_task(st, "verify", "service", "検算（サービス）"))
-    new.append(_task(st, "export", "service", "Excel 用のデータ（サービス）"))
-    new.append(_task(st, "done", "done", "完了（界隈の切り直し）" if rc else "完了", {"recut": rc} if rc else {}))
+    reuse_research = bool(rc or rd) and a.outputs("research.json").exists() and "research" not in force
+    reuse_era = reuse_research and a.outputs("era.md").exists() and "era" not in force
+    extra = {"redo": rd} if rd else {}
+    new = _flow_tail(a, st, comms=comms, refs=not reuse_refs, research=not reuse_research, era=not reuse_era, outline=True,
+                     extra=extra, write_extra={"recut": rc} if rc else {},
+                     done_title="完了（界隈の切り直し）" if rc else "完了（やり直し）" if rd else "完了",
+                     done_params={"recut": rc} if rc else {})
+    for p in pends:   # 古い順に当てる（重なる仕事は新しい頼み。新しい頼みの記録には前の頼みも入っている）
+        _tag_later(new, p["stage"], p.get("chapters"), p["round"])
     insert_after(st, t, new)
     return {"communities": len(comms), "comment_videos": sum(len(v) for v in by_c.values()), "refs": c["n_refs"],
             "cells_without_comments": len(missing), "same_song_excluded": len(same_song_files(a)), "reuse_refs": reuse_refs,
-            "reuse_research": reuse_research}
+            "reuse_research": reuse_research, "reuse_era": reuse_era}
+
+
+def _flow_tail(a, st, comms=(), refs=False, research=False, era=False, outline=False, write=None, finish=None,
+               title=True, export=True, tail=True, extra=None, write_extra=None, done_title="完了", done_params=None) -> list:
+    """コメント分析から完了までの仕事の列（service_plan と、やり直し redo が足す）。write・finish は章の id の列（None なら全章、[] なら無し）。
+    extra は全部の仕事の params に足すもの（やり直しの回 {"redo": n}）。tail=False なら組み立て・検算・完了を付けない"""
+    c = cfg(a)
+    ph = phases(a)
+    extra = extra or {}
+    new = []
+    for i, k in enumerate(comms, 1):
+        new.append(_task(st, "ccomments", "ai", f"コメント分析（界隈ごと {i}/{len(comms)}: {k}）", {"community": k, "i": i, "n": len(comms), **extra}))
+    if refs:
+        new.append(_task(st, "ref_select", "ai", "参考にする過去記事を選ぶ", dict(extra)))
+        for i in range(1, c["n_refs"] + 1):
+            new.append(_task(st, "ref_digest", "ai", f"参考記事の章立てと論理（{i}/{c['n_refs']}）", {"i": i, "n": c["n_refs"], "file": None, **extra}))
+    if research:
+        new.append(_task(st, "research", "ai", "ウェブで調べる（曲の情報・TikTok の外の指標・要のアカウント）", dict(extra)))
+    if era:
+        new.append(_task(st, "era", "ai", "時代背景の材料（似た位置づけの曲の記事と、同じ時期の流行を読む）", dict(extra)))
+    if outline:
+        new.append(_task(st, "outline", "ai", "構成案（記事全体の主張と、章ごとの主張・根拠）", dict(extra)))
+    chs = [ch for ch in [f"path_{p['id']}" for p in ph] + ["branch", "music", "result", "intro"] if write is None or ch in write]
+    for i, ch in enumerate(chs, 1):
+        new.append(_task(st, "write", "ai", f"執筆（{i}/{len(chs)}: {chapter_name(ch)}）",
+                         {"chapter": ch, "i": i, "n": len(chs), "first": i == 1, **(write_extra or {}), **extra}))
+    if not tail:
+        return new
+    if chs:
+        new.append(_task(st, "assemble", "service", "レポートの組み立て（サービス）", dict(extra)))
+    order = [ch for ch in ["intro"] + [f"path_{p['id']}" for p in ph] + REPORT_ORDER_FIXED if finish is None or ch in finish]
+    for i, ch in enumerate(order, 1):
+        new.append(_task(st, "finish", "ai", f"note 用に仕上げる（{i}/{len(order)}: {chapter_name(ch)}）",
+                         {"chapter": ch, "i": i, "n": len(order), **extra}))
+    if title:
+        new.append(_task(st, "finish_title", "ai", "題名と確認メモ", dict(extra)))
+    new.append(_task(st, "assemble", "service", "note 用原稿の組み立て（サービス）", dict(extra)))
+    new.append(_task(st, "verify", "service", "検算（サービス）", dict(extra)))
+    if export:
+        new.append(_task(st, "export", "service", "Excel 用のデータ（サービス）", dict(extra)))
+    new.append(_task(st, "done", "done", done_title, {**(done_params or {}), **extra}))
+    return new
 
 
 def refs_ready(a) -> bool:
@@ -3288,10 +4136,10 @@ def units_of(a, name: str, st: dict):
         return [f"（界隈 `{k}` にラベルを付けた動画 {len(ss)}本。再生の多い順。各動画の最後の行が今のラベル）\n\n"] + [
             entry(a, recs[s], sheets).rstrip() + f"\n- 今のラベル: format={labs[s].get('format')} motive={labs[s].get('motive')} "
             f"tier={labs[s].get('tier')} conf={labs[s].get('conf')}（{labs[s].get('reason')}）\n\n" for s in ss]
-    if name.startswith("prev:"):      # 界隈の切り直し: 前の版（切り直す前）の章
-        n_rc = recut_last_round(a)
-        p = recut_prev_dir(a, n_rc) / "chapters" / f"{name.split(':', 1)[1]}.md"
-        if n_rc < 1 or not p.exists():
+    if name.startswith("prev:"):      # 界隈の切り直し・やり直し（2026-10-12〜）: 前の版（いちばん新しい切り直し・やり直しの前）の章
+        d = prev_version_dir(a)
+        p = d / "chapters" / f"{re.sub(r'[^0-9A-Za-z_]', '', name.split(':', 1)[1])}.md" if d else None
+        if p is None or not p.exists():
             raise pr.RunnerError(f"{name} はありません（前の版にこの章は無い）")
         return _md_units(p)
     if name.startswith("ccomments:"):

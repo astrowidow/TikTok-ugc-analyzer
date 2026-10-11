@@ -325,7 +325,7 @@ class TestRestart(Base):
         r2 = pr.restart_analysis("u1", r["analysis_id"], music_url=U2)
         self.assertTrue(pr._options(self.base / r2["analysis_id"]).get("skip_confirm"))
         self.assertIn(pr.CONFIRM_SKIPPED, r2["text"])
-        self.assertTrue(r2["text"].startswith("「テスト」の前の取得"))
+        self.assertTrue(r2["text"].startswith("「テスト」を取り直します"))   # 0.8.0: 前の分析は消さずに残す（取り直し）
         self.assertEqual(r2["cancelled"], r["analysis_id"])
 
     def test_restart_from_search_keeps_all_notes(self):
@@ -335,9 +335,12 @@ class TestRestart(Base):
         res = pr.restart_analysis("u1", aid)
         for s in ("replies=true", "min_plays=10000", "skip_confirm=true"):
             self.assertIn(s, res["text"])
-        self.assertEqual((res["analysis_id"], res["cancelled"]), (None, aid))
-        self.assertEqual(self.meta(aid)["acquisition"]["status"], "cancelled")
-        self.assertEqual(self.fake.stopped, [aid])
+        # 0.8.0: Mac が楽曲ページを見つけられなかったときは、前の取得をやめない（新しい分析ができたときに初めて脇へ置く）
+        self.assertIsNone(res["analysis_id"])
+        self.assertNotIn("cancelled", res)
+        self.assertEqual(self.meta(aid)["acquisition"]["status"], "queued")
+        self.assertEqual(self.fake.stopped, [])
+        self.assertIn("fresh=true", res["text"])
 
     def test_restart_without_id_when_two(self):
         """analysis_id を省いた restart_analysis で、やり直せる分析が2つ以上 → どれもやめずに一覧を返し、どちらをやり直すか聞かせる
@@ -631,11 +634,14 @@ class TestStartArgs(Base):
         """skip_confirm=true で頼み直したら、その分析に確認を省く印を付ける（start_analysis の _set_options と同じ）。
         返信・再生の下限の指定は効かないと伝える（黙って捨てない）"""
         old = self.make("a20261006-0900-old0", "テスト", "done", "2026-10-06T09:00:00+09:00", complete=False)
-        r = pr.start_analysis("u1", "テスト", "だれか", skip_confirm=True, replies=True, min_plays=5000)
+        r = pr.start_analysis("u1", "テスト", "だれか", skip_confirm=True)
         self.assertEqual(r["analysis_id"], old)
         self.assertTrue(pr._options(self.base / old).get("skip_confirm"))
-        self.assertIn("（返信も取る・再生の下限の指定は、もう集め終わったこの分析には効きません）", r["text"])
         self.assertNotIn("start_analysis を呼び直す", r["text"])   # 探し方の注は付けない
+        # 0.8.0: 返信・再生の下限が違う頼みは、黙って前の分析に戻さずに取り直す（2026-10-12 ユーザー「原理上できない事はない」）
+        r = pr.start_analysis("u1", "テスト", "だれか", replies=True, min_plays=5000)
+        self.assertNotEqual(r.get("analysis_id"), old)
+        self.assertNotIn("このまま書き始めます", r["text"])
 
     def test_finished_song_starts_new(self):
         """レポートが完成済みの曲は、今どおり新しく始める（直しや掘り下げで仕事が足されていても完成済み）"""
@@ -893,8 +899,8 @@ class TestToolDescriptions(Base):
         self.tools = {t.name: t for t in asyncio.run(self.server.list_tools())}
 
     def test_tools_and_rule(self):
-        """道具は13。start_analysis の説明に名指しの決まり、cancel・restart の説明に「頼んだときだけ」（通る）"""
-        self.assertEqual(len(self.tools), 13)
+        """道具は16（0.8.0 で info・redo・archive_analysis を足した）。start_analysis の説明に名指しの決まり、cancel・restart の説明に「頼んだときだけ」（通る）"""
+        self.assertEqual(len(self.tools), 16)
         self.assertIn("名指し", self.tools["start_analysis"].description)
         for n in ("cancel_analysis", "restart_analysis"):
             self.assertIn("ときだけ使う", self.tools[n].description)

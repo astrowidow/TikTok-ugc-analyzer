@@ -9,15 +9,108 @@ Claude デスクトップが、設定ファイル（claude_link.py が書く）�
   - 取得は Windows 機の係でなく、メニューバーの取得アプリが拾う（LocalHooks）
   - 「指示書を見る・直す」「知識ベースを新しくする」の道具を足す
 """
+import datetime
 import fcntl
+import importlib
 import os
 import re
+import shutil
+import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
-from . import config, system, worker_entry
+from . import VERSION, config, system, worker_entry
+
+# 道具の処理が、仕事の途中で初めて読む部品（関数の中の import と、その先の部品）。起動のときに先に読んでおく（2026-10-12）。
+# PyInstaller で固めたアプリは、部品の多くを実行ファイルに埋め込んだ束（PYZ）から、読むときに実行ファイルを開き直して取り出す。
+# .app を置き換えると、前の版の道具の処理は新しい実行ファイルの中を前の版の位置で読み、zlib.error・SystemExit で落ちる
+# （「サービス側のエラー、呼び直して」が続く。docs/PLAN_0_8.md 3-4）。先に読んでおけば、版のずれを知らせる返事（version_check）を
+# 確実に返せて、置き換えの最中に走っていた道具の仕事も、部品が読めずに途中で落ちることが無くなる。
+# 道具の仕事の .py（proto_runner など）は DATA_DIR/code/<版>/ に写したものを読むので、置き換えでは壊れない（config.code_dir）。
+# 洗い方: proto_runner・flow_w1・kb_update・store・acquire/*・analysis/*・mcp_local の関数の中の import と、その部品の先頭の import。
+# 外したもの:
+#   - analysis/build_llm_input.py・prep_comments.py・prep_sample.py: 読むと引数を読んで動き出すスクリプト。道具は別のプロセス
+#     （sys.executable）で走らせるので、この処理には読まれない
+#   - PIL.Image.init()（画像の形式の部品を全部読む。約0.7秒）: シートの画像は PNG なので、PNG・JPEG などを読む preinit() だけにする
+#   - mcp.cli（読むと終わる。UGCCollector.spec でも外している）
+PRELOAD = (
+    # 道具の本体（proto_runner・mcp_proto は build() でも読む）
+    "proto_runner", "mcp_proto", "flow_w1", "kb_update", "prompt_store", "user_settings", "store", "tiktok_lock", "log_setup", "analysis_info",
+    "acquire.pipeline", "acquire.launch", "acquire.worker", "acquire.deepen", "acquire.recut", "acquire.spatest",
+    "acquire.notify",
+    "scraper",                     # pandas・requests・selenium（楽曲ページを開く・音源を探す）
+    "pool", "attr_cluster", "enrich",   # acquire.pipeline・acquire.recut が関数の中で読む（numpy）
+    "selenium.webdriver", "selenium.webdriver.common.by", "selenium.webdriver.common.keys",
+    "selenium.webdriver.chrome.options", "selenium.webdriver.chrome.service", "selenium.webdriver.chrome.webdriver",
+    "requests", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont",
+    # 標準の部品で、関数の中で読むもの・ふつうの関数が裏で読むもの
+    "difflib", "unicodedata", "traceback", "secrets", "io", "zipfile", "shutil", "urllib.parse", "argparse",
+    "importlib.util", "ctypes", "csv", "statistics", "sqlite3", "smtplib", "email.message", "html", "uuid", "tempfile",
+    "plistlib",
+    "_strptime",                   # datetime.strptime が初めて呼ばれたときに読む
+    "encodings.idna",              # ネットにつなぐとき（socket.getaddrinfo）に読む
+    "encodings.utf_8_sig", "encodings.ascii", "encodings.latin_1",
+    # 道具の返事の組み立て（MCP の SDK）と、その下の非同期の部品
+    "mcp.server.mcpserver", "mcp.server.mcpserver.exceptions", "mcp.types", "anyio._backends._asyncio",
+    "_suggestions",                # 例外の文の「もしかして」（NameError などを記録に書くときに読む）
+    # このアプリの部品で、関数の中で読むもの（worker_entry.login_waiting → jobs）
+    "collector_app.jobs",
+)
+
+
+def preload(log=None) -> dict:
+    """PRELOAD の部品を先に読む。読めなかった部品は記録だけして続ける（その部品を使う道具だけが、使うときに理由を返す）"""
+    t0 = time.time()
+    failed = []
+    for name in PRELOAD:
+        try:
+            importlib.import_module(name)
+        except BaseException as e:   # noqa: BLE001 部品の読み込みの SystemExit でも、道具の処理は止めない
+            failed.append(f"{name}（{type(e).__name__}）")
+    try:
+        import PIL.Image
+        PIL.Image.preinit()   # PNG・JPEG・GIF・BMP・PPM の部品（シートの画像を書く・読む）
+    except BaseException as e:   # noqa: BLE001
+        failed.append(f"PIL.Image.preinit（{type(e).__name__}）")
+    res = {"seconds": round(time.time() - t0, 2), "modules": len(sys.modules), "failed": failed}
+    if log:
+        log.info("道具が途中で読む部品を先に読みました（%s秒・%s個%s）", res["seconds"], res["modules"],
+                 "・読めなかったもの " + "、".join(failed) if failed else "")
+    return res
+
+
+def _stat_mark(exe):
+    """実行ファイルの印（入れ替えると変わる）。無ければ None"""
+    try:
+        s = os.stat(exe)
+    except (OSError, TypeError):
+        return None
+    return (s.st_dev, s.st_ino, s.st_mtime_ns, s.st_size)
+
+
+def stale_text(old: str, new: str | None, ai: str = "Claude（ChatGPT）") -> str:
+    """版のずれを知らせる返事（道具の仕事はしない）"""
+    if new is None:
+        return (f"UGC Analyzer がアプリケーションフォルダに見つかりません（入れ替えの途中か、ゴミ箱に入れた）。"
+                f"UGC Analyzer を入れ終えたら、{ai}を一度終了（⌘Q）して開き直してください。会話と分析は消えません。")
+    ver = f"{old}→{new}" if new != old else new
+    return (f"UGC Analyzer が新しくなりました（{ver}）。この会話の道具は前の版のままなので、"
+            f"{ai}を一度終了（⌘Q）して開き直してください。会話と分析は消えません。")
+
+
+# Mac の通知についての決まった説明（info の about=app）。設定の名前は macOS 26 の日本語の表記
+# （システム設定の「通知」・アプリの一覧の「スクリプトエディタ」・スイッチの「通知を許可」。2026-10-12 に運営の Mac で確かめた）
+NOTIFICATIONS_TEXT = (
+    "UGC Analyzer は署名していないので、Mac の通知センターは使えない（ログの「Notifications are not allowed」は想定どおりで、直すことは無い）。"
+    "通知は「スクリプトエディタ」の名前で出る。届かないときは、システム設定 →「通知」→ アプリの一覧の「スクリプトエディタ」→「通知を許可」をオン"
+    "（一覧に UGC Analyzer は出ないし、出す方法も無い）")
+
+# 最近の問題に入れない、想定どおりの行
+EXPECTED_LOG = ("Notifications are not allowed", "通知センターは使えない", "通知の許可")
+_LOG_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ (WARNING|ERROR|CRITICAL)\s+(?:\[\d+\] )?(.*)$")
 
 
 class FileRLock:
@@ -51,6 +144,101 @@ class FileRLock:
 
 class LocalHooks:
     """proto_runner.LOCAL に差し込むもの（取得アプリの形）"""
+
+    def __init__(self, exe=None, ai: str = "Claude（ChatGPT）"):
+        # この処理を起こした実行ファイル（.app の Contents/MacOS/UGC Analyzer）の印と版を覚える。
+        # 凍結されていない（試験・開発）なら見ない。試験では exe を渡して確かめる
+        self.exe = Path(exe) if exe is not None else (Path(sys.executable) if config.FROZEN else None)
+        self.mark = _stat_mark(self.exe) if self.exe is not None else None
+        self.version = VERSION
+        self.ai = ai                 # 返事で開き直してもらう AI の名前（main() が呼び元から決める）
+        self._stale = None           # 一度ずれたら、この処理が終わるまでずっと同じ返事
+        self._stale_logged = False
+
+    # --- 版のずれ（2026-10-12。docs/PLAN_0_8.md 3-4） ---
+    def version_check(self) -> str | None:
+        """アプリを新しくしたのに、この道具の処理が前の版のまま動いていれば、その知らせの文（道具の仕事はしない）。
+        ずれていなければ None。mcp_proto._call が道具を呼ぶたびに、仕事の前に呼ぶ。
+        ここで使うのは os.stat・open・正規表現だけ（.app を置き換えたあとは、まだ読んでいない部品を読めないため）"""
+        if self.mark is None:
+            return None
+        if self._stale:
+            return self._stale
+        cur = _stat_mark(self.exe)
+        if cur is None:   # 入れ替えの途中・ゴミ箱に入れた。戻ってくることもあるので、覚えずに毎回見る
+            return stale_text(self.version, None, self.ai)
+        if cur == self.mark:
+            # 実行ファイルはそのままでも、新しい版のメニューのアプリが開かれていれば（「両方とも残す」でできた「UGC Analyzer 2.app」など。
+            # 新しい版は開いたときに state.json の app_version を書き、Claude・ChatGPT の設定を自分に書き直す）、この処理は前の版
+            try:
+                newer = config.load_state().get("app_version")
+            except Exception:
+                newer = None
+            if not newer or system.version_key(newer) <= system.version_key(self.version):
+                return None
+            new = str(newer)
+            app = system.bundle_of(self.exe)
+            # 開き直しても古い方の .app が起こされるとき（つなぎを書き直せなかったなど）に、輪にならないように
+            extra = (f"開き直してもこの知らせが続くときは、アプリケーションフォルダの古い「{app.stem}」（{self.version}）を"
+                     "ゴミ箱に入れてから、もう一度開き直してください。") if app else ""
+        else:
+            app = system.bundle_of(self.exe)
+            new = (system.bundle_version(app) if app else None) or "?"
+            extra = ""
+        self._stale = stale_text(self.version, new, self.ai) + extra
+        if not self._stale_logged:
+            self._stale_logged = True
+            import logging
+            logging.getLogger("collector-mcp").warning(
+                "アプリが入れ替わりました（%s→%s）。Claude（ChatGPT）を開き直すまで、道具は仕事をせずに開き直しを頼みます",
+                self.version, new)
+        return self._stale
+
+    def disk_free_bytes(self) -> int:
+        """データの置き場（分析・レポート）のボリュームの空き（バイト）。1つの分析で 144〜443MB 使う"""
+        p = config.DATA_DIR
+        while not p.exists() and p != p.parent:   # まだ作っていなければ、ある親で測る
+            p = p.parent
+        return int(shutil.disk_usage(p).free)
+
+    def app_info(self) -> dict:
+        """info 道具（about=app）の中身。どれも、調べられなければ None（落ちない）"""
+        out = {}
+
+        def put(key, fn):
+            try:
+                out[key] = fn()
+            except Exception:
+                out[key] = None
+
+        exe = self.exe
+        app = system.bundle_of(exe) if exe is not None else None
+        put("app_version_disk", lambda: system.bundle_version(app) if app else None)
+        out["tool_version"] = self.version
+        put("app_path", lambda: str(app) if app else None)
+        try:
+            stale = self.version_check()
+        except Exception:
+            stale = None
+        disk = out.get("app_version_disk")
+        out["mismatch"] = bool(stale) or bool(disk and disk != self.version)
+        out["mismatch_text"] = stale or (stale_text(self.version, disk, self.ai) if out["mismatch"] else None)
+        st = {}
+        try:
+            st = config.load_state()
+        except Exception:
+            pass
+        put("menu_app_running", system.app_running)
+        out["logged_in_at"] = st.get("logged_in_at")
+        put("login_wanted", lambda: bool(worker_entry.login_waiting() or not st.get("logged_in_at")))
+        put("chrome_port_open", lambda: _port_open(config.CHROME_PORT))
+        put("recent_problems", recent_problems)
+        out["notifications"] = NOTIFICATIONS_TEXT
+        put("duplicate_apps", _duplicate_apps)
+        put("disk_free_gb", lambda: round(self.disk_free_bytes() / 1e9, 1))
+        put("edited_prompts", _edited_prompts)
+        put("knowledge", _knowledge)
+        return out
 
     def acquisition_settings(self) -> dict:
         s = {"chrome_port": str(config.CHROME_PORT)}
@@ -246,16 +434,104 @@ def app_running() -> bool:
     return system.app_running()
 
 
-def build():
-    """道具をそろえたサーバー（試験でも使う）"""
+# --- info（about=app）の材料（2026-10-12。AI に推測で答えさせない。docs/PLAN_0_8.md 3-1） ---
+def _port_open(port: int) -> bool:
+    """取得用の Chrome（つなぐ口 config.CHROME_PORT）が開いているか"""
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _tail_lines(p: Path, limit: int = 600_000) -> list:
+    try:
+        with open(p, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - limit))
+            data = f.read()
+    except OSError:
+        return []
+    lines = data.decode("utf-8", "replace").splitlines()
+    return lines[1:] if size > limit else lines   # 途中から読んだ最初の1行は切れている
+
+
+def recent_problems(hours: float = 24, limit: int = 5, now: float | None = None) -> list:
+    """メニューのアプリ（collector.log）と AI の道具（mcp.log）の、最近の WARNING・ERROR（想定どおりの行は除く）。
+    新しい順に最大 limit 件: [{"at": 時刻, "level", "where": どこの記録か, "text": 短い文, "times": 同じ文の回数}]。
+    ERROR の後ろに続く例外の詳しい行（Traceback …）は入れない（1件目の行だけ）"""
+    now = time.time() if now is None else now
+    since = now - hours * 3600
+    seen = {}
+    for name, where in (("collector", "メニューのアプリ"), ("mcp", "AI の道具")):
+        for p in (config.LOG_DIR / f"{name}.log.1", config.LOG_DIR / f"{name}.log"):
+            for ln in _tail_lines(p):
+                m = _LOG_LINE_RE.match(ln)
+                if not m or any(k in ln for k in EXPECTED_LOG):
+                    continue
+                try:
+                    t = datetime.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
+                except ValueError:
+                    continue
+                if t < since:
+                    continue
+                text = m.group(3).strip()
+                text = text if len(text) <= 160 else text[:159] + "…"
+                key = (where, re.sub(r"\d+", "N", text))   # 数だけ違う同じ文はまとめる
+                cur = seen.get(key)
+                seen[key] = {"at": m.group(1), "t": t, "level": m.group(2), "where": where, "text": text,
+                             "times": (cur["times"] + 1) if cur else 1}
+    rows = sorted(seen.values(), key=lambda r: r["t"], reverse=True)[:limit]
+    for r in rows:
+        r.pop("t")
+    return rows
+
+
+def _duplicate_apps() -> list:
+    """ほかの UGC Analyzer の .app（「両方とも残す」でできた「UGC Analyzer 2.app」など）。1つしか無ければ空"""
+    apps = system.find_app_bundles()
+    if len(apps) < 2:
+        return []
+    return [{"path": a["path"], "version": a["version"]} for a in apps if not a["running"]]
+
+
+def _edited_prompts() -> list:
+    """利用者が直した指示書（直したあとにアプリの版で初期の指示書が変わったかも）。prompt_store.edited_prompts"""
+    import prompt_store
+    return prompt_store.edited_prompts()
+
+
+def _knowledge() -> dict:
+    """知識ベース: 記事の数・カードの数・最後に新着を見た日・取り込み待ち・アプリが運営の同梱物を届けた記録"""
+    import json as _json
+    import kb_update
+    if not kb_update.ready():
+        return {"ready": False, "summary": kb_update.summary()}
+    s = kb_update.state()
+    cards = kb_update.kb_dir() / "distilled" / "cards.jsonl"
+    try:
+        shipped = _json.loads((kb_update.kb_dir() / config.SHIPPED_MARK).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        shipped = None
+    return {"ready": True, "articles": len(kb_update.index()),
+            "cards": sum(1 for x in cards.read_text(encoding="utf-8").splitlines() if x.strip()) if cards.exists() else 0,
+            "last_check": s.get("last_check"), "pending": len(s["pending"]) + len(s["merge_pending"]),
+            "ingested_here": len(s.get("ingested") or []), "summary": kb_update.summary(),
+            "shipped": shipped}
+
+
+def build(hooks: "LocalHooks | None" = None):
+    """道具をそろえたサーバー（試験でも使う）。serverInfo の版は、この処理の版（2026-10-12。前は "app-1" のままだった）"""
     import mcp_proto
     import proto_runner
-    proto_runner.LOCAL = LocalHooks()
+    proto_runner.LOCAL = hooks or LocalHooks()
     proto_runner._lock = FileRLock(config.LOCK_DIR / "runner.lock")   # noqa: SLF001
-    return mcp_proto._build_server(user_of=lambda ctx: config.OWNER, local=True)   # noqa: SLF001
+    return mcp_proto._build_server(user_of=lambda ctx: config.OWNER, local=True, version=VERSION)   # noqa: SLF001
 
 
 def main() -> int:
+    hooks = LocalHooks()   # 実行ファイルの印は、起動してすぐ覚える（版のずれの見分け）
     config.setup_env()
     import logging
     from logging.handlers import RotatingFileHandler
@@ -273,11 +549,15 @@ def main() -> int:
         root.addHandler(h)
         root.setLevel(logging.INFO)
     log = logging.getLogger("collector-mcp")
+    system.register_tool("mcp")   # 新しい版のメニューのアプリが「前の版の道具が動いているか」を見分ける印
     config.seed_data(log)
-    log.info("=== AI の道具を開きます（%s %s、データ %s、呼び元 %s）", config.APP_NAME, __import__("collector_app").VERSION,
-             config.DATA_DIR, _caller())
+    caller = _caller()
+    if caller in ("Claude", "ChatGPT"):
+        hooks.ai = caller
+    log.info("=== AI の道具を開きます（%s %s、データ %s、呼び元 %s）", config.APP_NAME, VERSION, config.DATA_DIR, caller)
     try:
-        server = build()
+        server = build(hooks)
+        preload(log)
         server.run("stdio")
     except Exception:
         log.exception("AI の道具が止まりました")

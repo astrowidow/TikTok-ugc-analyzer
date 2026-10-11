@@ -238,10 +238,10 @@ class TestFlow(unittest.TestCase):
         self.assertIn("切り直した界隈のコメントの取り足しの開始待ち", w2["text"])
         self.assertNotIn("その間 AI は待てない", w2["text"])
         self.assertEqual(pr.status("u1", AID)["analyses"][0]["progress"], "界隈の切り直しの取り足し")
-        with self.assertRaises(pr.RunnerError):                         # 途中で掘り下げ・切り直しは受けない
-            pr.deepen("u1", AID, "student", "浅い")
-        with self.assertRaises(pr.RunnerError):
-            pr.recut("u1", AID, "もう一度")
+        # 0.8.0: 途中の掘り下げ・切り直しは断らずに積む（今の作業が終わってから始める。docs/PLAN_0_8.md 2-3）
+        self.assertEqual(pr.deepen("u1", AID, "student", "浅い").get("queued"), "deepen")
+        self.assertEqual(pr.recut("u1", AID, "もう一度").get("queued"), "recut")
+        (self.d / "state" / "pending.json").unlink()   # この試験の続きは、積んだ頼みが無い前提
         # 係が取ったことにする（取り方・合わせ方は掘り下げと同じ。印は切り直し）
         job = m["deepen"]
         write_jsonl(self.d / "raw" / "deepen" / f"r{job['round']}.jsonl", [row(5, 20, cap=20), row(3, 15, cap=20)])
@@ -291,9 +291,9 @@ class TestFlow(unittest.TestCase):
         st = self.state()
         st["tasks"].append(flow_w1._task(st, "write", "ai", "執筆", {"chapter": "intro"}))
         (self.d / "state" / "tasks.json").write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
-        with self.assertRaises(pr.RunnerError) as e:                     # レポートがまだできていない
-            pr.recut("u1", AID, "分けて")
-        self.assertIn("完成してから", str(e.exception))
+        r = pr.recut("u1", AID, "分けて")                               # レポートがまだできていない: 積む（0.8.0）
+        self.assertEqual(r.get("queued"), "recut")
+        self.assertRegex(r["text"], "書(いている|き直している)途中")
         with self.assertRaises(pr.RunnerError):
             pr.recut("u1", AID, "  ")
 

@@ -16,6 +16,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -58,6 +59,8 @@ def new_analysis(owner: str, song: str, artist: str = "", music_url: str = "", s
         "music_url": music_url or None,
         "music_urls": [u for u in (music_urls or [music_url]) if u],
         "download_key": secrets.token_urlsafe(24),
+        # 作った版（2026-10-12: 前の版で集めた分析に新しい版の取り方が効かないことを、道具（info）で答えられるように）
+        "app_version": pipeline.app_version(),
         "acquisition": {"status": "queued", "queued_at": pipeline.now(), "steps": {}},
         "layout": {"raw": "①原本", "fetch_log": "②取得の記録", "derived": "③計算物", "outputs": "④成果物",
                    "eval": "⑤評価", "state": "サービスの台帳（仕事の状態）"},
@@ -68,11 +71,29 @@ def new_analysis(owner: str, song: str, artist: str = "", music_url: str = "", s
     return aid
 
 
-def _same_song(m: dict, song: str, music_urls) -> bool:
-    """同じ曲の分析か: 楽曲ページの URL のどれかが同じか、曲名が同じ（前後の空白・大文字小文字は見ない）"""
+def _artist_key(s) -> str:
+    return re.sub(r"[\s　・/／!！?？()（）【】\[\]「」『』.,、。'’\-]", "", str(s or "")).lower()
+
+
+def _same_artist(a, b) -> bool:
+    """アーティスト名が食い違っていないか（どちらかが空なら食い違いとみなさない。片方がもう片方を含めばよい）"""
+    ka, kb = _artist_key(a), _artist_key(b)
+    return not ka or not kb or ka in kb or kb in ka
+
+
+def _same_song(m: dict, song: str, music_urls, artist: str = "") -> bool:
+    """同じ曲の分析か: 楽曲ページの URL のどれかが同じか、曲名が同じ（前後の空白・大文字小文字は見ない）で、アーティスト名が食い違わない
+    （2026-10-12: 曲名だけで比べていたので、アーティスト違いの同名曲が前の分析に吸われた。docs/PLAN_0_8.md 第6章）"""
     have = [m.get("music_url")] + list(m.get("music_urls") or [])
-    return any(u and u in have for u in music_urls or []) or \
-        bool(song and str((m.get("song") or {}).get("title") or "").strip().lower() == song.strip().lower())
+    if any(u and u in have for u in music_urls or []):
+        return True
+    return bool(song and str((m.get("song") or {}).get("title") or "").strip().lower() == song.strip().lower()
+                and _same_artist((m.get("song") or {}).get("artist"), artist))
+
+
+def set_aside(m: dict) -> bool:
+    """取り直した（superseded_by）・しまった（archived_at）分析か。同じ曲の引き当て・「分析して」の再開・曲名なしの引き当ての対象にしない"""
+    return bool(m.get("superseded_by") or m.get("archived_at"))
 
 
 def _mine(owner: str):
@@ -85,19 +106,21 @@ def _mine(owner: str):
             yield d, m
 
 
-def find_active(owner: str, song: str, music_url: str = ""):
+def find_active(owner: str, song: str, music_url: str = "", artist: str = ""):
     """同じ利用者の、同じ曲の取得中・待ちの分析（AI が二重に頼んだときに2つ作らない）"""
     for d, m in _mine(owner):
-        if (m.get("acquisition") or {}).get("status") in ("queued", "running") and _same_song(m, song, [music_url]):
+        if (m.get("acquisition") or {}).get("status") in ("queued", "running") and not set_aside(m) \
+                and _same_song(m, song, [music_url], artist):
             return d.name
     return None
 
 
-def find_acquired(owner: str, song: str, music_urls=()) -> list:
-    """同じ利用者の、同じ曲（find_active と同じ当て方）の、取得が済んだ分析の ID（新しい順）。
+def find_acquired(owner: str, song: str, music_urls=(), artist: str = "") -> list:
+    """同じ利用者の、同じ曲（find_active と同じ当て方）の、取得が済んだ分析の ID（新しい順）。取り直した・しまった分析は見ない。
     レポートがまだかどうかは見ない（proto_runner が仕事の状態で見分ける）"""
     hits = [(m.get("created_at") or "", d.name) for d, m in _mine(owner)
-            if (m.get("acquisition") or {}).get("status") == "done" and _same_song(m, song, list(music_urls or []))]
+            if (m.get("acquisition") or {}).get("status") == "done" and not set_aside(m)
+            and _same_song(m, song, list(music_urls or []), artist)]
     return [aid for _, aid in sorted(hits, reverse=True)]
 
 

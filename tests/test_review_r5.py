@@ -297,9 +297,9 @@ class TestRoundsAndWaits(Base):
         td.write_jsonl(self.d / "raw" / "comments.jsonl", rows + [td.row(7, 30, has_more=0), td.row(6, 100, cap=120, has_more=0)])
         deepen.prep(self.d)
         pr.deepen("u1", AID, "student", "浅い")
-        with self.assertRaises(pr.RunnerError) as e:
-            pr.recut("u1", AID, "分けて")
-        self.assertIn("掘り下げの途中", str(e.exception))
+        r = pr.recut("u1", AID, "分けて")   # 0.8.0: 断らずに積む
+        self.assertEqual(r.get("queued"), "recut")
+        self.assertIn("掘り下げの途中", r["text"])
 
     def test_match_community_does_not_pick_contrast_mention(self):
         """呼び名での当て方は、定義の全文に呼び名が含まれる界隈が1つなら、それを選ぶ。切り直しの指示書は「分けた界隈どうしの境目を
@@ -359,9 +359,9 @@ class TestRecutR5(Base):
         for name, call in (("deepen", lambda: pr.deepen("u1", AID, "student", "浅い")),
                            ("recut", lambda: pr.recut("u1", AID, "もう一度"))):
             with self.subTest(name):
-                with self.assertRaises(pr.RunnerError) as e:
-                    call()
-                self.assertRegex(str(e.exception), "切り直し|続けて")
+                r = call()   # 0.8.0: 断らずに積み、切り直しの途中だと伝える
+                self.assertEqual(r.get("queued"), name)
+                self.assertRegex(r["text"], "切り直し")
 
     def test_fetched_note_when_must_read_video_is_unreachable(self):
         """必ず読みたい動画が「動画が無い・グリッドに無い」で取りに行けず、取り足しが0本のとき、

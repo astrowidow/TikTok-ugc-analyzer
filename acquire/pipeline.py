@@ -111,6 +111,18 @@ class StepError(Exception):
     """工程を失敗として止める（理由は利用者向けの短い日本語）"""
 
 
+def app_version():
+    """いま動いている UGC Analyzer の版（アプリの中なら collector_app.VERSION。本線・試験では None）"""
+    v = os.environ.get("UGC_APP_VERSION")
+    if v:
+        return v
+    try:
+        from collector_app import VERSION
+        return VERSION
+    except Exception:
+        return None
+
+
 def now() -> str:
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -197,7 +209,8 @@ class Run:
                 st = (self.meta.get("acquisition") or {}).get("steps", {}).get(step) or {}
                 if st.get("status") == "done":
                     continue
-                values = {"status": "running", "started_at": st.get("started_at") or now()}
+                values = {"status": "running", "started_at": st.get("started_at") or now(),
+                          "app_version": app_version()}   # どの版がこの段を取ったか（info で答える。途中で版を上げると混ざる）
                 if st.get("started_at"):   # 続きから: 始め直した時刻（残りの見込みはここから測る。acquire/launch.py）
                     values["resumed_at"] = now()
                 self._mark(step, values)

@@ -12,6 +12,7 @@ AI にたのんで変える道も用意すべき。両方残すのが正解」�
 - seed(): 初期の指示書を利用者の置き場に写す。写したときの中身の印（.defaults.json）を残し、
   アプリを新しくしたとき、編集していない指示書だけを新しい初期の指示書に入れ替える（編集したものは残す）
 """
+import datetime
 import hashlib
 import json
 import os
@@ -221,6 +222,38 @@ def status(group: str = GROUP) -> list:
         out.append({"name": name, "title": title, "edited": edited, "ok": not errs, "problems": errs,
                     "path": str(p)})
     return out
+
+
+def edited_prompts(group: str = GROUP) -> list:
+    """利用者が直した指示書と、直したあとにアプリの版で初期の指示書が変わったか（2026-10-12。docs/PLAN_0_8.md 第6章）。
+    直した指示書には新しい版の指示が入らないので（seed は直したものを残す）、変わっていれば info・完了の知らせで伝える。
+    [{"name", "title", "edited_at": 最後に直した時刻, "default_changed": True / False / None（分からない）, "ok": 使えるか}]
+
+    直した時点の初期の本文の印は、.defaults.json の印をそのまま使う: seed() は直した指示書の印を書き換えず（kept_edited）、
+    reset() が初期に戻すときだけ書き直すので、直した指示書の印は「利用者が直し始めたときに置いてあった初期の本文」のまま残っている
+    （prompt_store を作った 0.2.0 からこの作り。AI が prompts の道具で直した put() も印に触らない）。
+    印が無いもの（.defaults.json が無い・壊れた）は「分からない」（None）"""
+    d = _dir(group)
+    man = _manifest(group)
+    out = []
+    for r in status(group):
+        if not r["edited"]:
+            continue
+        p = d / r["name"]
+        try:
+            at = datetime.datetime.fromtimestamp(p.stat().st_mtime).astimezone().isoformat(timespec="seconds")
+        except OSError:
+            at = None
+        base = man.get(r["name"])
+        changed = None if not base else _sha(default_text(r["name"], group)) != base
+        out.append({"name": r["name"], "title": r["title"], "edited_at": at, "default_changed": changed, "ok": r["ok"]})
+    return out
+
+
+def outdated_user_prompts(group: str = GROUP) -> list:
+    """直した指示書のうち、直したあとに初期の指示書が変わったもの（default_changed が True）と、分からないもの（None）。
+    形は edited_prompts と同じ"""
+    return [r for r in edited_prompts(group) if r["default_changed"] is not False]
 
 
 def get(name: str, group: str = GROUP) -> str:

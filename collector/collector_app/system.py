@@ -1,13 +1,17 @@
-"""Mac との付き合い: ログイン時の自動起動・スリープと復帰の知らせ・二重起動の防止・置き場所の確かめ。"""
+"""Mac との付き合い: ログイン時の自動起動・スリープと復帰の知らせ・二重起動の防止・置き場所の確かめ・
+入れた .app の版と数・AI の道具の処理（--mcp・--wait）の版。"""
+import atexit
 import fcntl
+import json
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from . import config
+from . import VERSION, config
 
 AGENT_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{config.APP_ID}.plist"
 
@@ -45,6 +49,137 @@ def is_translocated() -> bool:
 
 def in_applications() -> bool:
     return sys.executable.startswith("/Applications/") or sys.executable.startswith(str(Path.home() / "Applications"))
+
+
+# --- 入れた .app の版と数（2026-10-12。docs/PLAN_0_8.md 3-4・第6章） ---
+_PLIST_VERSION_RE = re.compile(rb"<key>\s*CFBundleShortVersionString\s*</key>\s*<string>\s*([^<\s]+)\s*</string>")
+
+
+def bundle_of(exe) -> Path | None:
+    """実行ファイル（…/X.app/Contents/MacOS/X）から .app の場所。.app の中でなければ None"""
+    try:
+        p = Path(exe)
+        app = p.parents[2]
+    except (IndexError, TypeError):
+        return None
+    return app if app.suffix == ".app" and p.parent.name == "MacOS" and p.parents[1].name == "Contents" else None
+
+
+def bundle_version(app) -> str | None:
+    """.app の版（Contents/Info.plist の CFBundleShortVersionString）。読めなければ None。
+    plistlib を使わず正規表現で読む: 入れ替えたあとの前の版の道具の処理（--mcp）からも呼ぶので、その場で部品を読み込まない
+    （PyInstaller で固めた前の版は、.app を置き換えたあと部品を読もうとすると壊れる）。PyInstaller の Info.plist は XML"""
+    try:
+        with open(Path(app) / "Contents" / "Info.plist", "rb") as f:
+            m = _PLIST_VERSION_RE.search(f.read(200_000))
+    except (OSError, TypeError):
+        return None
+    return m.group(1).decode("utf-8", "replace") if m else None
+
+
+def version_key(v) -> tuple:
+    """版を比べる鍵（"0.8.0" → (0, 8, 0)。読めない版はいちばん古い扱い）"""
+    return tuple(int(x) for x in re.findall(r"\d+", str(v or ""))) or (-1,)
+
+
+def app_folders() -> list:
+    """UGC Analyzer の .app を探す場所（/Applications と ~/Applications）。試験では UGC_COLLECTOR_APP_DIRS（: 区切り）"""
+    env = os.environ.get("UGC_COLLECTOR_APP_DIRS")
+    if env:
+        return [Path(x) for x in env.split(os.pathsep) if x]
+    return [Path("/Applications"), Path.home() / "Applications"]
+
+
+def find_app_bundles() -> list:
+    """入っている UGC Analyzer の .app（「両方とも残す」でできる「UGC Analyzer 2.app」も）。
+    [{"path": 場所, "version": 版（読めなければ None）, "running": このプロセスの .app か}] を新しい版から順に"""
+    here = bundle_of(sys.executable) if config.FROZEN else None
+    try:
+        here = here.resolve() if here else None
+    except OSError:
+        pass
+    out = []
+    for folder in app_folders():
+        try:
+            items = sorted(folder.glob(f"{config.APP_NAME}*.app"))
+        except OSError:
+            continue
+        for app in items:
+            if not (app / "Contents" / "MacOS" / config.APP_NAME).exists():
+                continue   # 名前が似ているだけのもの
+            try:
+                running = here is not None and app.resolve() == here
+            except OSError:
+                running = False
+            out.append({"path": str(app), "version": bundle_version(app), "running": running})
+    out.sort(key=lambda a: (version_key(a["version"]), a["running"]), reverse=True)
+    return out
+
+
+# --- AI の道具の処理（--mcp・--wait）の版の印（2026-10-12。docs/PLAN_0_8.md 3-4） ---
+# Claude・ChatGPT が起こした道具の処理は、Claude（ChatGPT）を開き直すまで、起こしたときの版のまま動き続ける。
+# 新しい版のメニューのアプリが「前の版の道具が動いているか」を見分けられるように、道具の処理は起動のときに自分の版を
+# locks/tools/<PID>.json に書き、終わるときに消す。0.7.5 までの道具は印を書かないので、印が無いものは前の版とみなす
+def tools_dir() -> Path:
+    return config.LOCK_DIR / "tools"
+
+
+def register_tool(kind: str) -> None:
+    """この道具の処理（kind は "mcp" か "wait"）の版の印を置く。終わるときに消す。置けなくても動きは止めない。
+    固めたアプリのときだけ（見分けるのは .app の道具だけ。ソースからの試験で本物の置き場に書かないように）"""
+    if not config.FROZEN:
+        return
+    try:
+        d = tools_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        for p in d.glob("*.json"):   # 落ちた処理が残した印を片付ける
+            try:
+                if not _alive(int(p.stem)):
+                    p.unlink(missing_ok=True)
+            except (ValueError, OSError):
+                pass
+        me = d / f"{os.getpid()}.json"
+        me.write_text(json.dumps({"pid": os.getpid(), "kind": kind, "version": VERSION, "exe": sys.executable,
+                                  "started": time.time()}, ensure_ascii=False), encoding="utf-8")
+        atexit.register(lambda: me.unlink(missing_ok=True))
+    except OSError:
+        pass
+
+
+def _tool_re():
+    """道具の処理の起動の名前（ps の command）。install.sh と同じ見分け方（「<.app の実行ファイル> --mcp」「… --wait」）。
+    「UGC Analyzer 2.app」の道具も拾う。実行ファイルの場所は入れ替えで動くことがあるので、起動したときの名前で見る"""
+    dirs = "|".join(re.escape(str(p)) for p in app_folders())
+    name = re.escape(config.APP_NAME)
+    return re.compile(rf"^(?P<exe>(?:{dirs})/{name}[^/]*\.app/Contents/MacOS/{name}) --(?P<kind>mcp|wait)(?: |$)")
+
+
+def tool_processes() -> list:
+    """動いている道具の処理: [{"pid", "kind"（mcp / wait）, "exe", "version"（印の版。印が無ければ None）}]"""
+    try:
+        out = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    pat = _tool_re()
+    procs = []
+    for ln in out.splitlines():
+        pid, _, cmd = ln.strip().partition(" ")
+        m = pat.match(cmd.strip())
+        if not m or not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        try:
+            mark = json.loads((tools_dir() / f"{pid}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            mark = {}
+        if not isinstance(mark, dict) or mark.get("exe") not in (None, m.group("exe")):
+            mark = {}   # 番号が使い回された別の処理の印
+        procs.append({"pid": int(pid), "kind": m.group("kind"), "exe": m.group("exe"), "version": mark.get("version")})
+    return procs
+
+
+def old_tool_processes() -> list:
+    """前の版（印が無い・印の版がこの版と違う）の道具の処理"""
+    return [p for p in tool_processes() if p["version"] != VERSION]
 
 
 # --- 二重起動の防止・メニューバーのアプリが動いているか ---

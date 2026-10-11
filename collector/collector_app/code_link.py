@@ -13,6 +13,7 @@ import shlex
 from pathlib import Path
 
 from . import claude_link
+from .codex_link import ASK_RULE   # mcp_proto.ASK_RULE と同じ文（分析・アプリについての質問とやり直しの頼み。2026-10-12）
 
 FOLDER = Path(os.environ.get("UGC_CODE_FOLDER") or Path.home() / "UGC Analyzer")
 SERVER = "ugc-analyzer"
@@ -28,9 +29,16 @@ UGC Analyzer が自動で作り、アプリを新しくすると書き直す。
 - このフォルダのファイルを読んだり書き換えたりしない。Bash で使ってよいのは `./ugc-wait` だけ。レポートは UGC Analyzer が Mac の「レポート」フォルダに置く
 - ウェブ検索（WebSearch）とページの取得（WebFetch）は、指示書が「ウェブで調べる」と言う仕事（曲の情報・TikTok の外の指標）や時代背景の材料づくりで使う（許可してある）
 
+## 質問とやり直しの決まり
+
+""" + ASK_RULE + """
+
 ## 待つところで止まらずに続ける（Code タブだけの使い方）
 
 道具の返事が待ちになったら（next_task の kind が wait のとき、start_analysis・deepen・restart_analysis の返事に「その間 AI は待てないため」の一文があるとき）:
+restart_analysis（TikTok から集め直す）は、集め直す間の待ちを返すので、ここの手順で待つ。
+redo（集めたデータのまま AI の作業を段からやり直す）は待ちを返さないので、ここの手順は使わず、返事を短く伝えてそのまま next_task を続ける
+（返事の見込みは一度伝えるだけで、確かめを求めない）。
 
 0. 取得をやめた分析の返事と、「./ugc-wait は走らせない」とある返事（ログイン待ち・アプリが動いていない・取得が止まった。利用者が何かするまで進まない）は、
    1〜3 をせずに、その返事のとおり利用者に伝えて止まる

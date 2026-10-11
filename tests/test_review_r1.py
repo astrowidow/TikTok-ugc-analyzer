@@ -718,7 +718,8 @@ class TestAppWatch(AppBase):
         proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
         self.addCleanup(lambda: proc.poll() is None and proc.kill())
         self.ctl.worker.proc = proc
-        self.make("a-run", {"status": "done", "pid": proc.pid})   # 係が最後に書いた状態で上書きされていた
+        # 係が最後に書いた状態で上書きされていた（道具が書いた cancelled_at は残る。0.8.0 から、done は cancelled_at があるときだけ戻す）
+        self.make("a-run", {"status": "done", "pid": proc.pid, "cancelled_at": "2026-10-06T09:00:00+09:00"})
         (self.ldir / "cancel-a-run").write_text("1", encoding="utf-8")
         self.ctl._handle_cancels()
         self.assertIsNotNone(proc.poll())

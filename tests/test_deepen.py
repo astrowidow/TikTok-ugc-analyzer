@@ -281,8 +281,9 @@ class TestFlow(unittest.TestCase):
         self.assertEqual(w["kind"], "wait")
         self.assertIn("繰り返し呼ばない", w["text"])
         self.assertIn("界隈の掘り下げの取り足し", pr.status("u1", AID)["text"] + pr.status("u1", AID)["analyses"][0]["progress"])
-        with self.assertRaises(pr.RunnerError):                         # 途中で2つ目は受けない
-            pr.deepen("u1", AID, "student", "こっちも")
+        # 0.8.0: 途中の2つ目は断らずに積む（今の掘り下げが終わってから始める）
+        self.assertEqual(pr.deepen("u1", AID, "student", "こっちも").get("queued"), "deepen")
+        (self.d / "state" / "pending.json").unlink()   # この試験の続きは、積んだ頼みが無い前提
         # 係が取ったことにする
         write_jsonl(self.d / "raw" / "deepen" / "r1.jsonl", [row(5, 20), row(0, 60, start=20, cap=120)])
         res = deepen.merge(self.d, 1, "dancer")

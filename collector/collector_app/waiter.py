@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import config, jobs
+from . import config, jobs, system   # system はここで読む（.app を置き換えたあとに読むと、前の版の待つ命令が落ちるため。2026-10-12）
 
 POLL_S = 30
 LIMIT_H = 12.0
@@ -64,7 +64,6 @@ def find(ref: str | None) -> Path | None:
 
 def _app_running() -> bool:
     """メニューバーのアプリが動いているか（AI の道具と同じ判定。残った app.pid の番号の使い回しを動いているとみなさない）"""
-    from . import system
     return system.app_running()
 
 
@@ -237,6 +236,7 @@ def main(args: list) -> int:
             n = None
         if n is not None and math.isfinite(n) and n > 0:   # 「Infinity」「nan」のような曲名の語は数とみなさない
             limit_h, args = n, args[:-1]
+    system.register_tool("wait")   # 新しい版のメニューのアプリが「前の版の待つ命令が動いているか」を見分ける印
     code, line = wait(" ".join(args) or None, limit_h)
     print(line, flush=True)
     return code

@@ -281,8 +281,11 @@ class TestOldAnalysis(Base):
         fw.service_assemble(self.a, st)
         fw.service_verify(self.a, st)
         links = fw.done_materials(self.a)["links"]
-        names = {p.name for p in folder.iterdir()}
-        self.assertEqual(names - {fw.WEEKLY_CSV}, {"レポート.md", "レポート（根拠の番号つき）.md", "確認メモ.md"})
+        names = {p.name for p in folder.iterdir() if not p.name.startswith(".")}   # 「.」で始まるのはフォルダの印
+        # 前の名前で置いた写しは、消さずに「前の版」へ移す（2026-10-12〜。前の結果は消さずに残す）
+        self.assertEqual(names - {fw.WEEKLY_CSV}, {"レポート.md", "レポート（根拠の番号つき）.md", "確認メモ.md", fw.PREV_FOLDER})
+        prev = next((folder / fw.PREV_FOLDER).iterdir())
+        self.assertEqual({p.name for p in prev.iterdir()}, {"REPORT.md", "NOTE_BODY.md", "EDITOR_NOTES.md"})
         self.assertIn("[確認メモ.md]", links)
         self.assertTrue((folder / "確認メモ.md").read_text(encoding="utf-8").startswith("メモ"))   # 前の形のメモはそのまま
 

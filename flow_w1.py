@@ -2825,8 +2825,9 @@ def done_materials(a) -> dict:
     errs = ver.get("errors") or []
     warns = ver.get("warnings") or []
     notes = []
-    if errs or warns:
-        notes.append(f"- 検算: 確かめきれなかった点が {len(errs) + len(warns)} 件ある（運営が確認する）。利用者には「数字の一部を運営が確認中」と一言だけ")
+    if errs:   # 注意（丸め方の違いなど）だけなら知らせない。どちらも確認メモの最後に載せてある（memo_verify）
+        notes.append(f"- 検算: 本文の数字・出どころのうち {len(errs)} か所が、集めたデータと合っていない可能性がある。"
+                     "利用者には「数字の一部が集めたデータと合っていない可能性があるので、確認メモの最後に場所を書きました」と一言だけ")
     res = research(a)
     if res is not None and not res.get("web_search") and not web_added_later(a):
         notes.append("- ウェブ検索: AI のウェブ検索が使えず、曲の情報と TikTok の外の数字は入っていない。3 は「TikTok の中のデータで書き切ってある」と言い換え、"
@@ -3954,7 +3955,7 @@ PLAY_RE_PRE = re.compile(r"seq\s*(\d+)(?:(?!seq\s*\d)[^。\n]){0,60}?再生(?:�
 PLAY_BOUND_RE = re.compile(r"\s*(?:回)?\s*(?:再生)?\s*(?:を|が|に)?\s*(?:(突破|超え|超|越え|以上|オーバー)|(近く|近い|弱|足らず|手前|迫))")
 # 数字のすぐあとに動画の「（seq M …）」が続くなら、その数字は M のもの（書き方「30.9万回再生（seq 28 …）」）。前の seq N の数字として照合しない
 # （2026-10-06: きゃわの事例で、正しい本文から4〜6件の誤報が出て、完了の知らせに「数字の一部は運営が確認中」と出ていた）
-FOLLOW_SEQ = re.compile(r"[^。、\n（(]{0,12}[（(]\s*seq\s*(\d+)")   # 数字と（seq M）の間は読点なし・12字まで（「〜まで伸びています（seq 39」）
+FOLLOW_SEQ = re.compile(r"[^。、\n（(）)]{0,12}[（(]\s*seq\s*(\d+)")   # 数字と（seq M）の間は読点なし・12字まで（「〜まで伸びています（seq 39」）
 PLAY_RE_POST = re.compile(r"(?<![\d,.万億])(\d[\d,]*(?:\.\d+)?)\s*(万|億)?\s*(?:回)?再生" + FOLLOW_SEQ.pattern)   # 「23万6,600回」の末尾だけは拾わない
 
 
@@ -4034,7 +4035,29 @@ def service_verify(a, st: dict) -> dict:
     style = (check_no_placeholder(note) + check_headings(a, note)) if note else []   # 書き方の気づき（数えない・知らせない）
     res = {"at": pr._now(), "seqs": len(seqs), "cids": len(cids), "errors": errors[:50], "warnings": warnings[:50], "style": style}
     pr._write_json(a.outputs("verify.json"), res)
+    memo_verify(a, errors[:50], warnings[:50])
     return {"errors": len(errors), "warnings": len(warnings), "seqs": len(seqs), "cids": len(cids)}
+
+
+VERIFY_MEMO_HEAD = "## 確かめてほしい数字（検算で、本文と集めたデータが合わなかったところ）"
+
+
+def memo_verify(a, errors: list, warnings: list) -> None:
+    """検算の結果を確認メモ（EDITOR_NOTES.md → 利用者のフォルダの 確認メモ.md）の最後に載せる。何度検算しても1つにする
+    （2026-10-12: 完了の知らせに「数字の一部は運営が確認中」と出るのに、中身はどこにも見えず、実際は誰も確かめていなかった）"""
+    p = a.outputs("EDITOR_NOTES.md")
+    if not p.exists():
+        return
+    body = p.read_text(encoding="utf-8")
+    i = body.find("\n" + VERIFY_MEMO_HEAD)
+    if i >= 0:
+        body = body[:i].rstrip() + "\n"
+    if errors or warnings:
+        lines = [f"- {e}" for e in errors] + [f"- （念のため）{w}" for w in warnings]
+        body = (body.rstrip() + "\n\n" + VERIFY_MEMO_HEAD + "\n\n"
+                + "番号（seq）は「レポート（根拠の番号つき）.md」の番号です。「（念のため）」は丸め方の違いなどで、たいていは問題ありません。\n\n"
+                + "\n".join(lines) + "\n")
+    pr._write_text(p, body)
 
 
 def service_export(a) -> dict:

@@ -499,9 +499,11 @@ class TestVerify(Base):
         res = self.verify(ok, note="## 見出し\nhttps://www.tiktok.com/@zzz/video/1\n今回集めた投稿\n")
         self.assertTrue([e for e in res["errors"] if "一覧に無い URL" in e])
         self.assertTrue([w for w in res["warnings"] if "作業の言葉" in w])
-        self.assertIn("数字の一部を運営が確認中", self.render(task("done", kind="done")))
-        self.verify(ok)
+        # 0.8.0: 「運営が確認中」とは言わない（誰も確かめていなかった）。確認メモの最後に場所を書いたと言う
+        self.assertIn("確認メモの最後に場所を書きました", self.render(task("done", kind="done")))
         self.assertNotIn("運営が確認中", self.render(task("done", kind="done")))
+        self.verify(ok)
+        self.assertNotIn("確認メモの最後に場所", self.render(task("done", kind="done")))
 
     def test_play_mismatch_rounding(self):
         """丸めた数字は丸めの幅まで一致とみなす。6% を超えるずれは拾う"""

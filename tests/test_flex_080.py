@@ -320,3 +320,28 @@ class TestReadNames(FlexBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVerifyMemo(unittest.TestCase):
+    def test_play_claim_does_not_cross_closing_paren(self):
+        """検算: 「seq 637（…2,100,000再生））や…（seq 598」を、seq 598 の再生数と読み違えない（2026-10-12 のきゃわで2件の誤報）"""
+        t = ("コストコの新商品紹介（seq 637（@tekoteko_goo、2026-09-23、2,100,000再生））や建築の勉強量の比較"
+             "（seq 598（@kenchikushi_sho、2026-09-06、2,400,000再生））など。")
+        self.assertEqual({(s, n) for s, n, *_ in flow_w1.play_claims(t, bounds=True)}, {(637, "2,100,000"), (598, "2,400,000")})
+
+    def test_memo_gets_one_verify_section(self):
+        """検算の結果は確認メモの最後に1つだけ（何度検算しても重ならない。合えば消える）"""
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            (out / "EDITOR_NOTES.md").write_text("# 確認メモ\n\n## 推測で書いたところ\n- x\n", encoding="utf-8")
+            fake = type("A", (), {"outputs": lambda self, *p: out.joinpath(*p)})()
+            flow_w1.memo_verify(fake, ["存在しない動画への言及: seq 9"], ["seq 1 の再生数"])
+            flow_w1.memo_verify(fake, ["存在しない動画への言及: seq 9"], [])
+            t = (out / "EDITOR_NOTES.md").read_text(encoding="utf-8")
+            self.assertEqual(t.count(flow_w1.VERIFY_MEMO_HEAD), 1)
+            self.assertIn("seq 9", t)
+            self.assertNotIn("seq 1 の再生数", t)
+            flow_w1.memo_verify(fake, [], [])
+            self.assertNotIn(flow_w1.VERIFY_MEMO_HEAD, (out / "EDITOR_NOTES.md").read_text(encoding="utf-8"))

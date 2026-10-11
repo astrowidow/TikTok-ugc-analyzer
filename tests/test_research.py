@@ -259,8 +259,8 @@ class TestMemoAndNames(Base):
         ver = json.loads((self.d / "outputs" / "verify.json").read_text(encoding="utf-8"))
         self.assertEqual(len(ver["style"]), 2)
         self.assertFalse([x for x in ver["errors"] + ver["warnings"] if "著者の名乗り" in x or "見出し" in x])
-        n = len(ver["errors"]) + len(ver["warnings"])
-        self.assertIn(f"{n} 件", flow_w1.done_materials(self.a)["verify_note"]) if n else None   # 知らせの件数に気づきは入らない
+        n = len(ver["errors"])   # 0.8.0: 知らせに出すのは誤りの数だけ（注意は確認メモに載せる）。気づきは入らない
+        self.assertIn(f"{n} か所", flow_w1.done_materials(self.a)["verify_note"]) if n else None
 
     def test_verify_unknown_web(self):
         self.research()

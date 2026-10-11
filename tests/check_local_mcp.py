@@ -204,14 +204,18 @@ async def main():
                 t2 = text_of(r)
                 old = json.loads((home / "analyses" / m_aid.group(1) / "analysis.json").read_text(encoding="utf-8"))
                 m2 = re.search(r"分析 ID: (a[0-9-]+[0-9a-f]+)", t2)
-                ok(not r.is_error and "前の取得" in t2 and url2 in t2 and old["acquisition"]["status"] == "cancelled"
+                # 0.8.0: 新しい分析として取り直し、前の分析は消さずに脇へ置く（取得中ならやめる・止める印・superseded_by）
+                ok(not r.is_error and "取り直します" in t2 and url2 in t2 and old["acquisition"]["status"] == "cancelled"
+                   and old.get("superseded_by") == (m2.group(1) if m2 else None)
                    and (home / "locks" / f"cancel-{m_aid.group(1)}").exists() and m2 and m2.group(1) != m_aid.group(1),
-                   "取得をやめて別の楽曲ページでやり直せる（前の分析はやめた・止める印・新しい分析）")
-                if m2:   # 最初からやり直す（URL なし）: やめて、探し方を返す
+                   "取得をやめて別の楽曲ページで取り直せる（前の分析はやめて残す・止める印・新しい分析）")
+                if m2:   # 最初から取り直す（URL なし）: Mac が楽曲ページを見つけられなければ、前の取得はやめずに探し方を返す
                     r = await c.call_tool("restart_analysis", {"analysis_id": m2.group(1)})
                     st2 = json.loads((home / "analyses" / m2.group(1) / "analysis.json").read_text(encoding="utf-8"))
-                    ok("最初にやり直す" in text_of(r) and "site:tiktok.com/music" in text_of(r)
-                       and st2["acquisition"]["status"] == "cancelled", "URL なしのやり直しは、やめて楽曲ページ探しから")
+                    t3 = text_of(r)
+                    ok(("site:tiktok.com/music" in t3 and "fresh=true" in t3 and st2["acquisition"]["status"] == "queued")
+                       or "取り直します" in t3,
+                       "URL なしの取り直しは楽曲ページ探しから（見つからなければ、前の取得はやめずに探し方を返す）")
                 for x in (m_aid.group(1), m2.group(1) if m2 else None):
                     if x:
                         shutil.rmtree(home / "analyses" / x, ignore_errors=True)

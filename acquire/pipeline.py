@@ -647,6 +647,9 @@ class Run:
                 "--comment-plan", s["comment_plan"], "--records", self.p("derived", "llm_input", "records.jsonl")]
         if int(s["pool_budget"] or 0):
             args += ["--budget", int(s["pool_budget"])]
+        artist = str((self.meta.get("song") or {}).get("artist") or "").strip()
+        if artist:   # 本人のアカウントは分析のアーティスト名で見分ける（主のページがファンの音源でもずれない）
+            args += ["--artist", artist]
         return json.loads(self._script(*args).splitlines()[-1])
 
     def comment_pages(self) -> list:

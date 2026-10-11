@@ -147,6 +147,54 @@ class TestFriendDeadEnd(FlexBase):
         self.assertEqual([c["url"] for c in pc["chosen"]], [U1, U2])
 
 
+class TestFanPageGiven(FlexBase):
+    def test_official_page_is_main_and_fan_is_marked(self):
+        """利用者が渡したページにファンの音源（作者がアーティストと違う）があっても、UGC が多い公式のページを主にし、ファンの音源に印を付ける
+        （2026-10-12 の確かめ: 쿠레아 38.6K が主になり、主の作者を本人とみなす部品があった）"""
+        old = self.old_kyawa()
+        self.fake.pages = {U1.rsplit("-", 1)[-1]: _page("きゃわぽっぴんどぅー", "iLiFE!【あいらいふ】", 31100),
+                           U2.rsplit("-", 1)[-1]: _page("きゃわぽっぴんどぅー", "iLiFE!【あいらいふ】", 17700),
+                           KUREA.rsplit("-", 1)[-1]: _page("オリジナル楽曲 - 쿠레아", "쿠레아", 38600)}
+        r = pr.restart_analysis("u1", old, add_music_urls=[KUREA])
+        m = self.meta(r["analysis_id"])
+        self.assertEqual(m["music_urls"][0], U1)
+        self.assertEqual(m["music_url"], U1)
+        self.assertEqual(m["fan_music_urls"], [KUREA])
+        pages = json.loads((self.base / r["analysis_id"] / "raw" / "music_pages.json").read_text(encoding="utf-8"))
+        self.assertEqual([p.get("kind") for p in pages], [None, None, "fan"])
+
+    def test_cancel_superseding_restores_old(self):
+        """取り直しの新しい分析を「やめて」と言われたら、前の分析を元に戻す（前のデータで続けられる）"""
+        old = self.old_kyawa()
+        r = pr.restart_analysis("u1", old, add_music_urls=[KUREA])
+        c = pr.cancel_analysis("u1", r["analysis_id"])
+        self.assertNotIn("superseded_by", self.meta(old))
+        self.assertIn("前の分析", c["text"])
+        self.assertEqual(pr.start_analysis("u1", "きゃわぽっぴんどぅー", "iLiFE!")["analysis_id"], old)
+
+
+class TestPoolArtist(unittest.TestCase):
+    def test_artist_overrides_most_used_sound_author(self):
+        """コメントを取る動画の部品: アーティスト名を渡せば、一番多く使われた音源の作者（ファン）でなく、その名前で本人を見分ける"""
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
+        import pool
+        fan = {"id": "9", "title": "オリジナル楽曲 - 쿠레아", "author": "쿠레아"}
+        enriched = {}
+        videos = []
+        for i, (uid, music) in enumerate([("ilife_official", {"id": "1", "title": "きゃわ", "author": "iLiFE!"})]
+                                         + [(f"fan{i}", fan) for i in range(5)] + [("kurea", fan)]):
+            vid = str(100 + i)
+            nick = "쿠레아" if uid == "kurea" else uid   # ファンの音源の作者のアカウント
+            enriched[vid] = {"video_id": vid, "music": music, "author": {"unique_id": uid, "nickname": nick, "verified": uid == "ilife_official",
+                                                                         "follower_count": 50000}}
+            videos.append({"video_id": vid, "date": "2026-06-01", "week": "2026-W22", "plays": 100000, "username": uid})
+        alive = [v for v in videos]
+        self.assertIn("kurea", pool.artist_accounts(alive, enriched, pool.song_info(enriched)["author"]))
+        self.assertEqual(pool.artist_accounts(alive, enriched, "iLiFE!"), {"ilife_official"})
+
+
 class TestSameSong(FlexBase):
     def test_other_artist_same_title(self):
         """同名の別の曲（アーティスト違い）は前の分析に吸われない"""
@@ -218,7 +266,7 @@ class TestArchive(FlexBase):
         old = self.old_kyawa(complete=True)
         pr.archive_analysis("u1", old)
         self.assertEqual(pr.status("u1")["analyses"], [])
-        self.assertIn("しまった・取り直した分析が 1件", pr.status("u1")["text"])
+        self.assertIn("やめた・取り直した・しまった分析が 1件", pr.status("u1")["text"])
         pr.archive_analysis("u1", "きゃわぽっぴんどぅー", restore=True)
         self.assertEqual(len(pr.status("u1")["analyses"]), 1)
 

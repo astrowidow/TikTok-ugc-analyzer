@@ -169,7 +169,7 @@ def load_records(path) -> dict:
 
 
 def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None, min_plays_weekly=None, plan="page",
-          records=None):
+          records=None, artist=None):
     """プールを決める。返り値 {video_id: {"cap": int, "reasons": [..]}} と説明。
     budget_units と cost_* は同じ単位（本数なら 1、時間なら分）。cost_key は120件の動画1本の重さ（既定は cost_std）。
     plan: "page"＝必ず入れる動画は各1ページ・週ごとの動画は0件（既定）、"full"＝120件・40件で週ごとも取る（2026-10-05 までの取り方）。
@@ -180,7 +180,10 @@ def build(videos, enriched, budget_units, seed=7, cost_std=1.0, cost_key=None, m
     floor = MIN_PLAYS_WEEKLY if min_plays_weekly is None else min_plays_weekly
     alive = [v for v in videos if (enriched.get(v["video_id"]) or {}).get("author")]
     info = song_info(enriched)
-    artists = artist_accounts(alive, enriched, info["author"])
+    # 本人のアカウントは、分かっていれば分析のアーティスト名で見分ける（2026-10-12: 一番多く使われた音源がファンの音源だと、その作者を本人とみなしていた）
+    artists = artist_accounts(alive, enriched, artist or info["author"])
+    if artist:
+        info["artist"] = artist
     ctags = campaign_tags(alive, enriched, artists, info["titles"])
 
     pool = {}
@@ -313,16 +316,17 @@ def main():
     ap.add_argument("--comment-plan", choices=COMMENT_PLANS, default="page",
                     help="page: 必ず入れる動画は各1ページ・週ごとの動画はコメントを取らない（既定）。full: 120件・40件で週ごとも取る")
     ap.add_argument("--records", default=None, help="derived/llm_input/records.jsonl（page で、属性のまとまりごとの再生上位を足す）")
+    ap.add_argument("--artist", default="", help="アーティスト名（本人のアカウントの見分けに使う。省くと一番多く使われた音源の作者）")
     a = ap.parse_args()
     videos, enriched = load(a.videos, a.enriched)
     records = load_records(a.records) if a.records else None
     if a.budget:   # 本数で直接
         pool, explain = build(videos, enriched, a.budget, seed=a.seed, min_plays_weekly=a.min_plays_weekly, plan=a.comment_plan,
-                              records=records)
+                              records=records, artist=a.artist)
     else:          # 時間（分）で
         pool, explain = build(videos, enriched, a.hours * 60, seed=a.seed, cost_std=a.min_per_video,
                               cost_key=a.min_per_key_video or a.min_per_video, min_plays_weekly=a.min_plays_weekly,
-                              plan=a.comment_plan, records=records)
+                              plan=a.comment_plan, records=records, artist=a.artist)
     write(pool, videos, a.out)
     print(json.dumps(explain, ensure_ascii=False))
 

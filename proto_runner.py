@@ -821,9 +821,9 @@ def status(user_id: str, ref: str | None = None) -> dict:
         if ref:
             targets = [resolve(user_id, ref)]
             hidden = 0
-        else:   # 取り直した・しまった分析は一覧に出さない（数だけ。2026-10-12: 同じ曲が並んで見分けられなかった）
+        else:   # やめた・取り直した・しまった分析は一覧に出さない（数だけ。2026-10-12: 同じ曲が7つ並んで見分けられなかった）
             mine = list_analyses(user_id)
-            targets = [a for a in mine if not _set_aside(a)]
+            targets = [a for a in mine if not _set_aside(a) and _acq_status(a) != "cancelled"]
             hidden = len(mine) - len(targets)
         items = []
         for a in targets:
@@ -875,14 +875,14 @@ def status(user_id: str, ref: str | None = None) -> dict:
             elif b.meta.get("archived_at"):
                 i["message"] = "（しまってある分析）" + i["message"]
         if not items:
-            return {"text": "あなたの分析はまだありません。" + (f"（しまった・取り直した分析が {hidden}件あります。info で見られます）"
+            return {"text": "あなたの分析はまだありません。" + (f"（やめた・取り直した・しまった分析が {hidden}件あります。曲名か分析 ID を指定すれば見られます）"
                                                          if hidden else ""), "analyses": []}
         text = "\n".join(f"- {i['title']}（{i['created']} に作成・分析 ID: {i['analysis_id']}）: {i['message']} 進み具合 {i['progress']}"
                          + "".join(f"\n  - {'取っている' if i['state'] != 'done' else '使った'}楽曲ページ: {_page_line(p['url'], p)}"
                                    for p in i.get("pages") or [])
                          for i in items)
         if hidden:
-            text += f"\n（ほかに、取り直した・しまった分析が {hidden}件あります。分析 ID か曲名を指定すれば見られます）"
+            text += f"\n（ほかに、やめた・取り直した・しまった分析が {hidden}件あります。曲名か分析 ID を指定すれば見られます）"
         text += "\n（AI へ: 楽曲ページ・音源・本数・版などの中身の質問には info で答える）"
         return {"text": text, "analyses": items}
 
@@ -973,8 +973,9 @@ def _pick_music_pages(song: str, artist: str, urls: list, take_all: bool = False
     rows = [r for r in rows if not r[1].get("unavailable")]
     if not rows:
         return [], gone
-    if take_all:
-        return sorted(rows, key=n, reverse=True), gone
+    if take_all:   # 主は、公式の音源（題・作者が合う）のうち UGC が一番多いもの。ファンが上げた音源は、UGC が多くても主にしない
+        # （2026-10-12: ファンの音源 38.6K が主になり、主の作者（ファン）を本人とみなす部品があった。docs/PLAN_0_8.md）
+        return sorted(rows, key=lambda r: (_music_fits(song, artist, r[1]), n(r)), reverse=True), gone
     good = [r for r in rows if _music_fits(song, artist, r[1])]
     best = max(good or rows, key=n)
     take, dropped = [best], []
@@ -1450,6 +1451,14 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
         from acquire import pipeline
         how = "受け付けのときに楽曲ページを開いて読んだ"
         rec = [{**info, "at": _now(), "url": u, "page": i, "how": how} for i, (u, info) in enumerate(pages, 1)]
+        if user_urls:   # 利用者が渡したページのうち、題か作者が曲・アーティストに合わないもの＝ファンが上げた同じ曲の音源（取得で見つけたものと同じ印）
+            fan = [r for r in rec[1:] if not _music_fits(song, artist, r)]
+            for r in fan:
+                r["kind"] = "fan"
+            if fan:
+                mm = _read_json(ANALYSES_DIR / aid / "analysis.json", {}) or {}
+                mm["fan_music_urls"] = list(dict.fromkeys(list(mm.get("fan_music_urls") or []) + [r["url"] for r in fan]))
+                _write_json(ANALYSES_DIR / aid / "analysis.json", mm)
         if any(r.get("video_count") for r in rec):
             pipeline.write_json(ANALYSES_DIR / aid / "raw" / "music_pages.json", rec)
             pipeline.write_json(ANALYSES_DIR / aid / "raw" / "music_page.json", rec[0])
@@ -2547,6 +2556,19 @@ def cancel_analysis(user_id: str, ref: str | None) -> dict:
         m["acquisition"].update({"status": "cancelled", "cancelled_at": _now(), "cancel_reason": "利用者がやめた"})
         _write_json(a.dir / "analysis.json", m)
         LOCAL.request_stop(a.id)
+        # 取り直しの途中でやめた: 取り直す前の分析を元に戻す（2026-10-12。前は脇へ置いたまま隠れていた）
+        back = []
+        for b in list_analyses(user_id):
+            if b.meta.get("superseded_by") == a.id:
+                mb = _read_json(b.dir / "analysis.json")
+                for k in ("superseded_by", "superseded_at", "superseded_reason"):
+                    mb.pop(k, None)
+                _write_json(b.dir / "analysis.json", mb)
+                back.append(b)
+    if back:
+        b = back[0]
+        return {"text": f"「{a.title}」の取り直しをやめました（UGC Analyzer が数秒で止めます）。前の分析（{str(b.meta.get('created_at') or '')[:10]} に作ったもの・"
+                        f"分析 ID: {b.id}）に戻したので、「{a.title}の分析を続けて」で前のデータのまま続けられます。", "analysis_id": b.id}
     return {"text": f"「{a.title}」の取得をやめました（UGC Analyzer が数秒で止めます）。"
                     f"もう一度「UGC Analyzer で{a.title}を分析して」と頼めば、楽曲ページ探しから最初にやり直します。", "analysis_id": a.id}
 

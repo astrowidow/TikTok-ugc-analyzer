@@ -56,6 +56,10 @@ def params() -> StdioServerParameters:
     if home:   # 写しの置き場で、アプリをそのまま起こす（メニューバーのアプリは起こさない）
         env = {"UGC_COLLECTOR_HOME": home, "UGC_COLLECTOR_NO_APP_LAUNCH": "1",
                "PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
+        extra = RUN / "EXTRA_ENV"   # 試し用の環境（JSON）。TikTok に触らない UGC_COLLECTOR_NO_INSPECT と UGC_TEST_* など（2026-10-12）
+        if extra.exists():
+            env.update({k: (v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+                        for k, v in json.loads(extra.read_text(encoding="utf-8")).items()})
         return StdioServerParameters(command=exe(), args=["--mcp"], env=env)
     return StdioServerParameters(command=exe(), args=["--mcp"])
 

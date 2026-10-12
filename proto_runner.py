@@ -3066,6 +3066,9 @@ def _as_list(v) -> list:
 
 
 PLAN_NAMES = {"intro": "冒頭", "path": "拡大経路", "branch": "分岐点", "music": "音楽", "result": "結果"}
+PLAN_PARTS = {"intro": "本楽曲に着目すべき理由・先に結論・分析方針", "path": "段階ごとの拡大経路",
+              "branch": "拡大経路のまとめ・バズの分岐点", "music": "楽曲の音楽的特徴・切り出し箇所・時代背景",
+              "result": "バズった結果・今回のヒットの核・再現性のある要素"}   # 1つの章に入っている節（外すと一緒に外れる）
 
 
 def _plan_line(items: list) -> str:
@@ -3120,7 +3123,9 @@ def restructure(user_id: str, ref: str | None, remove=None, add=None, order=None
     if plan["added"]:
         lines.append("足す章: " + "、".join(f"「{x['title']}」" for x in plan["added"]) + "。")
     if plan["removed"]:
-        lines.append("外す章: " + "、".join(PLAN_NAMES.get(x, x) for x in plan["removed"]) + "（消さずに残すので、戻せます）。")
+        lines.append("外す章: " + "、".join(PLAN_NAMES.get(x, x) + (f"（{PLAN_PARTS[x]}）" if x in PLAN_PARTS else "")
+                                           for x in plan["removed"]) + "。かっこの中の節も一緒に外れます。消さずに残すので、戻せます。"
+                     "どれかの節だけ残したいときは、その節を足す章として頼めば書きます。")
     lines.append("構成案を直して、足した章と冒頭（章立ての予告）と、話がずれる章を書き直し、全章を通して読みます。"
                  f"見込み: {est['est_text']}。前の版は残してあり、「前の版に戻して」で戻せます。")
     lines.append("（AI へ: この内容を利用者に短く伝え、確かめを求めずに、続けて next_task を呼んで進める）")

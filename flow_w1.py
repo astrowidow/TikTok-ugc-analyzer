@@ -4816,6 +4816,9 @@ PLAY_BOUND_RE = re.compile(r"\s*(?:回)?\s*(?:再生)?\s*(?:を|が|に)?\s*(?:(
 # （2026-10-06: きゃわの事例で、正しい本文から4〜6件の誤報が出て、完了の知らせに「数字の一部は運営が確認中」と出ていた）
 FOLLOW_SEQ = re.compile(r"[^。、\n（(）)]{0,12}[（(]\s*seq\s*(\d+)")   # 数字と（seq M）の間は読点なし・12字まで（「〜まで伸びています（seq 39」）
 PLAY_RE_POST = re.compile(r"(?<![\d,.万億])(\d[\d,]*(?:\.\d+)?)\s*(万|億)?\s*(?:回)?再生" + FOLLOW_SEQ.pattern)   # 「23万6,600回」の末尾だけは拾わない
+# 「（450万回再生、seq 368）」の形（数字と seq が同じかっこの中に読点で並ぶ。2026-10-12 写しの置き場のシルエット）。
+# この形の seq N から前へ読むと、閉じかっこを越えて次の動画の数字を拾っていた（「…seq 368）、10月26日の『…』（270万回再生」）
+PLAY_RE_IN = re.compile(r"(?<![\d,.万億])(\d[\d,]*(?:\.\d+)?)\s*(万|億)?\s*(?:回)?再生\s*[、,]\s*seq\s*(\d+)\s*[）)]")
 
 
 def play_bound(text: str, pos: int):
@@ -4830,6 +4833,8 @@ def play_claims(text: str, bounds: bool = False) -> list:
     bounds=True なら、5つ目に数字のあとの言い方（play_bound: 下限・目安・None）を足す"""
     out = {}
     for m in PLAY_RE.finditer(text):
+        if re.match(r"\s*[）)]", text[m.end(1):]):
+            continue   # seq N でかっこが閉じる（「（450万回再生、seq 368）」）: N の数字はかっこの中の前にある（PLAY_RE_IN で照合する）
         f = FOLLOW_SEQ.match(text, m.end())
         if f and int(f.group(1)) != int(m.group(1)):
             continue   # 数字は、あとに続く動画のもの（PLAY_RE_POST で照合する）
@@ -4839,6 +4844,8 @@ def play_claims(text: str, bounds: bool = False) -> list:
     for m in PLAY_RE_PRE.finditer(text):
         out[m.start(2)] = (int(m.group(1)), m.group(2), m.group(3), m.group(0), play_bound(text, m.end(3) if m.group(3) else m.end(2)))
     for m in PLAY_RE_POST.finditer(text):
+        out[m.start(1)] = (int(m.group(3)), m.group(1), m.group(2), m.group(0), play_bound(text, m.end(2) if m.group(2) else m.end(1)))
+    for m in PLAY_RE_IN.finditer(text):
         out[m.start(1)] = (int(m.group(3)), m.group(1), m.group(2), m.group(0), play_bound(text, m.end(2) if m.group(2) else m.end(1)))
     return [out[k] if bounds else out[k][:4] for k in sorted(out)]
 

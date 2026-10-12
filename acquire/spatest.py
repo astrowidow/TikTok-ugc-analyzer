@@ -165,6 +165,22 @@ HOOK = r"""
 })();
 """
 
+# コメント欄のスクロールする入れ物。2026-10-12 TikTok の画面が変わり、DivCommentMain が無くなって DivCommentListContainer が
+# スクロールするようになった（前は DivCommentListContainer はスクロールしない要素だった）。名前に頼らず、1件目のコメントから上へたどって
+# スクロールできる入れ物を探す。見つからなければ null（呼ぶ側は「容器が見つからない」で抜ける）
+BOX_JS = r"""(() => {
+  const m = document.querySelector('[class*="DivCommentMain"]'); if (m) return m;
+  let e = document.querySelector('[data-e2e="comment-level-1"]');
+  while (e && e !== document.body) {
+    const s = getComputedStyle(e);
+    if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && e.scrollHeight > e.clientHeight) return e;
+    e = e.parentElement;
+  }
+  const l = document.querySelector('[class*="DivCommentListContainer"]');
+  return l && l.scrollHeight > l.clientHeight ? l : null;
+})()"""
+COMMENT_ICON = '[data-e2e="comment-icon"], [data-e2e="browse-comment-icon"]'   # 2026-10-12 の画面は browse-comment-icon
+
 # コメント欄を1段だけ下へ送り、その場の状態を返す。
 #
 # 実測（diag_scroll.py / diag_virt.py）で分かったこと:
@@ -190,7 +206,7 @@ return out;
 PAGE_CAP = 20
 
 STEP_JS = r"""
-const m = document.querySelector('[class*="DivCommentMain"]');
+const m = __BOX__;
 if (!m) return null;
 m.scrollTop = Math.min(m.scrollTop + arguments[0], m.scrollHeight);
 const vid = String(arguments[1]);
@@ -235,13 +251,15 @@ return {top: Math.round(m.scrollTop), h: m.scrollHeight, client: m.clientHeight,
 
 # --prescroll: 底から margin px より手前までだけ送る（次のページを呼ばせない）。動いたかと、その場の状態を返す
 PRESCROLL_JS = r"""
-const m = document.querySelector('[class*="DivCommentMain"]');
+const m = __BOX__;
 if (!m) return null;
 const room = m.scrollHeight - m.scrollTop - m.clientHeight - arguments[1];
 if (room > 0) m.scrollTop = m.scrollTop + Math.min(arguments[0], room);
 return {moved: room > 0, dist: m.scrollHeight - m.scrollTop - m.clientHeight,
         sent: (window.__cap || {}).sent || 0};
 """
+STEP_JS = STEP_JS.replace("__BOX__", BOX_JS)
+PRESCROLL_JS = PRESCROLL_JS.replace("__BOX__", BOX_JS)
 # --- ここまで pagetest.py と同一 -------------------------------------------
 
 VIDEO_LINK_XPATH = '//a[contains(@href, "/video/")]'
@@ -458,7 +476,7 @@ class SpaCollector:
                 doc: (window.__cap || {}).doc || null,
                 desc: !!document.querySelector('[data-e2e="video-desc"], [data-e2e="browse-video-desc"]'),
                 modal: !!document.querySelector('[data-e2e="browse-video-desc"], [data-e2e="browse-close"]'),
-                icon: !!document.querySelector('[data-e2e="comment-icon"]'),
+                icon: !!document.querySelector('[data-e2e="comment-icon"], [data-e2e="browse-comment-icon"]'),
                 items: document.querySelectorAll('[data-e2e="comment-level-1"]').length,
                 hits: ((window.__cap || {}).hits || []).length,
                 bad: (((window.__cap || {}).hits) || []).filter(h => h.status >= 400).length,
@@ -667,7 +685,7 @@ class SpaCollector:
             self.note_hits(st.get("hits", 0))
         clicked_icon = False
         if not auto and not skip_wait and st.get("icon"):
-            els = self.d.find_elements(By.CSS_SELECTOR, '[data-e2e="comment-icon"]')
+            els = self.d.find_elements(By.CSS_SELECTOR, COMMENT_ICON)
             if els:
                 self.d.execute_script("arguments[0].click();", els[0])
                 clicked_icon = True
@@ -766,7 +784,7 @@ class SpaCollector:
 
     def remount_panel(self):
         """コメント欄を閉じて開き直す（要求するかもしれないので間隔を空けてから開く）"""
-        els = self.d.find_elements(By.CSS_SELECTOR, '[data-e2e="comment-icon"]')
+        els = self.d.find_elements(By.CSS_SELECTOR, COMMENT_ICON)
         if not els:
             return
         self.d.execute_script("arguments[0].click();", els[0])   # 閉じる
@@ -925,9 +943,8 @@ class SpaCollector:
             if self.reached_cap(vid):
                 break
             st = self.d.execute_script(STEP_JS, self.a.step_px, vid)
-            if st is None:
-                if self.a.scroll_log:
-                    self.log("    スクロール容器が見つからない（DivCommentMain なし）")
+            if st is None:   # いつも残す（2026-10-12: TikTok の画面が変わり、黙って20件で止まっていたのに気づけなかった）
+                self.log("    コメント欄のスクロールする入れ物が見つからない（TikTok の画面が変わった可能性。2ページ目から先は取れない）")
                 break
             # 開く瞬間の見込みは、ここまでの待ち（間隔ぶん）でもう届いている。この段で呼んだ次のページの応答はまだ記録に無い
             # （JS は送りの直後に返る）ので、ここで片付ければ、このあと届く次のページを差し引かずに数えられる
@@ -990,7 +1007,7 @@ class SpaCollector:
                     if nudges >= self.a.max_nudges:
                         break          # 戻して下り直しても増えない＝もう無い
                     self.d.execute_script(
-                        "const m=document.querySelector('[class*=\"DivCommentMain\"]');"
+                        "const m=" + BOX_JS + ";"
                         "if(m) m.scrollTop = Math.max(0, m.scrollTop - arguments[0]);",
                         self.a.nudge_px)
                     time.sleep(self.a.step_pause)
@@ -1092,7 +1109,7 @@ class SpaCollector:
         # 最上部へ戻さないと1件も見つからない（実測: 10本中8本で0件だった）
         self.settle_ahead()
         self.d.execute_script(
-            "const m=document.querySelector('[class*=\"DivCommentMain\"]');"
+            "const m=" + BOX_JS + ";"
             "if(m) m.scrollTop = 0;"
             "document.querySelectorAll('[data-reply-done],[data-reply-host]')"
             "  .forEach(x => {x.removeAttribute('data-reply-done');"
@@ -1171,7 +1188,7 @@ class SpaCollector:
         """選んだコメントの返信欄だけを開く。ページのUIを押すだけで、要求はページに任せる"""
         self.settle_ahead()
         self.d.execute_script(
-            "const m=document.querySelector('[class*=\"DivCommentMain\"]');"
+            "const m=" + BOX_JS + ";"
             "if(m) m.scrollTop = 0;"
             "document.querySelectorAll('[data-reply-done],[data-reply-host]')"
             "  .forEach(x => {x.removeAttribute('data-reply-done');"

@@ -899,8 +899,8 @@ class TestToolDescriptions(Base):
         self.tools = {t.name: t for t in asyncio.run(self.server.list_tools())}
 
     def test_tools_and_rule(self):
-        """道具は16（0.8.0 で info・redo・archive_analysis を足した）。start_analysis の説明に名指しの決まり、cancel・restart の説明に「頼んだときだけ」（通る）"""
-        self.assertEqual(len(self.tools), 16)
+        """道具は19（0.8.0 で info・redo・archive_analysis、0.8.1 で restructure・videos・compare を足した）。start_analysis の説明に名指しの決まり、cancel・restart の説明に「頼んだときだけ」（通る）"""
+        self.assertEqual(len(self.tools), 19)
         self.assertIn("名指し", self.tools["start_analysis"].description)
         for n in ("cancel_analysis", "restart_analysis"):
             self.assertIn("ときだけ使う", self.tools[n].description)

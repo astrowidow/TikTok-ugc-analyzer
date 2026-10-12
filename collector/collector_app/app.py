@@ -484,7 +484,8 @@ class Controller:
         return wait
 
     def _check_deepen(self, m: dict):
-        """完成後の界隈の掘り下げの取り足し（acquire/deepen.py）が終わったら知らせる"""
+        """完成後の取り足し（acquire/deepen.py。界隈の掘り下げ・切り直し・動画のコメント・動画の追加）が終わったら知らせる。
+        動画を外す・戻す（exclude・include）は取得が無い（積んだらすぐ済む）ので知らせない"""
         dp = m.get("deepen") or {}
         key = (m["analysis_id"], dp.get("round"))
         st = dp.get("status")
@@ -492,30 +493,51 @@ class Controller:
         self.known_deepen[key] = st
         if st == before or before is None and st in ("done", "failed"):   # 起動したときにもう済んでいたものは知らせない
             return
+        kind = dp.get("kind") or "deepen"
+        if kind in ("exclude", "include"):
+            return
         title = m.get("title") or m["analysis_id"]
-        recut = dp.get("kind") == "recut"   # 界隈の切り直しの取り足し（acquire/recut.py）。取り方は掘り下げと同じ
-        what = "界隈の切り直し" if recut else "界隈の掘り下げ"
+        recut = kind == "recut"   # 界隈の切り直しの取り足し（acquire/recut.py）。取り方は掘り下げと同じ
+        what = jobs.deepen_what(dp)
+        ai = ai_where() or "Claude"
+        r = dp.get("result") or {}
+        est = f"約{int(round(float(dp.get('est_min') or 0)))}分"
+        n = len(dp.get("targets") or [])
         if st == "queued" and before is None:
-            notify.send(f"「{title}」のコメントを取り足します",
-                        f"{'切り直した界隈' if recut else '界隈 ' + str(dp.get('community'))}・約{int(round(float(dp.get('est_min') or 0)))}分。"
-                        "Mac を開いたままにしておいてください")
-        elif st == "done" and ((dp.get("result") or {}).get("error") or (dp.get("result") or {}).get("blocked")):
-            notify.send(f"「{title}」の取り足しが途中で止まりました",
-                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言うと、取れた分をレポートに活かします")
-            self.log.warning("%sの取り足しが途中で止まりました: %s %s", what, m["analysis_id"], dp.get("result"))
+            if kind == "add":
+                notify.send(f"「{title}」に動画を足します（属性とコメント）", f"{n}本・{est}。Mac を開いたままにしておいてください")
+            elif kind == "videos":
+                notify.send(f"「{title}」の動画のコメントを取り足します",
+                            f"{'全部の界隈・' if dp.get('community') == 'all' else ''}{n}本・{est}。Mac を開いたままにしておいてください")
+            else:
+                notify.send(f"「{title}」のコメントを取り足します",
+                            f"{'切り直した界隈' if recut else '界隈 ' + str(dp.get('community'))}・{est}。"
+                            "Mac を開いたままにしておいてください")
+        elif st == "done" and (r.get("error") or r.get("blocked")):
+            notify.send(f"「{title}」の{'動画の追加' if kind == 'add' else '取り足し'}が途中で止まりました",
+                        f"{ai} で「{title}の分析を続けて」と言うと、取れた分をレポートに活かします")
+            self.log.warning("%sが途中で止まりました: %s %s", what, m["analysis_id"], r)
         elif st == "done":
-            r = dp.get("result") or {}
-            notify.send(f"「{title}」の取り足しが終わりました",
-                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言うと、"
-                        + (f"新しい界隈の分け方でレポートを書き直します（{r.get('videos_new', 0)}本、コメント{r.get('comments_added', 0)}件）"
-                           if recut else
-                           f"レポートに活かします（新しく{r.get('videos_new', 0)}本・続き{r.get('videos_more', 0)}本、コメント{r.get('comments_added', 0)}件）"))
-            self.log.info("%sの取り足しが終わりました: %s %s", what, m["analysis_id"], r)
+            if kind == "add":
+                lost = len(r.get("not_found") or [])
+                notify.send(f"「{title}」に動画を足しました",
+                            f"{ai} で「{title}の分析を続けて」と言うと、足した動画をレポートに活かします"
+                            f"（{len(r.get('added') or [])}本、コメント{r.get('comments_added', 0)}件"
+                            + (f"。{lost}本は動画のページを読めませんでした" if lost else "") + "）")
+            else:
+                notify.send(f"「{title}」の取り足しが終わりました",
+                            f"{ai} で「{title}の分析を続けて」と言うと、"
+                            + (f"新しい界隈の分け方でレポートを書き直します（{r.get('videos_new', 0)}本、コメント{r.get('comments_added', 0)}件）"
+                               if recut else
+                               f"レポートに活かします（新しく{r.get('videos_new', 0)}本・続き{r.get('videos_more', 0)}本、コメント{r.get('comments_added', 0)}件）"))
+            self.log.info("%sが終わりました: %s %s", what, m["analysis_id"], r)
         elif st == "failed":
-            notify.send(f"「{title}」の取り足しが止まりました",
-                        f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言えば、手元のコメントで"
-                        + ("レポートを書き直します" if recut else "掘り下げを進めます"))
-            self.log.warning("%sの取り足しが止まりました: %s %s", what, m["analysis_id"], dp.get("error"))
+            notify.send(f"「{title}」の{'動画の追加' if kind == 'add' else '取り足し'}が止まりました",
+                        f"{ai} で「{title}の分析を続けて」と言えば、"
+                        + ("今ある動画で続きを進めます" if kind == "add" else
+                           "手元のコメントでレポートを書き直します" if recut else
+                           "手元のコメントでレポートを直します" if kind == "videos" else "手元のコメントで掘り下げを進めます"))
+            self.log.warning("%sが止まりました: %s %s", what, m["analysis_id"], dp.get("error"))
 
     def _keep_chrome(self):
         """コメントの段で取得用の Chrome が閉じられたら、すぐ最小化で開き直す（2026-10-02 ユーザー）。

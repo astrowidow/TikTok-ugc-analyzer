@@ -100,17 +100,41 @@ def tpl(name: str) -> str:
 # ---------------------------------------------------------------------------
 # データ（分析フォルダから読む）
 # ---------------------------------------------------------------------------
-def records(a) -> dict:
+# 利用者が外した動画（2026-10-12 0.8.1〜。道具 videos の exclude。docs/PLAN_0_8_1.md 2-3）: analysis.json の excluded_videos。
+# 番号（seq）は変えず、データの読み口（records・videos・labels・ledger・fetched・pool・ラベルと軸の見本）で外す
+def excluded_ids(a) -> set:
+    return {str(x.get("video_id")) for x in ((getattr(a, "meta", None) or {}).get("excluded_videos") or [])
+            if isinstance(x, dict) and x.get("video_id")}
+
+
+def records(a, all_: bool = False) -> dict:
+    """詳しく読んだ動画 {seq: 行}。利用者が外した動画は除く（all_=True なら除かない）"""
     out = {}
+    ex = set() if all_ else excluded_ids(a)
     p = a.derived("llm_input", "records.jsonl")
     for line in open(p, encoding="utf-8"):
         r = json.loads(line)
+        if ex and str(r.get("video_id")) in ex:
+            continue
         out[int(r["seq"])] = r
     return out
 
 
+def excluded_seqs(a) -> set:
+    ex = excluded_ids(a)
+    if not ex or not a.derived("llm_input", "records.jsonl").exists():
+        return set()
+    return {s for s, r in records(a, all_=True).items() if str(r.get("video_id")) in ex}
+
+
 def videos(a) -> dict:
-    return {int(json.loads(l)["seq"]): json.loads(l) for l in open(a.derived("videos.jsonl"), encoding="utf-8")}
+    ex = excluded_ids(a)
+    out = {}
+    for line in open(a.derived("videos.jsonl"), encoding="utf-8"):
+        v = json.loads(line)
+        if not (ex and str(v.get("video_id")) in ex):
+            out[int(v["seq"])] = v
+    return out
 
 
 _LEDGER = {}
@@ -139,20 +163,50 @@ def ledger(a) -> list:
             out.append(x)
         _LEDGER.clear()
         _LEDGER[key] = out
-    return _LEDGER[key]
+    ex = excluded_ids(a)
+    return [x for x in _LEDGER[key] if str(x.get("video_id")) not in ex] if ex else _LEDGER[key]
+
+
+def weekly_lines(a) -> list:
+    """週ごとの本数と再生（derived/weekly.tsv の行「週\t本数\t再生」）。利用者が外した動画は、台帳の行から引く"""
+    lines = open(a.derived("weekly.tsv"), encoding="utf-8").read().splitlines()[1:]
+    ex = excluded_ids(a)
+    if not ex:
+        return lines
+    sub = collections.defaultdict(lambda: [0, 0])
+    p = a.dir / "raw" / "ledger.jsonl" if getattr(a, "dir", None) is not None else None
+    if p is not None and p.exists():
+        for line in open(p, encoding="utf-8"):
+            try:
+                x = json.loads(line)
+            except ValueError:
+                continue
+            if str(x.get("video_id")) in ex and x.get("create_time"):
+                d = datetime.date.fromisoformat(x["create_time"][:10]).isocalendar()
+                w = sub[f"{d[0]}-W{d[1]:02d}"]
+                w[0] += 1
+                w[1] += int(x.get("plays") or 0)
+    out = []
+    for line in lines:
+        w, n, pl = line.split("\t")
+        d = sub.get(w)
+        out.append(f"{w}\t{max(0, int(n) - d[0])}\t{max(0, int(pl) - d[1])}" if d else line)
+    return out
 
 
 def pool(a) -> dict:
     p = a.derived("pool.tsv")
     if not p.exists():
         return {}
+    ex = excluded_ids(a)
     with open(p, encoding="utf-8") as f:
-        return {r["video_id"]: r for r in csv.DictReader(f, delimiter="\t")}
+        return {r["video_id"]: r for r in csv.DictReader(f, delimiter="\t") if str(r["video_id"]) not in ex}
 
 
 def fetched(a) -> dict:
-    """コメントが取れた動画 {video_id: 行}（後の行が勝つ）"""
+    """コメントが取れた動画 {video_id: 行}（後の行が勝つ）。利用者が外した動画は除く"""
     out = {}
+    ex = excluded_ids(a)
     p = a.dir / "raw" / "comments.jsonl"
     if p.exists():
         for line in open(p, encoding="utf-8"):
@@ -160,7 +214,7 @@ def fetched(a) -> dict:
                 r = json.loads(line)
             except ValueError:
                 continue
-            if r.get("status") == "ok" and r.get("comments"):
+            if r.get("status") == "ok" and r.get("comments") and str(r["video_id"]) not in ex:
                 out[str(r["video_id"])] = r
     return out
 
@@ -325,14 +379,17 @@ def label_seqs(a) -> list:
     for vid in pool(a):
         if vid in by_vid:
             seqs.add(by_vid[vid])
-    return sorted(int(s) for s in seqs)
+    for x in (getattr(a, "meta", None) or {}).get("user_videos") or []:   # 利用者が足した動画（0.8.1〜）は必ずラベルを付ける
+        if isinstance(x, dict) and str(x.get("video_id")) in by_vid:
+            seqs.add(by_vid[str(x["video_id"])])
+    return sorted(int(s) for s in seqs if int(s) not in excluded_seqs(a))
 
 
 def axes_sample(a) -> list:
     """軸の提案で読ませるサンプルの seq。層化サンプル（prep_sample.py）のうち、再生上位100・最初期40は全部残し、
     残り（離陸後の各週の無作為）は時期に偏らないよう等間隔に間引いて axes_sample_max 本に収める"""
     _, body = a.entries("taxonomy_sample")
-    seqs = sorted(body)
+    seqs = sorted(set(body) - excluded_seqs(a))
     cap = cfg(a)["axes_sample_max"]
     if len(seqs) <= cap:
         return seqs
@@ -348,12 +405,14 @@ def axes_sample(a) -> list:
     return sorted(set(keep))
 
 
-def labels(a) -> dict:
+def labels(a, all_: bool = False) -> dict:
+    """ラベル {seq: 行}。利用者が外した動画は除く（all_=True なら除かない）"""
     p = a.outputs("labels.tsv")
     if not p.exists():
         return {}
+    ex = set() if all_ else excluded_seqs(a)
     with open(p, encoding="utf-8") as f:
-        return {int(r["seq"]): r for r in csv.DictReader(f, delimiter="\t")}
+        return {int(r["seq"]): r for r in csv.DictReader(f, delimiter="\t") if int(r["seq"]) not in ex}
 
 
 def phases(a) -> list:
@@ -599,6 +658,25 @@ def render(a, t: dict, st: dict) -> dict:
         cat.append(pr._catalog_line("kb:glossary", "著者の用語集（反応の読み方の語彙）"))
         text = pr._fill(tpl("deepen_comments.md"), {**base, **mat, "settings": _settings(a, ["comment_lens"], t)})
 
+    elif typ == "outline_revise" and t["params"].get("generic"):   # 変更の回（動画の足し外し・取り足し・章立て。0.8.1〜）
+        pm = t["params"]
+        chs = chapter_order(a, st)
+        must = set(pm.get("must") or [])
+        unwritten = {c_ for c_ in chs if not a.outputs("chapters", f"{c_}.md").exists()}
+        o = outline(a)
+        cat += [pr._catalog_line("synthesis", "界隈ごとのコメント分析（今回直した界隈を含む）"),
+                pr._catalog_line("chapter:<id>", "今のレポートの章"), pr._catalog_line("pathway", "拡散経路の下書き"),
+                pr._catalog_line("chapters", "章の一覧")]
+        text = pr._fill(tpl("change_plan.md"), {
+            **base, "what": round_what(a, pm), "instruction": pm.get("instruction") or "（言葉の記録なし）",
+            "change": change_detail(a, pm),
+            "outline": outline_md(o, chs) if o else "（構成案は無い。前の形の分析。章の今の原稿を read の chapter:<id> で読んで決める）",
+            "chapters": "\n".join(f"- {'☆' if c_ in unwritten else '★' if c_ in must else '　'}`{c_}`: "
+                                  + (f"{chapter_name(c_, a)}（まだ書いていない。{chapter_role(a, c_)}）" if c_ in unwritten
+                                     else first_line(a.outputs('chapters', f'{c_}.md'))) for c_ in chs),
+            "must": "、".join(f"`{c_}`" for c_ in chs if c_ in must or c_ in unwritten) or "（決まりは無い。関わる章を選ぶ）",
+            "settings": _settings(a, ["focus"], t)})
+
     elif typ == "outline_revise":
         k = t["params"]["community"]
         chs = chapter_order(a, st)
@@ -614,6 +692,19 @@ def render(a, t: dict, st: dict) -> dict:
             "outline": outline_md(o, chs) if o else "（構成案は無い。前の形の分析。章の今の原稿を read の chapter:<id> で読んで決める）",
             "chapters": "\n".join(f"- {'★' if c_ in star else '　'}`{c_}`: {first_line(a.outputs('chapters', f'{c_}.md'))}" for c_ in chs),
             "settings": _settings(a, ["focus"], t)})
+
+    elif typ == "review" and t["params"].get("generic"):
+        pm = t["params"]
+        chs = chapter_order(a, st)
+        o = outline(a) or {}
+        ex = sorted(excluded_seqs(a))
+        text = pr._fill(tpl("change_review.md"), {
+            **base, "what": round_what(a, pm), "instruction": pm.get("instruction") or "（言葉の記録なし）",
+            "thesis": o.get("thesis") or "（構成案が無い）",
+            "changed": "\n".join(f"- `{x['chapter']}`: {x.get('why', '')}" for x in pm.get("changed") or []) or "（なし）",
+            "chapters": "\n".join(f"- `{c_}`: {first_line(a.outputs('chapters', f'{c_}.md'))}" for c_ in chs),
+            "excluded": "、".join(f"seq {x}" for x in ex) or "なし"})
+        cat.append(pr._catalog_line("chapter:<id>", "章の今の原稿（全章を読む）"))
 
     elif typ == "review":
         pm = t["params"]
@@ -656,7 +747,7 @@ def render(a, t: dict, st: dict) -> dict:
                 pr._catalog_line("pathway", "拡散経路の下書き")]
         if a.outputs("research.json").exists():
             cat += [pr._catalog_line("research", "ウェブで調べたこと（W番号つき）"), pr._catalog_line("era", "時代背景の材料")]
-        lines = [f"- `{c_}`: {heading_of(a, c_)}（{CHAPTER_TITLES.get(c_) or '拡大経路の段階'}）" for c_ in chapter_order(a, st)]
+        lines = [f"- `{c_}`: {heading_of(a, c_)}（{chapter_role(a, c_)}）" for c_ in chapter_order(a, st)]
         text = pr._fill(tpl("outline.md"), {**base, "n_refs": cfg(a)["n_refs"], "chapters": "\n".join(lines),
                                              "materials": outline_materials(a, base),
                                              "settings": _settings(a, ["focus"], t)})   # レポートの重点は、主張を決める構成案から効かせる
@@ -697,6 +788,16 @@ def render(a, t: dict, st: dict) -> dict:
                                            "chapters": "\n".join(f"- `{c_}`: {first_line(a.outputs('chapters', f'{c_}.md'))}" for c_ in chs),
                                            "settings": _settings(a, ["community_policy"], t)})
 
+    elif typ == "compare":
+        cat += [pr._catalog_line("chapters", "各分析の章の一覧（analysis_id にその分析の ID）"),
+                pr._catalog_line("chapter:<id>", "各分析の章の本文（analysis_id にその分析の ID）"),
+                pr._catalog_line("synthesis", "各分析の界隈ごとのコメント分析（analysis_id にその分析の ID）"),
+                pr._catalog_line("pathway", "各分析の拡散経路の下書き（analysis_id にその分析の ID）")]
+        text = pr._fill(tpl("compare.md"), {**base, **compare_materials(a, t), "settings": _settings(a, ["style", "focus"], t)})
+
+    elif typ == "done" and t["params"].get("compare"):
+        text = compare_done_text(a, t["params"]["compare"])
+
     elif typ == "done":
         mat = done_materials(a)
         if t["params"].get("deepen"):
@@ -707,10 +808,13 @@ def render(a, t: dict, st: dict) -> dict:
             mat["summary"] = redo_summary(a, t["params"]["redo"]) + "\n\n" + mat["summary"]
         if t["params"].get("restore"):
             mat["summary"] = restore_summary(a, t["params"]["restore"]) + "\n\n" + mat["summary"]
+        if t["params"].get("change"):
+            mat["summary"] = change_summary(a, t["params"]["change"]) + "\n\n" + mat["summary"]
         # 界隈の確認を省いたことは、最初の完了の知らせでだけ伝える（あとの直しの完了では繰り返さない。切り直しのあとは利用者が決めた界隈）
         first_done = next((x for x in st.get("tasks") or [] if x.get("kind") == "done"), None)
         is_first = first_done is None or first_done.get("task_id") == t.get("task_id")
-        if not t["params"].get("deepen") and not t["params"].get("recut") and is_first and confirm_skipped_summary(a):
+        if not t["params"].get("deepen") and not t["params"].get("recut") and not t["params"].get("change") \
+                and is_first and confirm_skipped_summary(a):
             mat["summary"] = confirm_skipped_summary(a) + "\n\n" + mat["summary"]
         text = pr._fill(tpl("done.md"), {**base, **mat})
 
@@ -1041,7 +1145,7 @@ def phase_materials(a) -> dict:
     for s, l in labs.items():
         weekly[recs[s]["week"]][l["community"]] += 1
     allw = {}
-    for line in open(a.derived("weekly.tsv"), encoding="utf-8").read().splitlines()[1:]:
+    for line in weekly_lines(a):
         w, n, plays = line.split("\t")
         allw[w] = (int(n), int(plays))
     total = collections.Counter(l["community"] for l in labs.values())
@@ -1239,6 +1343,15 @@ def fetched_note(a, n) -> str:
     job = deepen_job(a, n)
     res = job.get("result") or {}
     pl = job.get("plan") or {}
+    if job.get("kind") == "add":   # 利用者が足した動画（0.8.1〜）
+        added = [x for x in res.get("added") or [] if isinstance(x, dict)]
+        s = (f"利用者が足した動画 {len(added)}本（" + "、".join(f"seq {x.get('seq')}" for x in added) + "）。"
+             f"属性を{'取り' if any(x.get('enriched') for x in added) else '取れず'}、コメント {res.get('comments_added', 0)}件を取った")
+        if res.get("not_found"):
+            s += f"。見つからなかった動画 {len(res['not_found'])}本（削除・非公開など）"
+        if res.get("blocked") or res.get("error"):
+            s += "。取得は途中で止まった（取れた分だけ使う）"
+        return s
     if not job.get("targets"):
         return "取り足せる動画は無かった（この界隈のコメントの無い動画・続きのある動画が無い）。手元のコメントを、前回より深く読み直す"
     if job.get("status") == "failed" and not res:
@@ -1287,7 +1400,9 @@ def deepen_summary(a, n) -> str:
     job = deepen_job(a, n)
     rec = pr._read_json(deepen_record(a, n), {}) or {}
     chs = rec.get("changed_all") or [x["chapter"] for x in rec.get("changed") or []]
-    lines = [f"#### 今回の直し（界隈の掘り下げ: {job.get('community')}）",
+    kind = (job.get("kind") or "deepen") if job.get("community") != "all" else "all"
+    lines = [f"#### 今回の直し（界隈の掘り下げ: {job.get('community')}）" if kind == "deepen" else
+             f"#### 今回の直し（{CHANGE_KINDS.get(kind, '取り足し')}）",
              f"- 利用者の頼み: {job.get('instruction', '')}",
              f"- 取り足したコメント: {fetched_note(a, n)}",
              "- 書き直した章: " + ("、".join(first_line(a.outputs("chapters", f"{c_}.md")) for c_ in chs) or "なし")]
@@ -1297,6 +1412,590 @@ def deepen_summary(a, n) -> str:
         lines.append(f"- 通し読み: {rec['review_note']}")
     lines.append("- 返答の 1 では、拡散の流れの代わりに、この直しで何が分かり何を変えたかを1〜3文で伝える。前の版は残してある")
     return "\n".join(lines)
+
+
+# --- 変更の回（2026-10-12 0.8.1〜。docs/PLAN_0_8_1.md 第1章）---
+# 動画を外す・戻す（道具 videos の exclude・include）と章立ての変更（restructure）は「変更の回」（outputs/versions/change_r<回>.json）。
+# 動画ごと・全体のコメントの取り足し（deepen の videos・all）と動画を足す（videos の add）は掘り下げの回（analysis.json の deepen。kind で見分ける）。
+# どちらも AI の仕事は change_prep［service］が決める: [ラベル（ラベルの無い動画だけ）] → 関わる界隈のコメント分析 → 構成案の直し（change_plan.md）
+# → 書き直し → 通し読み（change_review.md）→ 組み立て → 検算 → 完了。動画がどこにも出てこなければ、組み立てと検算だけ
+CHANGE_KINDS = {"exclude": "動画を外した", "include": "外していた動画を戻した", "restructure": "章立てを変えた",
+                "add": "動画を足した", "videos": "動画のコメントを取り足した", "all": "全部の界隈のコメントを取り足した",
+                "deepen": "界隈を掘り下げた"}
+
+
+def change_record_path(a, n) -> Path:
+    return a.outputs("versions", f"change_r{n}.json")
+
+
+def change_record(a, n) -> dict:
+    return pr._read_json(change_record_path(a, n), {}) or {}
+
+
+def round_of(pm: dict) -> tuple:
+    """仕事の params から回を: ("change", n)（変更の回）か ("round", n)（掘り下げの回）"""
+    if (pm or {}).get("change"):
+        return "change", pm["change"]
+    return "round", (pm or {}).get("round")
+
+
+def round_record_path(a, pm) -> Path:
+    key, n = round_of(pm)
+    return change_record_path(a, n) if key == "change" else deepen_record(a, n)
+
+
+def plan_record_path(a, pm) -> Path:
+    """構成案の直し・通し読みの記録（掘り下げの回は revisions/deepen_r<回>.json、変更の回は revisions/change_r<回>_plan.json）"""
+    key, n = round_of(pm)
+    return a.outputs("revisions", f"change_r{n}_plan.json") if key == "change" else deepen_record(a, n)
+
+
+def round_info(a, pm) -> dict:
+    """回の中身 {kind, instruction, video_ids, community, …}。掘り下げの回は analysis.json の deepen から"""
+    key, n = round_of(pm)
+    if key == "change":
+        return change_record(a, n)
+    job = deepen_job(a, n)
+    kind = job.get("kind") or "deepen"
+    if kind == "videos" and job.get("community") == "all":
+        kind = "all"
+    vids = [str(v) for v in job.get("video_ids") or []] or \
+        [str(x["video_id"]) for x in job.get("targets") or [] if isinstance(x, dict) and x.get("video_id")]
+    if kind == "add":
+        got = [str(x["video_id"]) for x in (job.get("result") or {}).get("added") or [] if isinstance(x, dict) and x.get("video_id")]
+        vids = got or vids
+    return {"kind": kind, "round": n, "instruction": job.get("instruction", ""), "video_ids": vids,
+            "community": job.get("community"), "result": job.get("result") or {}}
+
+
+def round_what(a, pm) -> str:
+    info = round_info(a, pm)
+    return CHANGE_KINDS.get(info.get("kind"), "レポートを変えた")
+
+
+def video_targets(a, targets) -> tuple:
+    """利用者の言う動画（URL・動画の番号・seq）を [{video_id, seq, url}] に。分からないものは2つ目に。
+    詳しく読んだ動画（外した動画も含む）・台帳・一覧（grid_links）から引く"""
+    recs = records(a, all_=True) if a.derived("llm_input", "records.jsonl").exists() else {}
+    by_vid = {str(r["video_id"]): (s, r) for s, r in recs.items()}
+    known = {}
+    for name in ("ledger.jsonl", "grid_links.jsonl"):
+        p = a.dir / "raw" / name
+        if p.exists():
+            for line in open(p, encoding="utf-8"):
+                try:
+                    x = json.loads(line)
+                except ValueError:
+                    continue
+                if x.get("video_id"):
+                    known.setdefault(str(x["video_id"]), x.get("url"))
+    out, bad = [], []
+    for t in targets or []:
+        t = str(t or "").strip()
+        if not t:
+            continue
+        m = re.search(r"/(?:video|photo)/(\d+)", t)
+        vid = m.group(1) if m else (t if re.fullmatch(r"\d{15,}", t) else None)
+        seq = None
+        if vid is None:
+            m = re.fullmatch(r"(?:seq\s*)?(\d{1,6})", t, re.I)
+            if m and int(m.group(1)) in recs:
+                seq = int(m.group(1))
+                vid = str(recs[seq]["video_id"])
+        if vid is None:
+            bad.append(t)
+            continue
+        if vid in by_vid:
+            seq = by_vid[vid][0]
+        url = t if t.startswith("http") else (known.get(vid) or (by_vid[vid][1].get("url") if vid in by_vid else None))
+        if all(x["video_id"] != vid for x in out):
+            out.append({"video_id": vid, "seq": seq, "url": (url or "").split("?")[0] or None})
+    return out, bad
+
+
+def cited_where(a, seqs) -> dict:
+    """seq がどこに出てくるか: 章・コメント分析（界隈）・構成案の章・段階の代表・拡散経路の下書き"""
+    seqs = {int(x) for x in seqs}
+
+    def hit(p: Path) -> bool:
+        return p.exists() and bool({int(x) for x in re.findall(r"seq\s*(\d+)", p.read_text(encoding="utf-8"))} & seqs)
+    chs = [ch for ch in chapter_order(a) if hit(a.outputs("chapters", f"{ch}.md"))]
+    syn = [p.stem for p in sorted(a.outputs("synthesis").glob("*.md")) if hit(p)] if a.outputs("synthesis").is_dir() else []
+    o = outline(a) or {}
+    oc = [c_.get("id") for c_ in o.get("chapters") or [] if isinstance(c_, dict) and any(
+        isinstance(e, dict) and _seq_int(e.get("seq")) in seqs
+        for cl in c_.get("claims") or [] if isinstance(cl, dict) for e in cl.get("evidence") or [])]
+    ph = pr._read_json(a.outputs("phases.json"), {}) or {}
+    in_ph = any(_seq_int(x) in seqs for p in ph.get("phases") or [] for x in p.get("reps") or []) or \
+        any(_seq_int(x) in seqs for x in ph.get("overlooked") or [])
+    return {"chapters": chs, "synthesis": syn, "outline": [c_ for c_ in oc if c_ in chapter_order(a)], "phases": in_ph,
+            "pathway": hit(a.outputs("pathway.md"))}
+
+
+def next_label_batch(a) -> int:
+    d = a.outputs("labels")
+    ns = [int(m.group(1)) for p in (d.glob("batch_*.tsv") if d.exists() else []) if (m := re.fullmatch(r"batch_(\d+)\.tsv", p.name))]
+    return max(ns, default=0) + 1
+
+
+def change_tail(a, st, key: str, n, done_title: str) -> list:
+    """変更の回の締め: 組み立て → 検算 → Excel 用 → 完了"""
+    pm = {key: n}
+    return [_task(st, "assemble", "service", "レポートの組み立て（サービス）", dict(pm)),
+            _task(st, "verify", "service", "検算（サービス）", dict(pm)),
+            _task(st, "export", "service", "Excel 用のデータ（サービス）", dict(pm)),
+            _task(st, "done", "done", done_title, {("deepen" if key == "round" else "change"): n})]
+
+
+def service_change_prep(a, t: dict, st: dict) -> dict:
+    """変更の回の仕事を決める（stage label: ラベルの無い動画にラベルを付ける仕事を足す → stage plan: 関わる界隈のコメント分析・構成案の直し・
+    通し読み・締めを足す）。章立ての変更は、足した章（まだ書いていない）と冒頭を必ず書き直す"""
+    pm = t["params"]
+    key, n = round_of(pm)
+    info = round_info(a, pm)
+    kind = info.get("kind")
+    what = CHANGE_KINDS.get(kind, "レポートの変更")
+    ins = info.get("instruction", "")
+    base = {key: n, "instruction": ins}
+    vids = [str(v) for v in info.get("video_ids") or []]
+    recs_all = records(a, all_=True)
+    seq_of = {str(r["video_id"]): s for s, r in recs_all.items()}
+    seqs = sorted(seq_of[v] for v in vids if v in seq_of)
+    if pm.get("stage") == "label":
+        labs = labels(a)
+        live = records(a)
+        need = [s for s in seqs if s in live and s not in labs and live[s].get("enriched")]   # 属性の読めなかった動画は付けない
+        new = []
+        if need:
+            make_extra_sheets(a, need)
+            b = cfg(a)["label_batch"]
+            batches = [need[i:i + b] for i in range(0, len(need), b)]
+            first = next_label_batch(a)
+            new += [_task(st, "label", "ai", f"ラベル付け（{what} {i}/{len(batches)}）",
+                          {"batch": first + i - 1, "n_batches": len(batches), "seqs": bb, **base})
+                    for i, bb in enumerate(batches, 1)]
+        new.append(_task(st, "change_prep", "service", "直す章の準備（サービス）", {**base, "stage": "plan"}))
+        insert_after(st, t, new)
+        return {"stage": "label", "label": need}
+    labs = labels(a)
+    labs_all = labels(a, all_=True)
+    where = cited_where(a, seqs) if seqs else {"chapters": [], "synthesis": [], "outline": [], "phases": False, "pathway": False}
+    comms, must, mode = [], [], None
+    if kind == "exclude":
+        for s in seqs:
+            k = (labs_all.get(s) or {}).get("community")
+            r = recs_all.get(s) or {}
+            had = bool(r) and a.derived("comments", f"{s}_{r.get('video_id')}.md").exists()
+            if k and k != "unknown" and (had or k in where["synthesis"]):
+                comms.append(k)
+        comms += [k for k in where["synthesis"] if k in (pr._taxonomy(a).get("community") or {})]
+        must = sorted(set(where["chapters"]) | set(where["outline"]), key=chapter_order(a).index)
+        mode = "ccomments"
+    elif kind == "include":
+        got = fetched(a)
+        comms = [labs[s]["community"] for s in seqs if s in labs and str(recs_all[s]["video_id"]) in got]
+        mode = "ccomments"
+    elif kind in ("add", "videos"):
+        comms = [labs[s]["community"] for s in seqs if s in labs]
+        mode = "dcomments"
+    elif kind == "all":
+        comms = sorted({l["community"] for l in labs.values()})
+        mode = "dcomments"
+    elif kind == "restructure":
+        chs = chapter_order(a)
+        must = [c_ for c_ in chs if not a.outputs("chapters", f"{c_}.md").exists()] + (["intro"] if "intro" in chs else [])
+    comms = [k for k in dict.fromkeys(comms) if k and k != "unknown"]
+    have = comment_seqs(a)
+    if mode == "dcomments":
+        comms = [k for k in comms if k in have]
+    new = []
+    if mode == "ccomments":
+        for i, k in enumerate(comms, 1):
+            if k in have:
+                new.append(_task(st, "ccomments", "ai", f"コメント分析の作り直し（{what} {i}/{len(comms)}: {k}）",
+                                 {"community": k, "i": i, "n": len(comms), **base}))
+            elif a.outputs("synthesis", f"{k}.md").exists():   # コメントを読める動画が残っていない界隈: 前の分析はもう使えない
+                keep_history(a, a.outputs("synthesis", f"{k}.md"), f"change-r{n}")
+                a.outputs("synthesis", f"{k}.md").unlink()
+    elif mode == "dcomments":
+        new += [_task(st, "dcomments", "ai", f"コメント分析のやり直し（{what}: {k}）", {"community": k, **base}) for k in comms]
+    needs_plan = bool(comms or must) or kind in ("include", "restructure") or (kind == "add" and bool(seqs))
+    if kind in ("add", "include") and not [x for x in seqs if (records(a).get(x) or {}).get("enriched")]:   # 足せなかった（動画のページが読めない など）: 書き直すものが無い
+        needs_plan = False
+    if needs_plan:
+        new.append(_task(st, "outline_revise", "ai", f"構成案の直し（{what}）",
+                         {**base, "generic": True, "communities": comms, "must": must}))
+        new.append(_task(st, "review", "ai", f"全章の通し読み（{what}）",
+                         {**base, "generic": True, "changed": [], "thesis_changed": False}))
+    new += change_tail(a, st, key, n, f"完了（{what}）")
+    insert_after(st, t, new)
+    rec_p = round_record_path(a, pm)
+    rec = pr._read_json(rec_p, {}) or {}
+    rec.update({"communities": comms, "must": must, "cited": where, "planned_at": pr._now()})
+    pr._write_json(rec_p, rec)
+    return {"stage": "plan", "communities": comms, "must": must, "cited_chapters": where["chapters"], "ai": needs_plan or bool(comms)}
+
+
+def _vline_any(a, s) -> str:
+    r = records(a, all_=True).get(s)
+    return vline(r) if r else f"seq {s}"
+
+
+def change_detail(a, pm) -> str:
+    """構成案の直し（汎用）に渡す「変わったこと」"""
+    info = round_info(a, pm)
+    kind = info.get("kind")
+    key, n = round_of(pm)
+    recs_all = records(a, all_=True)
+    seq_of = {str(r["video_id"]): s for s, r in recs_all.items()}
+    seqs = [seq_of[v] for v in info.get("video_ids") or [] if v in seq_of]
+    labs = labels(a, all_=True)
+    rec = pr._read_json(round_record_path(a, pm), {}) or {}
+    L = []
+    if kind in ("exclude", "include"):
+        verb = "外した（以後の分析・記事に使わない）" if kind == "exclude" else "戻した（また分析・記事に使う）"
+        for s in seqs:
+            k = (labs.get(s) or {}).get("community")
+            L.append(f"- {_vline_any(a, s)} を{verb}" + (f"。界隈 {k}" if k else ""))
+        where = rec.get("cited") or {}
+        if kind == "exclude" and where.get("chapters"):
+            L.append("- この動画を名指ししている章: " + "、".join(f"`{c_}`" for c_ in where["chapters"]) + "（書き直して、触れないようにする）")
+        if where.get("phases") or where.get("pathway"):
+            L.append("- 段階の代表・拡散経路の下書きにも出てくる（read の pathway。章では触れない）")
+    elif kind == "restructure":
+        L.append(f"- 章立て: {' → '.join(rec.get('before') or [])}　から　{' → '.join(rec.get('after') or [])}　へ（`path` は拡大経路の章のまとまり）")
+        for x in rec.get("added") or []:
+            L.append(f"- 足した章 `{x['id']}`「{x['title']}」: {x.get('about') or x['title']}")
+        if rec.get("removed"):
+            L.append("- 外した章（レポートに入れない）: " + "、".join(f"`{c_}`" for c_ in rec["removed"]))
+    elif kind in ("add", "videos", "all"):
+        if kind == "add":
+            for s in seqs:
+                k = (labs.get(s) or {}).get("community")
+                L.append(f"- 利用者が足した動画: {_vline_any(a, s)}" + (f"。界隈 {k}" if k else ""))
+        L.append(f"- 取り足し: {fetched_note(a, n)}" if key == "round" else "")
+    for k in rec.get("communities") or []:
+        syn = a.outputs("synthesis", f"{k}.md")
+        if not syn.exists():
+            continue
+        ch = md_section(syn.read_text(encoding="utf-8"), "#### 前回からの変化")
+        L.append(f"\n#### 界隈 {k} のコメント分析" + ("（前回からの変化）\n" + ch if ch else "は作り直した（read の `synthesis` の `### " + k + "`）"))
+    return "\n".join(x for x in L if x) or "（変わったことの記録が無い）"
+
+
+def change_summary(a, n) -> str:
+    """完了の知らせの頭（変更の回）"""
+    rec = change_record(a, n)
+    what = CHANGE_KINDS.get(rec.get("kind"), "レポートの変更")
+    plan = pr._read_json(a.outputs("revisions", f"change_r{n}_plan.json"), {}) or {}
+    chs = plan.get("changed_all") or [x["chapter"] for x in plan.get("changed") or []]
+    lines = [f"#### 今回の直し（{what}）"]
+    if rec.get("instruction"):
+        lines.append(f"- 利用者の頼み: {rec['instruction']}")
+    if rec.get("kind") in ("exclude", "include"):
+        lines.append("- 動画: " + "、".join(_vline_any(a, s) for s in rec.get("seqs") or []))
+    if rec.get("kind") == "restructure":
+        lines.append(f"- 章立て: {' → '.join(rec.get('before') or [])} から {' → '.join(rec.get('after') or [])} へ")
+    lines.append("- 書き直した章: " + ("、".join(first_line(a.outputs("chapters", f"{c_}.md")) for c_ in chs) or "なし（付録の数字だけ組み立て直した）"))
+    if plan.get("outline_note"):
+        lines.append(f"- 構成案の変更: {plan['outline_note']}")
+    if plan.get("review_note"):
+        lines.append(f"- 通し読み: {plan['review_note']}")
+    lines.append("- 返答の 1 では、拡散の流れの代わりに、この直しで何を変えたかを1〜3文で伝える。前の版は残してある（「前の版に戻して」で戻せる）")
+    return "\n".join(lines)
+
+
+def start_change(a, st: dict, kind: str, instruction: str, **rec) -> dict:
+    """変更の回を始める（外す・戻す・章立て）: 今の版を残し、回の記録を書き、change_prep を積む。返す: st・round"""
+    n = _next_round(a, "change")
+    for x in st["tasks"]:   # 前の完了の知らせを AI が受け取らないまま会話が終わっていたら、済んだことにする（deepen・recut と同じ）
+        if x["kind"] == "done" and x["status"] != "done":
+            x.update({"status": "done", "done_at": pr._now()})
+    keep_version(a, "change", n, st=copy.deepcopy(st), what=CHANGE_KINDS.get(kind, "変更"))
+    pr._write_json(change_record_path(a, n), {"round": n, "kind": kind, "instruction": instruction, "at": pr._now(), **rec})
+    st["tasks"].append(_task(st, "change_prep", "service", "直す章の準備（サービス）",
+                             {"change": n, "instruction": instruction, "stage": "label" if kind == "include" else "plan"}))
+    a.log(event="change", round=n, kind=kind)
+    return {"st": st, "round": n}
+
+
+def set_excluded(a, items: list, include: bool, why: str) -> list:
+    """analysis.json の excluded_videos を書き換える（外す・戻す）。a.meta も合わせる。戻り値は変えた動画"""
+    p = a.dir / "analysis.json"
+    m = pr._read_json(p, {}) or {}
+    cur = [x for x in m.get("excluded_videos") or [] if isinstance(x, dict) and x.get("video_id")]
+    have = {str(x["video_id"]) for x in cur}
+    changed = []
+    if include:
+        drop = {x["video_id"] for x in items if x["video_id"] in have}
+        cur = [x for x in cur if str(x["video_id"]) not in drop]
+        changed = [x for x in items if x["video_id"] in drop]
+    else:
+        for x in items:
+            if x["video_id"] not in have:
+                cur.append({**x, "at": pr._now(), "why": why})
+                changed.append(x)
+    m["excluded_videos"] = cur
+    pr._write_json(p, m)
+    a.meta = m
+    return changed
+
+
+def restructure_plan(a, remove=(), add=(), order=None) -> dict:
+    """章立ての表を新しくした形を作る（書かない）。返す: before・after（id の列）・items・added・removed"""
+    items = chapter_plan(a)
+    before = [x["id"] for x in items]
+
+    def norm(x) -> str:
+        x = str(x or "").strip().strip("`")
+        return "path" if x.startswith("path_") or x in ("拡大経路",) else x
+    rm = [norm(x) for x in remove or [] if norm(x)]
+    bad = [x for x in rm if x not in before]
+    if bad:
+        raise pr.RunnerError(f"外す章の id は今の章立てから選んでください: {bad}（今の章立て: {before}。read の chapters で見られる）")
+    items = [x for x in items if x["id"] not in rm]
+    got = pr._read_json(a.outputs(CHAPTER_PLAN), {}) or {}
+    nxt = int(got.get("next_custom") or 1)
+    used = {int(m.group(1)) for x in chapter_plan(a) if (m := re.fullmatch(r"c(\d+)", x["id"]))}
+    nxt = max([nxt] + [u + 1 for u in used])
+    added = []
+    for x in add or []:
+        if isinstance(x, str):
+            x = {"title": x}
+        if not isinstance(x, dict) or not str(x.get("title") or "").strip():
+            raise pr.RunnerError("足す章は {\"title\": \"章の題\", \"about\": \"どんな章か（利用者の言葉）\", \"after\": \"<この章の後ろ>\"} の形にしてください")
+        title = re.sub(r"\s+", " ", str(x["title"])).strip().lstrip("#").strip()
+        new = {"id": f"c{nxt}", "title": title, "about": str(x.get("about") or "").strip()}
+        nxt += 1
+        after = norm(x.get("after"))
+        ids = [y["id"] for y in items]
+        if after and after not in ids and after not in ("start", "end", "先頭", "最後"):
+            raise pr.RunnerError(f"after（どの章の後ろに足すか）は今の章立ての id から: {after}（{ids}）")
+        i = 0 if after in ("start", "先頭") else (ids.index(after) + 1 if after in ids else len(items))
+        items.insert(i, new)
+        added.append(new)
+    if order:
+        want = [norm(x) for x in order if norm(x)]
+        ids = [y["id"] for y in items]
+        bad = [x for x in want if x not in ids]
+        if bad:
+            raise pr.RunnerError(f"order の id は今の章立て（足した章を含む）から: {bad}（{ids}）")
+        by = {y["id"]: y for y in items}
+        seen = list(dict.fromkeys(want))
+        items = [by[x] for x in seen] + [y for y in items if y["id"] not in seen]
+    if not items:
+        raise pr.RunnerError("章が1つも残りません。残す章か、足す章を教えてください")
+    after_ids = [x["id"] for x in items]
+    if after_ids == before and not added:
+        raise pr.RunnerError(f"章立ては変わりません（今の章立て: {before}）")
+    return {"before": before, "after": after_ids, "items": items, "added": added, "removed": rm, "next_custom": nxt}
+
+
+def save_chapter_plan(a, plan: dict, instruction: str) -> None:
+    got = pr._read_json(a.outputs(CHAPTER_PLAN), {}) or {}
+    hist = list(got.get("history") or [])
+    hist.append({"at": pr._now(), "before": plan["before"], "after": plan["after"], "instruction": instruction})
+    pr._write_json(a.outputs(CHAPTER_PLAN), {"items": plan["items"], "next_custom": plan["next_custom"], "history": hist})
+
+
+def rebuild_write_tail(a, st) -> int:
+    """まだ構成案の前（執筆の仕事は積んであるが書いていない）で章立てを変えたとき: 積んである執筆・仕上げ・締めの仕事を、新しい章立てで積み直す"""
+    tasks = st["tasks"]
+    i = next((k for k, x in enumerate(tasks) if x["type"] == "outline" and x["status"] != "done"), None)
+    if i is None:
+        return 0
+    j = next((k for k in range(i + 1, len(tasks)) if tasks[k]["kind"] == "done"), None)
+    if j is None:
+        return 0
+    old = tasks[i + 1:j + 1]
+    w = next((x for x in old if x["type"] == "write"), None)
+    extra = {k: v for k, v in ((w or {}).get("params") or {}).items() if k in ("redo",)}
+    wextra = {k: v for k, v in ((w or {}).get("params") or {}).items() if k in ("recut",)}
+    dn = tasks[j]
+    new = _flow_tail(a, st, write=None, finish=None, extra=extra, write_extra=wextra, done_title=dn["title"],
+                     done_params={k: v for k, v in dn["params"].items() if k not in extra})
+    tasks[i + 1:j + 1] = new
+    return len(new)
+
+
+# --- 比べる（2026-10-12 0.8.1〜。道具 compare。docs/PLAN_0_8_1.md 2-5）---
+# 2つ以上の分析を比べたレポート。新しいほうの分析の仕事の列に compare（AI）→ compare_save［service］→ 完了 を足す。
+# 置き場はレポートのフォルダの「比較/」。同じ曲の新旧なら、サービスが伸び（UGC 数・新しく出た動画・再生の伸び）を数える
+def compare_record_path(a, n) -> Path:
+    return a.outputs("versions", f"compare_r{n}.json")
+
+
+def compare_record(a, n) -> dict:
+    return pr._read_json(compare_record_path(a, n), {}) or {}
+
+
+def same_song(a, b) -> bool:
+    sa, sb = a.meta.get("song") or {}, b.meta.get("song") or {}
+    if _norm(sa.get("title") or a.title) == _norm(sb.get("title") or b.title) and \
+            (not sa.get("artist") or not sb.get("artist") or _norm(sa["artist"]) == _norm(sb["artist"])):
+        return True
+    ids = lambda m: {str(u).split("?")[0].rstrip("/").rsplit("-", 1)[-1] for u in (m.get("music_urls") or [m.get("music_url")]) if u}  # noqa: E731
+    return bool(ids(a.meta) & ids(b.meta))
+
+
+def _collected_day(b) -> str:
+    acq = b.meta.get("acquisition") or {}
+    return str(acq.get("started_at") or b.meta.get("created_at") or "")[:10]
+
+
+def analysis_facts(b, tag: str) -> str:
+    """比べる分析1つの要点（記録から。読めないものは飛ばす）"""
+    v = b.meta.get("app_version")
+    L = [f"#### {tag}: {b.song_line}（分析 ID `{b.id}`・集めた日 {_collected_day(b)}・{'UGC Analyzer ' + v if v else '版の記録なし'}）"]
+    u = ugc_total(b)
+    if u:
+        L.append(f"- UGC 数: {fmt_count(u['n'])}（{u['at']} 時点" + (f"。{ugc_parts_line(u)}" if u["parts"] else "") + "）")
+    try:
+        recs = records(b)
+    except OSError:
+        recs = {}
+    led = ledger(b)
+    if recs:
+        dates = sorted(r["date"] for r in recs.values())
+        L.append(f"- 投稿の期間: {dates[0]}〜{dates[-1]}。楽曲ページに並んだ投稿 {len(led) or len(recs)}本（手掛かりの本数。本文に書かない）")
+    labs = labels(b)
+    if labs:
+        try:
+            names = pr._taxonomy(b).get("community") or {}
+        except Exception:   # noqa: BLE001  分類軸が読めなくても key で並べる
+            names = {}
+        cnt = collections.Counter(l["community"] for l in labs.values() if l["community"] != "unknown")
+        L.append("- 界隈（ラベルの多い順）: " + "、".join(f"{short_name(names.get(k, k)) if names.get(k) else k}（{n}本）"
+                                                   for k, n in cnt.most_common(12)))
+    ph = phases(b)
+    if ph:
+        L.append("- 段階: " + " ／ ".join(f"{p['name']}（{p['start']}〜{p['end']}）: {str(p.get('summary', ''))[:90]}" for p in ph))
+    o = outline(b)
+    if o:
+        L.append(f"- レポートの主張: {o.get('thesis', '')}")
+    chs = [c_ for c_ in chapter_order(b) if b.outputs("chapters", f"{c_}.md").exists()]
+    if chs:
+        L.append("- 章（read の chapter:<id>）: " + "、".join(f"`{c_}` {first_line(b.outputs('chapters', f'{c_}.md'))[:40]}" for c_ in chs))
+    else:
+        L.append("- レポートはまだ書いていない（数字と動画だけで比べる）")
+    if recs:
+        top = sorted(recs.values(), key=lambda r: -r["plays"])[:8]
+        L.append("- 再生上位: " + "、".join(f"@{(r.get('author') or {}).get('id')}（{r['date']}、{fmt_plays(r['plays'])}再生）" for r in top))
+    return "\n".join(L)
+
+
+def growth_lines(old, new) -> str:
+    """同じ曲の新旧の差（サービスが数える）"""
+    L = [f"#### {_collected_day(old)} → {_collected_day(new)}（{old.id} → {new.id}）"]
+    uo, un = ugc_total(old), ugc_total(new)
+    if uo and un:
+        d = un["n"] - uo["n"]
+        L.append(f"- UGC 数: {fmt_count(uo['n'])}（{uo['at']}）→ {fmt_count(un['n'])}（{un['at']}）。差 {'+' if d >= 0 else ''}{fmt_count(d)}")
+    lo, ln = ledger(old), ledger(new)
+    if lo and ln:
+        old_ids = {str(x.get("video_id")) for x in lo}
+        day = _collected_day(old)
+        fresh = [x for x in ln if str(x.get("video_id")) not in old_ids and str(x.get("create_time") or "")[:10] >= day]
+        L.append(f"- 前回集めた日のあとに投稿された動画: {len(fresh)}本（楽曲ページに並んだもの）")
+        if fresh:
+            L.append("  - 再生の多いもの: " + "、".join(
+                f"@{(x.get('author') or {}).get('unique_id')}（{str(x.get('create_time'))[:10]}、{fmt_plays(x.get('plays'))}再生）"
+                for x in sorted(fresh, key=lambda x: -(x.get("plays") or 0))[:8]))
+    try:
+        ro, rn = records(old), records(new)
+    except OSError:
+        ro, rn = {}, {}
+    by_o = {str(r["video_id"]): r for r in ro.values()}
+    grow = sorted(((r["plays"] - by_o[str(r["video_id"])]["plays"], by_o[str(r["video_id"])], r) for r in rn.values()
+                   if str(r["video_id"]) in by_o and r["plays"] > by_o[str(r["video_id"])]["plays"]), key=lambda x: -x[0])
+    if grow:
+        L.append("- 再生が伸びた動画（前回 → 今回）: " + "、".join(
+            f"@{(r.get('author') or {}).get('id')}（{r['date']}）{fmt_plays(o['plays'])} → {fmt_plays(r['plays'])}" for _, o, r in grow[:10]))
+    return "\n".join(L)
+
+
+def start_compare(a, st, ids: list, instruction: str) -> dict:
+    """新しいほうの分析（a）の仕事の列に、比べるレポートの仕事を足す"""
+    n = _next_round(a, "compare")
+    pr._write_json(compare_record_path(a, n), {"round": n, "ids": list(ids), "instruction": instruction, "at": pr._now()})
+    for x in st["tasks"]:
+        if x["kind"] == "done" and x["status"] != "done":
+            x.update({"status": "done", "done_at": pr._now()})
+    st["tasks"] += [_task(st, "compare", "ai", "比べたレポートを書く", {"compare": n, "instruction": instruction}),
+                    _task(st, "compare_save", "service", "比べたレポートを置く（サービス）", {"compare": n}),
+                    _task(st, "done", "done", "完了（比べたレポート）", {"compare": n})]
+    a.log(event="compare", round=n, ids=ids)
+    return {"st": st, "round": n}
+
+
+def compare_materials(a, t) -> dict:
+    rec = compare_record(a, t["params"]["compare"])
+    bs = []
+    for x in rec.get("ids") or []:
+        try:
+            bs.append(pr.Analysis(x))
+        except pr.RunnerError:
+            continue
+    facts = "\n\n".join(analysis_facts(b, chr(65 + i)) for i, b in enumerate(bs))
+    pairs = []
+    for i, b in enumerate(bs):
+        for c_ in bs[i + 1:]:
+            if same_song(b, c_):
+                old, new = sorted((b, c_), key=_collected_day)
+                pairs.append(growth_lines(old, new))
+    return {"n": len(bs), "facts": facts or "（分析を読めなかった）",
+            "growth": "\n\n".join(pairs) or "（別の曲どうしなので、伸びの差は数えていない。各分析の数字で比べる）",
+            "instruction": rec.get("instruction") or "比べて"}
+
+
+def service_compare_save(a, t, st) -> dict:
+    n = t["params"]["compare"]
+    rec = compare_record(a, n)
+    src = a.outputs("compare", f"r{n}.md")
+    out = {"report": str(src)}
+    if REPORTS_DIR and src.exists():
+        bs = []
+        for x in rec.get("ids") or []:
+            try:
+                bs.append(pr.Analysis(x))
+            except pr.RunnerError:
+                continue
+        titles = list(dict.fromkeys(re.sub(r'[\\/:*?"<>|\s]+', "_", b.title).strip("_")[:30] for b in bs))
+        name = (f"{titles[0]}の{'と'.join(_collected_day(b) for b in bs)}" if len(titles) == 1 else "と".join(titles))[:90]
+        root = Path(REPORTS_DIR) / "比較"
+        d = root / f"{name}（{datetime.date.today().isoformat()}）"
+        k = 2
+        while d.exists() and not (d / ".compare" / f"{a.id}_r{n}").exists():
+            d = root / f"{name}（{datetime.date.today().isoformat()}）（{k}）"
+            k += 1
+        (d / ".compare").mkdir(parents=True, exist_ok=True)
+        (d / ".compare" / f"{a.id}_r{n}").write_text(a.id, encoding="utf-8")
+        shutil.copy2(src, d / "比較レポート.md")
+        rec["folder"] = str(d)
+        pr._write_json(compare_record_path(a, n), rec)
+        out["folder"] = str(d)
+    return out
+
+
+def compare_done_text(a, n) -> str:
+    from urllib.parse import quote
+    rec = compare_record(a, n)
+    md = a.outputs("compare", f"r{n}.md")
+    body = md.read_text(encoding="utf-8") if md.exists() else ""
+    gist = next((ln.strip() for ln in body.splitlines()[1:] if ln.strip() and not ln.startswith("#")), "")
+    if rec.get("folder"):
+        d = Path(rec["folder"])
+        links = ["**成果物**（この Mac に保存しました）", "",
+                 f"- フォルダ: [{d.name}](file://{quote(str(d))}/)",
+                 f"  （場所: `{str(d).replace(str(Path.home()), '~', 1)}`。UGC Analyzer のメニュー「レポートのフォルダを開く」の「比較」の中）",
+                 f"- [比較レポート.md](file://{quote(str(d / '比較レポート.md'))})"]
+    else:
+        links = ["**成果物**", "", f"- 比較レポート: {md}"]
+    return ("## 完了\n\n比べたレポートができました。ここで止まって、利用者に返答する。返答は次の 1〜2 の順:\n\n"
+            "1. 比べて分かったことを1〜2文で（下の「要点」から）\n"
+            "2. 下の「成果物」の節を、**1文字も変えずにそのまま**入れる（見出し・リンク・場所の行ごと）\n\n"
+            "### 成果物（返答の 2 にそのまま入れる）\n\n" + "\n".join(links) + "\n\n### 要点\n\n" + (gist[:400] or "（要点を読めなかった）")
+            + "\n\nこれ以上 next_task を呼ばない。")
 
 
 # --- 完成後の界隈の切り直し（2026-10-06〜。docs/RECUT_COMMUNITY.md） ---
@@ -1612,12 +2311,12 @@ TYPE_STAGE = {"axes": "axes", "confirm": "confirm", "recut": "confirm", "label":
               "outline": "outline", "outline_revise": "outline", "write": "write", "review": "write", "revise": "write",
               "finish": "finish", "finish_title": "finish"}   # ほか（assemble・verify・export・done）は "end"
 _RANK = {s: i for i, s in enumerate(REDO_STAGES + ("end",))}
-REQUEST_HEADS = ("revise", "dcomments", "recut")   # 利用者の頼みの頭（まだ受け付けていなければ、やり直しのあとに回す）
+REQUEST_HEADS = ("revise", "dcomments", "recut", "change_prep", "compare")   # 利用者の頼みの頭（まだ受け付けていなければ、やり直しのあとに回す）
 # 前の版に戻すときに入れ替えないもの（記録・渡した指示書の写し・残した版）
 VERSION_KEEP = ("history", "prompts", "_zip", "revisions", "recut", "versions", "settings_used.jsonl")
-KEPT_RE = re.compile(r"(deepen|recut|redo|revise|restore)_r(\d+)")
+KEPT_RE = re.compile(r"(deepen|recut|redo|revise|restore|change)_r(\d+)")
 VERSION_KINDS = {"first": "最初のレポート", "deepen": "界隈の掘り下げ", "recut": "界隈の切り直し", "redo": "やり直し",
-                 "revise": "直し", "restore": "前の版に戻した"}
+                 "revise": "直し", "restore": "前の版に戻した", "change": "変更（動画の足し外し・章立て）"}
 # 見込みの目安（第1版の実測。段の全部の分。2026-10-08 きゃわの通し試験）。この分析の実測（task_log の elapsed_s）があればそちら
 EST_MIN = {"axes": 6.2, "label": 6.1, "phases": 1.4, "ccomments": 8.3, "refs": 2.0, "research": 5.5, "era": 1.5, "outline": 2.1,
            "write": 10.7, "finish": 5.0, "finish_title": 0.6}
@@ -1629,8 +2328,13 @@ def stage_of(t: dict) -> str:
     return TYPE_STAGE.get(t.get("type"), "end")
 
 
-def chapter_name(ch: str) -> str:
-    return CHAPTER_TITLES.get(ch) or f"拡大経路 {ch[5:]}"
+def chapter_name(ch: str, a=None) -> str:
+    if ch in CHAPTER_TITLES:
+        return CHAPTER_TITLES[ch]
+    if str(ch).startswith("path_"):
+        return f"拡大経路 {ch[5:]}"
+    x = custom_chapters(a).get(ch) if a is not None else None
+    return x["title"] if x else str(ch)
 
 
 def redo_record_path(a, n) -> Path:
@@ -1641,10 +2345,10 @@ def redo_record(a, n) -> dict:
     return pr._read_json(redo_record_path(a, n), {}) or {}
 
 
-def redo_title(rec: dict) -> str:
+def redo_title(rec: dict, a=None) -> str:
     s = f"{STAGE_NAMES.get(rec.get('from'), '?')}からやり直し"
     if rec.get("chapters"):
-        s += "（" + "・".join(chapter_name(c_) for c_ in rec["chapters"]) + "）"
+        s += "（" + "・".join(chapter_name(c_, a) for c_ in rec["chapters"]) + "）"
     return s
 
 
@@ -1679,7 +2383,7 @@ def _run_kind(st: dict, run: list) -> str:
             return "main"
         if x["type"] == "revise":
             return "revise"
-        if x["type"] == "dcomments":
+        if x["type"] in ("dcomments", "change_prep"):
             return "deepen"
         if x["type"] == "recut":
             return "main"
@@ -1696,7 +2400,7 @@ def _redo_chapters(a, st, frm: str, chapters):
     if not chs or any(c_ in ("all", "全章", "全部") for c_ in chs):
         return None
     allc = chapter_order(a, st) if phases(a) else None
-    ok = allc or ["intro", "branch", "music", "result"]
+    ok = allc or chapter_order(a, st)
     bad = [c_ for c_ in chs if c_ not in ok and not (allc is None and re.fullmatch(r"path_P\d+", c_))]
     if bad:
         raise pr.RunnerError(f"章の id は {ok} から選んでください（受け取った: {bad}）")
@@ -1746,7 +2450,7 @@ def estimate(a, counts: dict, full: dict) -> dict:
 
 def _redo_counts(a, st, redone, write_chs, finish_chs, n_label, n_comm) -> tuple:
     c = cfg(a)
-    n_ch = len(phases(a)) + 4 if phases(a) else 7
+    n_ch = len(chapter_order(a, st)) if phases(a) else len(chapter_plan(a)) + 2
     counts, full = {}, {}
     for s in ("axes", "phases", "research", "era", "outline"):
         if s in redone:
@@ -1875,7 +2579,7 @@ def redo(a, st: dict, frm: str, chapters=None, instruction=None) -> dict:
     est = estimate(a, *_redo_counts(a, st, redone, write_chs, finish_chs, n_label, n_comm or 1))
 
     # --- 今の版を残してから、消す表で片付ける ---
-    kept = keep_version(a, "redo", n, st=snapshot, what=redo_title(rec))
+    kept = keep_version(a, "redo", n, st=snapshot, what=redo_title(rec, a))
     cleared = []
     for s in redone:
         dirs, files = STAGE_OUT[s]
@@ -1927,7 +2631,7 @@ def _redo_later(a, st, run, frm, chs, n, rec, snapshot) -> dict:
     have = {stage_of(x) for x in run}
     miss = [s for s in side if s not in have] if not st.get("redo_pending") else []
     if miss:
-        kept = keep_version(a, "redo", n, st=snapshot, what=redo_title(rec))   # 使い回していたものを作り直すので、前の版を残す
+        kept = keep_version(a, "redo", n, st=snapshot, what=redo_title(rec, a))   # 使い回していたものを作り直すので、前の版を残す
         added = _side_tasks(a, st, miss, {"redo": n})
         at = next((x for x in run if _RANK[stage_of(x)] > _RANK[frm]), None)
         tasks = st["tasks"]
@@ -1981,7 +2685,7 @@ def redo_write_note(a, ch) -> str:
 def redo_summary(a, n) -> str:
     """完了の知らせの頭: 何からやり直し、何を使い回したか（返答の 1 に使う）"""
     rec = redo_record(a, n)
-    lines = [f"#### 今回の直し（{redo_title(rec)}）"]
+    lines = [f"#### 今回の直し（{redo_title(rec, a)}）"]
     asks = [str(x) for x in [rec.get("instruction")] + list(rec.get("also") or []) if x]
     if asks:
         lines.append("- 利用者の頼み: " + " ／ ".join(f"「{x}」" for x in asks))
@@ -2009,6 +2713,8 @@ def _event_at(a, kind: str, n: int):
         return recut_record(a, n).get("at")
     if kind == "redo":
         return redo_record(a, n).get("at")
+    if kind == "change":
+        return change_record(a, n).get("at")
     return None
 
 
@@ -2043,7 +2749,10 @@ def _event_what(a, k: dict) -> str:
         return "界隈の切り直し" + (f"（{rec['note_to_user']}）" if rec.get("note_to_user") else "") + _ask_line(rec.get("instruction"))
     if kind == "redo":
         rec = redo_record(a, n)
-        return redo_title(rec) + _ask_line(rec.get("instruction"))
+        return redo_title(rec, a) + _ask_line(rec.get("instruction"))
+    if kind == "change":
+        rec = change_record(a, n)
+        return CHANGE_KINDS.get(rec.get("kind"), "変更") + _ask_line(rec.get("instruction"))
     return k["meta"].get("what") or VERSION_KINDS.get(kind, kind)
 
 
@@ -2458,6 +3167,16 @@ def outline(a):
     return pr._read_json(a.outputs("outline.json"))
 
 
+def chapter_role(a, ch) -> str:
+    """構成案の章の並びに添える、章の受け持ち"""
+    if ch in CHAPTER_TITLES:
+        return CHAPTER_TITLES[ch]
+    x = custom_chapters(a).get(ch)
+    if x:
+        return f"利用者が頼んで足した章。どんな章か: {x.get('about') or x['title']}"
+    return "拡大経路の段階"
+
+
 def outline_md(o: dict, chs: list) -> str:
     """構成案を読む形に（read の outline と、執筆の指示書に使う）"""
     by = {c_["id"]: c_ for c_ in o.get("chapters", [])}
@@ -2494,9 +3213,78 @@ def plan_block(a, ch, st) -> str:
 
 
 # --- 執筆 ---
-def chapter_order(a, st) -> list:
-    """レポートの章の並び（冒頭 → 拡大経路（段階ごと）→ 分岐点 → 音楽 → 結果）"""
-    return ["intro"] + [f"path_{p['id']}" for p in phases(a)] + REPORT_ORDER_FIXED
+# --- 章立て（2026-10-12 0.8.1〜。docs/PLAN_0_8_1.md 2-2）---
+# 利用者の頼み（道具 restructure）で、章を足す・外す・並べ替える。outputs/chapter_plan.json に章の並びを持つ
+# （"path" は拡大経路の章（段階ごと）のまとまり。足した章は id c1… と題（title）・どんな章か（about））。表が無ければ今までの並び。
+# 外した章のファイルは消さない（前の版に戻すと戻る）
+CHAPTER_PLAN = "chapter_plan.json"
+DEFAULT_PLAN = ("intro", "path", "branch", "music", "result")
+
+
+def chapter_plan(a) -> list:
+    """章立て [{"id": …（足した章は "title"・"about" も）}…]。表が無ければ今までの並び"""
+    got = pr._read_json(a.outputs(CHAPTER_PLAN), {}) or {}
+    items = [dict(x) for x in got.get("items") or [] if isinstance(x, dict) and x.get("id")]
+    return items or [{"id": x} for x in DEFAULT_PLAN]
+
+
+def custom_chapters(a) -> dict:
+    """利用者が足した章 {id: {"id", "title", "about"}}"""
+    return {x["id"]: x for x in chapter_plan(a) if x.get("title")}
+
+
+def chapter_order(a, st=None) -> list:
+    """レポートの章の並び（既定は 冒頭 → 拡大経路（段階ごと）→ 分岐点 → 音楽 → 結果。利用者が章立てを変えていれば、その並び）"""
+    out = []
+    for x in chapter_plan(a):
+        if x["id"] == "path":
+            out += [f"path_{p['id']}" for p in phases(a)]
+        else:
+            out.append(x["id"])
+    return out
+
+
+NUM_HEAD_RE = re.compile(r"^## (\d+)\.\s*")
+
+
+def renumber(parts: list) -> list:
+    """組み立てで `## N.` の番号を、出てくる順に振り直す（章立てを変えると番号が飛ぶ・重なるため）。
+    足した章（id c1…）は最初の `## ` の見出しにも番号を付ける。parts は [(章の id, 本文)]、戻り値は本文の列。
+    既定の章立てなら、番号は今までと同じ（拡大経路 1・分岐点 2・音楽 3〜5・結果 6〜8・付録 9）"""
+    n = 0
+    out = []
+    for ch, text in parts:
+        lines = text.split("\n")
+        custom = bool(re.fullmatch(r"c\d+", str(ch)))
+        for i, line in enumerate(lines):
+            m = NUM_HEAD_RE.match(line)
+            if m:
+                n += 1
+                lines[i] = f"## {n}. " + line[m.end():]
+            elif custom and line.startswith("## "):
+                n += 1
+                lines[i] = f"## {n}. " + line[3:]
+                custom = False
+            if m:
+                custom = False
+        out.append("\n".join(lines))
+    return out
+
+
+def chapters_listing(a) -> str:
+    """read の chapters: 今の章立ての順に、章の id と見出し。章立てから外した章（ファイルは残っている）も"""
+    order = chapter_order(a)
+    have = {p.stem for p in a.outputs("chapters").glob("*.md")} if a.outputs("chapters").is_dir() else set()
+    lines = ["章の名前（今のレポートの順。chapter:<名前> で本文、note_chapter:<名前> で note 用の仕上げを読む）:"]
+    for ch in order:
+        lines.append(f"- {ch}: {first_line(a.outputs('chapters', f'{ch}.md')) if ch in have else '（まだ書いていない）'}"
+                     + (f"（利用者が足した章「{chapter_name(ch, a)}」）" if ch in custom_chapters(a) else ""))
+    gone = sorted(have - set(order))
+    if gone:
+        lines.append("章立てから外した章（レポートには入らない。restructure の order・add で戻せる）: " + "、".join(gone))
+    lines.append("章立てを変える（restructure）ときの id: intro・path（拡大経路の章のまとまり）・branch・music・result・足した章は c1… "
+                 f"（今の並び: {' → '.join(x['id'] for x in chapter_plan(a))}）")
+    return "\n".join(lines)
 
 
 def first_line(p: Path) -> str:
@@ -2516,7 +3304,9 @@ def heading_of(a, ch: str) -> str:
     if ch.startswith("path_"):
         p = ph[ch[5:]]
         n = list(ph).index(p["id"]) + 1
-        return f"### ({n}) {p['name']}"   # 期間は見出しのかっこでなく、次の行に（2026-10-06 ユーザー「かっこ書きで注釈はいけてない。端的 is 至高」）
+        return f"### ({n}) {p['name']}"
+    if ch in custom_chapters(a):   # 利用者が足した章（番号は組み立てで振る）
+        return f"## {custom_chapters(a)[ch]['title']}"   # 期間は見出しのかっこでなく、次の行に（2026-10-06 ユーザー「かっこ書きで注釈はいけてない。端的 is 至高」）
     return {"branch": "### ここまでの拡大経路をまとめると", "music": "## 3. 楽曲の音楽的特徴",
             "result": "## 6. バズった結果得られたもの"}[ch]
 
@@ -2661,6 +3451,21 @@ def write_prompt(a, t, base, st):
                 "UGC 数は材料の「この曲の UGC 数」を使う。こちらが集めた動画の本数は書かない（方法に触れるなら、"
                 "「楽曲ページの投稿から、広がり方の手掛かりになるものを選んで調べた」のように本数を出さずに一言）。")
         heading, length = heading_of(a, ch), "1,000〜2,000字"
+    elif ch in custom_chapters(a):   # 利用者が頼んで足した章（2026-10-12 0.8.1〜。道具 restructure）
+        x = custom_chapters(a)[ch]
+        materials = (common + "\n\n" + intro_materials(a) + "\n\n" +
+                     research_block(a, ("song", "outside", "people"), "ウェブで調べたこと（曲の情報・TikTok の外の指標・要のアカウントの素性）") +
+                     "\n\n界隈ごとのコメント分析は read の `synthesis`、拡散経路の下書きは `pathway`、書き終えたほかの章は `chapter:<id>`"
+                     "（章の一覧は `chapters`）。時代背景の材料は `era`。")
+        cat += [pr._catalog_line("synthesis", "界隈ごとのコメント分析"), pr._catalog_line("pathway", "拡散経路の下書き"),
+                pr._catalog_line("chapter:<id>", "書き終えたほかの章（同じ話を繰り返さないために読む）")]
+        if a.outputs("era.md").exists():
+            cat.append(pr._catalog_line("era", "時代背景の材料"))
+        spec = (f"利用者が頼んで足した章「{x['title']}」を書く。どんな章か（利用者の言葉）: {x.get('about') or x['title']}\n"
+                f"見出し `## {x['title']}` で始め（番号はサービスが振る）、構成案のこの章の計画（主張と根拠）を書く。小見出しは `###` 以下。"
+                "利用者の言葉に一番に答える。ほかの章と同じ話を繰り返さない（要るなら一言で触れて、その章を指す）。"
+                "観測（データで言えること）と推測を分けて書く。")
+        heading, length = heading_of(a, ch), "1,500〜4,000字"
     else:
         raise pr.RunnerError(f"知らない章です: {ch}")
     if t["params"].get("recut"):     # 界隈の切り直しのあとの書き直し（前の版の利用者の考察を落とさない）
@@ -2673,7 +3478,12 @@ def write_prompt(a, t, base, st):
         if note:
             materials += "\n\n" + note
             cat.append(pr._catalog_line(f"prev:{ch}", "やり直す前の版のこの章"))
-    if t["params"].get("rewrite") and t["params"].get("community"):   # 界隈の掘り下げの書き直し（前の原稿を生かす）
+    have = a.outputs("chapters", f"{ch}.md").exists()
+    if t["params"].get("rewrite") and not have:   # 書き直しの頼みで、まだ無い章（章立てを変えて足した章）: 新しく書く
+        why = t["params"].get("why") or ""
+        materials += ("\n\n#### この章を書くきっかけ（利用者の頼み）\n" + str(t["params"].get("instruction") or "")
+                      + (f"\n- 構成案の直しで決めたこと: {why}" if why else ""))
+    if t["params"].get("rewrite") and have and t["params"].get("community"):   # 界隈の掘り下げの書き直し（前の原稿を生かす）
         k = t["params"].get("community")
         kb = f"この章は書き終えてある。文体・言い回しは前の原稿に合わせる。用語集（`kb:glossary`）{style[2]}は、必要なら read で読む。"
         spec = (f"**書き直し（界隈 `{k}` の掘り下げ）**: 前の原稿を read の `chapter:{ch}` で読み、次の点を直した**章の全文**を出す: "
@@ -2684,7 +3494,7 @@ def write_prompt(a, t, base, st):
         cat = [pr._catalog_line(f"chapter:{ch}", "この章の前の原稿"),
                pr._catalog_line("synthesis", "界隈ごとのコメント分析（掘り下げた界隈は書き直したもの）")] + \
             [x for x in cat if "synthesis" not in x]
-    elif t["params"].get("rewrite"):   # 利用者の直し（revise）で、章をまるごと書き直す（2026-10-12〜。複数の章・全章の直し）
+    elif t["params"].get("rewrite") and have:   # 利用者の直し（revise）・変更の回で、章をまるごと書き直す（2026-10-12〜。複数の章・全章の直し）
         kb = f"この章は書き終えてある。文体・言い回しは前の原稿に合わせる。用語集（`kb:glossary`）{style[2]}は、必要なら read で読む。"
         spec = (f"**書き直し（利用者の直しの頼み）**: 前の原稿を read の `chapter:{ch}` で読み、次の点を直した**章の全文**を出す: "
                 f"{t['params'].get('why') or '利用者の頼みに合わせる'}\n"
@@ -2693,7 +3503,7 @@ def write_prompt(a, t, base, st):
                 "（データで言えないことは「〜と見ています」の形で）。\n\n"
                 "章の書き方の決まり（最初に書いたときと同じ）: " + spec)
         cat = [pr._catalog_line(f"chapter:{ch}", "この章の前の原稿")] + cat
-    title = CHAPTER_TITLES.get(ch) or f"拡大経路 {phmap[ch[5:]]['name']}"
+    title = CHAPTER_TITLES.get(ch) or (f"拡大経路 {phmap[ch[5:]]['name']}" if ch.startswith("path_") else chapter_name(ch, a))
     text = pr._fill(tpl("write.md"), {**base, "chapter_title": title, "i": t["params"]["i"], "n": t["params"]["n"],
                                       "kb_block": kb, "chapter_spec": spec, "materials": materials, "heading": heading,
                                       "plan": plan_block(a, ch, st),
@@ -2744,7 +3554,7 @@ def result_materials(a) -> str:
     by_vid = {r["video_id"]: r for r in recs.values()}
     off = [by_vid[v] for v, p in pl.items() if v in by_vid and re.search(r"artist|official", p.get("reasons", ""))]
     top = sorted(recs.values(), key=lambda r: -r["plays"])[:10]
-    weekly = open(a.derived("weekly.tsv"), encoding="utf-8").read().splitlines()[1:]
+    weekly = weekly_lines(a)
     return ("#### 本人・公式（プールの判定: 音源の作者名に一致するアカウント・公式企画のタグを使った認証アカウント）\n" +
             ("\n".join(f"- {vline(r)}" for r in sorted(off, key=lambda r: r['date'])) or "（見つからなかった）") +
             "\n\n#### 再生上位10本\n" + "\n".join(f"- {vline(r)}" for r in top) +
@@ -3278,7 +4088,9 @@ def _accept(a, t: dict, raw: str, st: dict) -> list:
         if errs:
             return errs
         if t["params"].get("rewrite"):
-            tag = (f"deepen-r{t['params'].get('round')}" if t["params"].get("community") else f"revise-r{t['params'].get('revise')}")
+            tag = (f"change-r{t['params']['change']}" if t["params"].get("change") else
+                   f"deepen-r{t['params'].get('round')}" if t["params"].get("community") or t["params"].get("round") else
+                   f"revise-r{t['params'].get('revise')}")
             keep_history(a, a.outputs("chapters", f"{ch}.md"), tag)
         pr._write_text(a.outputs("chapters", f"{ch}.md"), pr._strip_fence(raw) + "\n")
         return []
@@ -3307,6 +4119,21 @@ def _accept(a, t: dict, raw: str, st: dict) -> list:
 
     if typ == "revise":
         return accept_revise(a, t, raw, st)
+
+    if typ == "compare":
+        md = pr._strip_fence(raw)
+        errs = []
+        if not md.lstrip().startswith("# "):
+            errs.append("1行目は `# 題` にしてください")
+        if len(md) < 600:
+            errs.append("短すぎます（比べたことを、数字と動画で書く）")
+        bad = sorted({m.group(0) for m in INTERNAL_RE.finditer(md)})
+        if bad:
+            errs.append(f"作業の印が本文にあります: {bad[:5]}（seq・cid・段階の ID は書かない。動画は「@投稿者（日付、再生数）」）")
+        if errs:
+            return errs
+        pr._write_text(a.outputs("compare", f"r{t['params']['compare']}.md"), md + "\n")
+        return []
 
     return [f"この仕事（{typ}）には提出は要りません"]
 
@@ -3410,8 +4237,9 @@ def keep_history(a, p: Path, tag: str) -> None:
 
 
 def _write_order(a) -> list:
-    """執筆の順（service_plan と同じ。冒頭はまとめの章を読んでから最後に）"""
-    return [f"path_{p['id']}" for p in phases(a)] + ["branch", "music", "result", "intro"]
+    """執筆の順（レポートの順。ただし冒頭はまとめの章を読んでから最後に）"""
+    order = chapter_order(a)
+    return [c_ for c_ in order if c_ != "intro"] + (["intro"] if "intro" in order else [])
 
 
 def _rewrite_tasks(a, st, t, items: list, label: str, extra: dict | None = None) -> list:
@@ -3420,7 +4248,12 @@ def _rewrite_tasks(a, st, t, items: list, label: str, extra: dict | None = None)
     pm = t["params"]
     order = _write_order(a)
     items = sorted(items, key=lambda x: order.index(x["chapter"]))
-    base = extra if extra is not None else {"community": pm["community"], "round": pm["round"], "instruction": pm["instruction"]}
+    if extra is not None:
+        base = extra
+    elif pm.get("generic"):   # 変更の回（汎用の書き直し。界隈の掘り下げの書き直しの文にしない）
+        base = {k: pm[k] for k in ("change", "round", "instruction") if k in pm}
+    else:
+        base = {"community": pm["community"], "round": pm["round"], "instruction": pm["instruction"]}
     return [_task(st, "write", "ai", f"{label}（{i}/{len(items)}: {chapter_name(x['chapter'])}）",
                   {"chapter": x["chapter"], "i": i, "n": len(items), "first": False, "rewrite": True, "why": x.get("why", ""), **base})
             for i, x in enumerate(items, 1)]
@@ -3492,11 +4325,20 @@ def accept_outline_revise(a, t, raw, st) -> list:
         errs.append(f"計画を直した章は rewrite にも入れてください: {miss}")
     if obj.get("thesis_changed") and "intro" not in ids:
         errs.append("記事全体の主張を変えたなら、rewrite に intro を入れてください")
+    pm = t["params"]
+    if pm.get("generic"):   # 変更の回: 決まりの章（足した章・冒頭・外した動画を名指しした章）は必ず書き直す。まだ無い章は計画も
+        must = [c_ for c_ in chs if c_ in set(pm.get("must") or []) or not a.outputs("chapters", f"{c_}.md").exists()]
+        miss_rw = [c_ for c_ in must if c_ not in ids]
+        if miss_rw:
+            errs.append(f"rewrite に次の章を入れてください: {miss_rw}（足した章・章立てを予告する冒頭・外した動画を名指ししている章）")
+        unplanned = [c_ for c_ in chs if not a.outputs("chapters", f"{c_}.md").exists() and c_ not in {x.get("id") for x in plans}]
+        if unplanned:
+            errs.append(f"まだ書いていない章は chapters に計画（役割・主張と根拠）を入れてください: {unplanned}")
     if errs:
         return errs[:20]
-    pm = t["params"]
+    key, rn = round_of(pm)
     old = outline(a) or {"thesis": "", "chapters": []}
-    keep_history(a, a.outputs("outline.json"), f"deepen-r{pm['round']}")
+    keep_history(a, a.outputs("outline.json"), f"{'change' if key == 'change' else 'deepen'}-r{rn}")
     by = {c_["id"]: c_ for c_ in plans}
     have = {c_.get("id") for c_ in old.get("chapters") or []}
     o = {**old, "thesis": str(obj["thesis"]).strip(),
@@ -3506,11 +4348,14 @@ def accept_outline_revise(a, t, raw, st) -> list:
     insert_after(st, t, _rewrite_tasks(a, st, t, rw, "書き直し"))
     changed = [{"chapter": x["chapter"], "why": x.get("why", "")} for x in rw]
     for x in st["tasks"]:
-        if x["type"] == "review" and x["params"].get("round") == pm["round"] and x["status"] != "done":
+        if x["type"] == "review" and round_of(x["params"]) == (key, rn) and x["status"] != "done":
             x["params"].update({"changed": changed, "thesis_changed": bool(obj.get("thesis_changed"))})
-    pr._write_json(deepen_record(a, pm["round"]),
-                   {"community": pm["community"], "instruction": pm["instruction"], "at": pr._now(),
-                    "outline_note": obj.get("note_to_user"), "thesis_changed": bool(obj.get("thesis_changed")), "changed": changed})
+    rp = plan_record_path(a, pm)
+    rec = pr._read_json(rp, {}) or {}
+    rec.update({"community": pm.get("community") or "、".join(pm.get("communities") or []), "instruction": pm.get("instruction", ""),
+                "at": pr._now(), "outline_note": obj.get("note_to_user"), "thesis_changed": bool(obj.get("thesis_changed")),
+                "changed": changed})
+    pr._write_json(rp, rec)
     return []
 
 
@@ -3537,14 +4382,15 @@ def accept_review(a, t, raw, st) -> list:
     new = _rewrite_tasks(a, st, t, [{"chapter": x["chapter"], "why": "通し読みで見つけたずれ: " + x["what"]} for x in fixes],
                          "通し読みの直し") if fixes else []
     fin = sorted(set(x["chapter"] for x in pm.get("changed") or []) | set(ids), key=chs.index)
-    new += [_task(st, "finish", "ai", f"note 用に仕上げ直す（{i}/{len(fin)}: {CHAPTER_TITLES.get(ch) or '拡大経路 ' + ch[5:]}）",
+    new += [_task(st, "finish", "ai", f"note 用に仕上げ直す（{i}/{len(fin)}: {chapter_name(ch, a)}）",
                   {"chapter": ch, "i": i, "n": len(fin)}) for i, ch in enumerate(fin, 1)]
     if pm.get("thesis_changed"):
         new.append(_task(st, "finish_title", "ai", "題名と確認メモ（記事全体の主張を変えたので）"))
     insert_after(st, t, new)
-    rec = pr._read_json(deepen_record(a, pm["round"]), {}) or {}
+    rp = plan_record_path(a, pm)
+    rec = pr._read_json(rp, {}) or {}
     rec.update({"review_note": obj.get("note_to_user"), "fixes": fixes, "changed_all": fin, "reviewed_at": pr._now()})
-    pr._write_json(deepen_record(a, pm["round"]), rec)
+    pr._write_json(rp, rec)
     return []
 
 
@@ -3643,6 +4489,10 @@ def run_service(a, t: dict, st: dict) -> dict:
         return service_plan(a, t, st)
     if typ == "recut_check":
         return service_recut_check(a, t, st)
+    if typ == "change_prep":
+        return service_change_prep(a, t, st)
+    if typ == "compare_save":
+        return service_compare_save(a, t, st)
     if typ == "assemble":
         return service_assemble(a, st)
     if typ == "verify":
@@ -3726,12 +4576,12 @@ def service_reps(a, t: dict, st: dict) -> dict:
     comms = sorted({labs[s]["community"] for s in reps_sorted}, key=lambda k: min(recs[s]["date"] for s in reps_sorted if labs[s]["community"] == k))
     for i, k in enumerate(comms, 1):
         new.append(_task(st, "synthesis", "ai", f"界隈ごとの統合（{i}/{len(comms)}: {k}）", {"community": k, "i": i, "n": len(comms)}))
-    chs = [f"path_{p['id']}" for p in ph] + ["branch", "music", "result", "intro"]
+    chs = _write_order(a)
     for i, ch in enumerate(chs, 1):
         new.append(_task(st, "write", "ai", f"執筆（{i}/{len(chs)}: {CHAPTER_TITLES.get(ch) or '拡大経路 ' + ch[5:]}）",
                          {"chapter": ch, "i": i, "n": len(chs), "first": i == 1}))
     new.append(_task(st, "assemble", "service", "レポートの組み立て（サービス）"))
-    order = ["intro"] + [f"path_{p['id']}" for p in ph] + REPORT_ORDER_FIXED
+    order = chapter_order(a)
     for i, ch in enumerate(order, 1):
         new.append(_task(st, "finish", "ai", f"note 用に仕上げる（{i}/{len(order)}: {CHAPTER_TITLES.get(ch) or '拡大経路 ' + ch[5:]}）",
                          {"chapter": ch, "i": i, "n": len(order)}))
@@ -3786,7 +4636,6 @@ def _flow_tail(a, st, comms=(), refs=False, research=False, era=False, outline=F
     """コメント分析から完了までの仕事の列（service_plan と、やり直し redo が足す）。write・finish は章の id の列（None なら全章、[] なら無し）。
     extra は全部の仕事の params に足すもの（やり直しの回 {"redo": n}）。tail=False なら組み立て・検算・完了を付けない"""
     c = cfg(a)
-    ph = phases(a)
     extra = extra or {}
     new = []
     for i, k in enumerate(comms, 1):
@@ -3801,17 +4650,17 @@ def _flow_tail(a, st, comms=(), refs=False, research=False, era=False, outline=F
         new.append(_task(st, "era", "ai", "時代背景の材料（似た位置づけの曲の記事と、同じ時期の流行を読む）", dict(extra)))
     if outline:
         new.append(_task(st, "outline", "ai", "構成案（記事全体の主張と、章ごとの主張・根拠）", dict(extra)))
-    chs = [ch for ch in [f"path_{p['id']}" for p in ph] + ["branch", "music", "result", "intro"] if write is None or ch in write]
+    chs = [ch for ch in _write_order(a) if write is None or ch in write]
     for i, ch in enumerate(chs, 1):
-        new.append(_task(st, "write", "ai", f"執筆（{i}/{len(chs)}: {chapter_name(ch)}）",
+        new.append(_task(st, "write", "ai", f"執筆（{i}/{len(chs)}: {chapter_name(ch, a)}）",
                          {"chapter": ch, "i": i, "n": len(chs), "first": i == 1, **(write_extra or {}), **extra}))
     if not tail:
         return new
     if chs:
         new.append(_task(st, "assemble", "service", "レポートの組み立て（サービス）", dict(extra)))
-    order = [ch for ch in ["intro"] + [f"path_{p['id']}" for p in ph] + REPORT_ORDER_FIXED if finish is None or ch in finish]
+    order = [ch for ch in chapter_order(a) if finish is None or ch in finish]
     for i, ch in enumerate(order, 1):
-        new.append(_task(st, "finish", "ai", f"note 用に仕上げる（{i}/{len(order)}: {chapter_name(ch)}）",
+        new.append(_task(st, "finish", "ai", f"note 用に仕上げる（{i}/{len(order)}: {chapter_name(ch, a)}）",
                          {"chapter": ch, "i": i, "n": len(order), **extra}))
     if title:
         new.append(_task(st, "finish_title", "ai", "題名と確認メモ", dict(extra)))
@@ -3928,13 +4777,13 @@ def service_assemble(a, st: dict) -> dict:
     for ch in order:
         p = a.outputs("chapters", f"{ch}.md")
         if p.exists():
-            parts.append(p.read_text(encoding="utf-8").strip())
-    parts.append(appendix(a).strip())
-    pr._write_text(a.outputs("REPORT.md"), "\n\n".join(parts) + "\n")
+            parts.append((ch, p.read_text(encoding="utf-8").strip()))
+    parts.append(("appendix", appendix(a).strip()))
+    pr._write_text(a.outputs("REPORT.md"), "\n\n".join(renumber(parts)) + "\n")
     notes = [a.outputs("note_chapters", f"{ch}.md") for ch in order]
     if all(p.exists() for p in notes):
         meta = pr._read_json(a.outputs("note_meta.json"), {}) or {}
-        body = "\n\n".join(p.read_text(encoding="utf-8").strip() for p in notes)
+        body = "\n\n".join(renumber([(ch, p.read_text(encoding="utf-8").strip()) for ch, p in zip(order, notes)]))
         title = meta.get("title")
         if title and not body.lstrip().startswith("# "):
             body = f"# {title}\n\n{body}"
@@ -4252,6 +5101,7 @@ STYLE_OVERRIDE = """> **UGC Analyzer の決まり（この文体ガイドより�
 > 次は書かない: 挨拶の名乗り（「こんにちは、山本です！」）・執筆クレジット（「執筆：…」）・一人称の「山本」「弊社」「当社」（要るときは「筆者」。
 > 「弊社では【イノベーター理論】を用いて」は「ここでは【イノベーター理論】を用いて」）・【山本の気づき・こばなし】（【補足】に）・
 > 【お仕事大募集中！】・「コンサル依頼募集中！」・「今回の執筆は『〇〇さん』でした」・題名の号数「[No.— - YY/MM-K]」。
+> 一人称（僕・私・筆者など）は、利用者の設定（文体）に指定があればそれに従う。
 > 冒頭は「今回は『曲名 / アーティスト』についてのレポートになります。」から、締めは「『曲名』の分析は以上になります！」と読者への1文まで。
 > 見出しにかっこ書きの注釈を付けない（「楽曲の音楽的特徴（内的要因）」→「楽曲の音楽的特徴」、「【この界隈に使われた理由（インサイト）】」→「【使われた理由】」）。端的に。
 

@@ -20,7 +20,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 USERS_DIR = Path(os.environ.get("UGC_USERS_DIR", BASE_DIR / "output" / "users"))
-MAX_CHARS = 400
+MAX_CHARS = 2000   # 1項目の字数（2026-10-12 400 → 2000。docs/PLAN_0_8.md 2-3 で広げるはずがやり忘れていた。docs/PLAN_0_8_1.md）
 ITEMS = {"style": "文体", "focus": "レポートの重点", "community_policy": "界隈の分け方の方針", "comment_lens": "コメント分析の観点"}
 DEFAULT = {"style": {"use_guide": True, "extra": ""}, "focus": "", "community_policy": "", "comment_lens": ""}
 

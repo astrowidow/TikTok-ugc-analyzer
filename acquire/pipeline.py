@@ -369,7 +369,8 @@ class Run:
         return [u for u in self.music_urls() if u not in fan] or self.music_urls()
 
     def link_sources(self) -> dict:
-        """動画 ID → どの楽曲ページ（1〜）のグリッドで見つけたか（コメントは見つけたページのグリッドから取る）"""
+        """動画 ID → どの楽曲ページ（1〜）のグリッドで見つけたか（コメントは見つけたページのグリッドから取る）。
+        0 は台帳に無い、利用者が足した動画（0.8.1。コメントはその動画の音源のページから。comment_pages）"""
         out = {}
         p = self.p("raw", "grid_links.jsonl")
         if p.exists():
@@ -378,8 +379,63 @@ class Run:
                     g = json.loads(line)
                 except ValueError:
                     continue
-                out[str(g.get("video_id"))] = int(g.get("source") or 1)
+                out[str(g.get("video_id"))] = source_of(g)
         return out
+
+    def user_videos(self) -> list:
+        """利用者が足した動画（analysis.json の user_videos: [{video_id, url}]。道具 videos の add が取得の前に書く）。ID が分からないものは除く"""
+        out, seen = [], set()
+        for t in self.meta.get("user_videos") or []:
+            if not isinstance(t, dict):
+                continue
+            vid = str(t.get("video_id") or "").strip() or video_id_of(t.get("url"))
+            if vid and vid not in seen:
+                seen.add(vid)
+                out.append({"video_id": vid, "url": video_url(t.get("url"), vid)})
+        return out
+
+    def add_user_videos(self, targets: list) -> dict:
+        """利用者が足した動画を一覧（raw/grid_links.jsonl）に足す（まだ無いものだけ。why は USER_WHY）。
+        台帳（raw/ledger.jsonl）にあれば見つけたページ・再生数・URL はそこから（台帳の read にも印を付ける）。
+        無ければ source 0（台帳には足さない。台帳は楽曲ページのグリッドで見た全動画なので）。足したら grid_links.csv も書き直す"""
+        out = self.p("raw", "grid_links.jsonl")
+        rows = [json.loads(ln) for ln in open(out, encoding="utf-8") if ln.strip()] if out.exists() else []
+        have = {str(g.get("video_id")) for g in rows}
+        led_p = self.p("raw", "ledger.jsonl")
+        led = [json.loads(ln) for ln in open(led_p, encoding="utf-8") if ln.strip()] if led_p.exists() else []
+        by_led = {str(r.get("video_id")): r for r in led}
+        order = max([int(g.get("order") or 0) for g in rows] + [int(r.get("order") or 0) for r in led] + [-1]) + 1
+        added, already, outside = [], [], []
+        for t in targets or []:
+            vid = str(t.get("video_id") or "").strip() or video_id_of(t.get("url"))
+            if not vid or vid in have:
+                if vid:
+                    already.append(vid)
+                continue
+            have.add(vid)
+            r = by_led.get(vid)
+            if r:
+                url, kind, src, plays, o = r.get("url"), r.get("type") or "Video", int(r.get("source") or 1), r.get("plays"), r.get("order")
+                r["read"] = r.get("read") or USER_WHY
+            else:
+                url = video_url(t.get("url"), vid)
+                kind, src, plays, o = ("Photo" if "/photo/" in url else "Video"), 0, None, order
+                order += 1
+                outside.append(vid)
+            rows.append({"url": url, "video_id": vid, "order": o, "type": kind, "source": src, "plays": plays, "why": USER_WHY,
+                         "collected_at": now()})
+            added.append(vid)
+        if added:
+            with open(out, "w", encoding="utf-8") as f:
+                for g in rows:
+                    f.write(json.dumps(g, ensure_ascii=False) + "\n")
+            if len(outside) < len(added):   # 台帳の動画に「詳しく読む」の印を付けた
+                with open(led_p, "w", encoding="utf-8") as f:
+                    for r in led:
+                        f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        if out.exists():
+            self._write_links_csv()
+        return {"added": added, "already": already, "outside_ledger": outside}
 
     def step_list(self):
         """一覧の段: 楽曲ページを開き直さずに続けてスクロールし（未ログイン・ヘッドレス・END キー）、グリッドが読み込む一覧データを全部拾って
@@ -389,9 +445,11 @@ class Run:
         s = self.settings()
         out = self.p("raw", "grid_links.jsonl")
         if out.exists() and out.stat().st_size:
+            uv = self.user_videos()   # 一覧を書いたあとで足された動画（0.8.1）
+            users = self.add_user_videos(uv) if uv else {"added": []}
             n = sum(1 for _ in open(out, encoding="utf-8"))
             self._write_links_csv()
-            return {"links": n, "resumed": True}
+            return {"links": n, "resumed": True, **({"user_videos": users} if users["added"] else {})}
         self.lock("一覧")
         import scraper
         from selenium.webdriver.common.by import By
@@ -479,6 +537,12 @@ class Run:
             pg["ledger"] = sum(1 for r in seen.values() if r["source"] == k)
         song = self.meta.get("song") or {}
         why = choose_to_read(list(seen.values()), urls, s, song.get("artist") or (pages[0].get("creator") or ""))
+        # 利用者が足した動画（analysis.json の user_videos。0.8.1）は必ず詳しく読む（枠の外）。台帳にあれば選んだ印を付け
+        # （もう選んでいればその理由のまま）、台帳に無ければ一覧にだけ足す（下の add_user_videos。source 0）。一覧を集めている間に足されても拾う
+        users = self.user_videos()
+        for t in users:
+            if t["video_id"] in seen and t["video_id"] not in why:
+                why[t["video_id"]] = USER_WHY
         quotas = read_quotas([sum((r.get("plays") or 0) for r in seen.values() if r["source"] == k)
                               for k in range(1, len(pages) + 1)], s)
         for k, pg in enumerate(pages, 1):
@@ -495,14 +559,20 @@ class Run:
                     f.write(json.dumps({"url": r["url"], "video_id": v, "order": r["order"], "type": r["type"],
                                         "source": r["source"], "plays": r.get("plays"), "why": why[v],
                                         "collected_at": r["collected_at"]}, ensure_ascii=False) + "\n")
+        rest = [t for t in users if t["video_id"] not in seen]
+        outside = self.add_user_videos(rest)["outside_ledger"] if rest else []
         self._write_links_csv()
         reasons = collections.Counter(why.values())
-        self.log(f"    台帳 {len(seen)}本から、詳しく読む動画 {len(why)}本（枠 {'・'.join(map(str, quotas))}本。"
+        if outside:
+            reasons[USER_WHY] += len(outside)
+        self.log(f"    台帳 {len(seen)}本から、詳しく読む動画 {len(why) + len(outside)}本（枠 {'・'.join(map(str, quotas))}本。"
                  + "・".join(f"{k} {n}" for k, n in reasons.most_common()) + "）")
         counts = [p.get("video_count") for p in pages]
-        res = {"links": len(why), "ledger": len(seen), "quota": quotas, "reasons": dict(reasons),
+        res = {"links": len(why) + len(outside), "ledger": len(seen), "quota": quotas, "reasons": dict(reasons),
                "ugc_total": sum(c for c in counts if c) or None,
                "release": iso_time(release_time(self.release_urls())), "dropped_before_release": dropped}
+        if users:
+            res["user_videos"] = {"n": len(users), "outside_ledger": len(outside)}
         if len(pages) > 1:
             res["pages"] = [{"url": p["url"], "links": p["links"], "ledger": p["ledger"], "quota": p["quota"], "ugc": p.get("video_count")}
                             for p in pages]
@@ -636,6 +706,35 @@ class Run:
                             "--out", self.p("derived", "llm_input"))
         return {"prep_sample": out1.splitlines()[-1:], "build_llm_input": out2.splitlines()[-1:]}
 
+    def derive_keep_seqs(self, tag: str) -> dict:
+        """集計と AI の入力を、通し番号（seq）を変えずに作り直す（取得のあとに動画を足したとき。acquire/deepen.py の add。0.8.1）。
+        前からある動画は前の番号のまま、新しい動画は前の最大の次から日付順（prep_sample.py の --keep-seqs）。分類の見本（sample_taxonomy.md）は前のまま、
+        ラベルを付ける動画（sample_label.jsonl）には新しい動画を足す（サムネの一覧に載せるため）。ラベル・章・コメントの整形は seq で引くので、番号は動かさない。
+        作り直す前の derived/ は derived/_before_<tag>/ に控える（続きから回したときは控えを上書きしない）。作り直しが失敗したら控えから戻す"""
+        import shutil
+        der = self.p("derived")
+        if not (der / "videos.jsonl").exists():   # まだ一度も作っていない（番号が無い）: ふつうに作る
+            return self.step_derive()
+        bak = der / f"_before_{tag}"
+        if not bak.exists():
+            tmp = der / f"_before_{tag}.tmp"
+            if tmp.exists():   # 前の控えの途中で止まった残り
+                shutil.rmtree(tmp)
+            shutil.copytree(der, tmp, ignore=lambda src, names: [x for x in names if x.startswith("_before_")]
+                            if Path(src) == der else [])
+            os.replace(tmp, bak)
+        led = self.p("raw", "ledger.jsonl")
+        try:
+            out1 = self._script("analysis/prep_sample.py", self.p("derived", "list.csv"), der,
+                                *(["--ledger", led] if led.exists() else []), "--keep-seqs", bak / "videos.jsonl")
+            out2 = self._script("analysis/build_llm_input.py", der, "--enriched", self.p("raw", "enriched.jsonl"),
+                                "--out", self.p("derived", "llm_input"))
+        except Exception:
+            shutil.copytree(bak, der, dirs_exist_ok=True)
+            self.log(f"    作り直しが失敗したので、derived/ を控え（{bak.name}）から戻しました")
+            raise
+        return {"prep_sample": out1.splitlines()[-1:], "build_llm_input": out2.splitlines()[-1:], "kept": bak.name}
+
     def step_pool(self):
         s = self.settings()
         out = self.p("derived", "pool.tsv")
@@ -654,21 +753,44 @@ class Run:
 
     def comment_pages(self) -> list:
         """コメントを取る楽曲ページごとの (URL, プール, 要約, 差し替えの記録)。コメントは楽曲ページのグリッドから動画へ移って取るので、
-        動画を見つけたページから取る。楽曲ページが1つなら前と同じファイル"""
+        動画を見つけたページから取る。楽曲ページが1つなら前と同じファイル。
+        台帳に無い動画（利用者が足した動画。0.8.1）は、その動画の音源のページから: ほかの音源なら、そのページを最後に足す
+        （プール derived/pool_m<音源の id>.tsv・要約 comments_summary_m<音源の id>.json）"""
         urls = self.music_urls()
         pool = self.p("derived", "pool.tsv")
-        if len(urls) <= 1:
-            return [(urls[0], pool, self.p("fetch_log", "comments_summary.json"), self.p("fetch_log", "substitutions.tsv"))]
         src = self.link_sources()
+        # 台帳に無い動画（source 0。利用者が足した動画。0.8.1）でコメントを取るもの: その動画の音源のページから取る
+        # （取るページのどれかならそのページ、ほかの音源ならその楽曲ページ。音源が分からなければ取らない）
+        outside = {}
+        if any(v == 0 for v in src.values()):
+            outside = {r["video_id"]: None for r in comment_rows(pool) if src.get(str(r["video_id"]), 1) == 0}
+            if outside:
+                music = music_of_videos(self.dir)
+                ids = [music_id_of(u) for u in urls]
+                for vid in outside:
+                    mid, title = music.get(vid) or (None, None)
+                    outside[vid] = (ids.index(mid) + 1) if mid in ids else music_url_of(mid, title) if mid else None
+                lost = [v for v, w in outside.items() if w is None]
+                if lost:
+                    self.log(f"    台帳に無い動画 {len(lost)}本は、音源が分からないのでコメントを取りません（{', '.join(lost[:5])}）")
+        if len(urls) <= 1 and all(w == 1 for w in outside.values()):
+            # 1ページ（台帳に無い動画も同じ音源）: 前と同じファイル
+            return [(urls[0], pool, self.p("fetch_log", "comments_summary.json"), self.p("fetch_log", "substitutions.tsv"))]
         lines = [ln for ln in pool.read_text(encoding="utf-8").splitlines() if ln.strip()]
         head, body = lines[0], lines[1:]
         vi = head.split("\t").index("video_id")
         ci = head.split("\t").index("cap")
         label_only = [r for r in body if int(r.split("\t")[ci] or 0) <= 0]
         body = [r for r in body if int(r.split("\t")[ci] or 0) > 0]   # コメントを取らない動画（cap 0）では楽曲ページを開かない
+
+        def page_of(r):
+            v = r.split("\t")[vi]
+            if v in outside:
+                return outside[v]
+            return src.get(v, 1) if len(urls) > 1 else 1   # 1ページなら台帳の動画は全部そのページ（前と同じ）
         out = []
         for k, url in enumerate(urls, 1):
-            mine = [r for r in body if src.get(r.split("\t")[vi], 1) == k]
+            mine = [r for r in body if page_of(r) == k]
             if not mine:
                 continue
             pk = self.p("derived", f"pool_p{k}.tsv")
@@ -677,6 +799,13 @@ class Run:
             sfx = "" if k == 1 else f"_p{k}"   # 1ページ目は前と同じ名前（進み具合の表示がそのまま読める）
             out.append((url, pk, self.p("fetch_log", f"comments_summary{sfx}.json"),
                         self.p("fetch_log", f"substitutions{sfx}.tsv")))
+        for url in sorted({w for w in outside.values() if isinstance(w, str)}):   # 台帳に無い動画の音源のページ
+            mine = [r for r in body if page_of(r) == url]
+            tag = f"m{music_id_of(url)}"
+            pk = self.p("derived", f"pool_{tag}.tsv")
+            pk.write_text("\n".join([head, *mine, *label_only]) + "\n", encoding="utf-8")
+            out.append((url, pk, self.p("fetch_log", f"comments_summary_{tag}.json"),
+                        self.p("fetch_log", f"substitutions_{tag}.tsv")))
         return out
 
     def pool_left(self, pool: Path) -> int:
@@ -888,6 +1017,55 @@ def music_urls_of(m: dict) -> list:
     if m.get("music_url") and m["music_url"] not in urls:
         urls.insert(0, m["music_url"])
     return urls
+
+
+# --- 利用者が足した動画（0.8.1。docs/PLAN_0_8_1.md 2-3） ---
+# 一覧（raw/grid_links.jsonl）の why。台帳に無い動画は source 0（コメントはその動画の音源のページから。Run.comment_pages）
+USER_WHY = "利用者が足した"
+
+
+def source_of(g: dict) -> int:
+    """一覧の行の、見つけた楽曲ページ（1〜）。0 は台帳に無い、利用者が足した動画。書いていない古い行は 1"""
+    try:
+        return int(g["source"]) if g.get("source") is not None else 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def video_id_of(url) -> str | None:
+    """動画の URL（…/video/<ID>・…/photo/<ID>）か ID の文字列から動画の ID。分からなければ None（短縮の URL は開かないと分からない）"""
+    s = str(url or "").strip()
+    m = re.search(r"/(?:video|photo)/(\d{8,})", s)
+    if m:
+        return m.group(1)
+    return s if re.fullmatch(r"\d{12,}", s) else None
+
+
+def video_url(url, vid: str) -> str:
+    """利用者が渡した動画の URL を一覧の形（クエリを外した https://www.tiktok.com/@<投稿者>/<video|photo>/<ID>）に。
+    投稿者が分からなければ @user（ledger_row と同じ。TikTok は ID で開く）"""
+    u = str(url or "").split("?")[0].split("#")[0].rstrip("/")
+    m = re.search(r"/@([^/]+)/(video|photo)/(\d+)$", u)
+    if m and m.group(3) == str(vid):
+        return f"https://www.tiktok.com/@{m.group(1)}/{m.group(2)}/{vid}"
+    return f"https://www.tiktok.com/@user/video/{vid}"
+
+
+def music_of_videos(d: Path) -> dict:
+    """動画 ID → (音源の id, 題)。属性（raw/enriched.jsonl）から。台帳に無い動画のコメントを、その音源の楽曲ページから取るのに使う"""
+    out = {}
+    p = Path(d) / "raw" / "enriched.jsonl"
+    if p.exists():
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                mu = (e.get("music") or {}) if isinstance(e, dict) else {}
+                if mu.get("id"):
+                    out[str(e.get("video_id"))] = (str(mu["id"]), mu.get("title"))
+    return out
 
 
 # --- 台帳（一覧の段。2026-10-07。docs/LIST_CUT.md 第5・6章） ---

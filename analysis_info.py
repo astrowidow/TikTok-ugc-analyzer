@@ -12,6 +12,7 @@ about:
 - video: 動画1本（target に URL・動画の番号・seq）。台帳にあるか・詳しく読んだか・コメントの件数・界隈
 - report: レポートの版・検算・確認メモ・界隈ごとの本数・ウェブ検索・界隈の確認の答え
 - app: アプリの版・道具の版・ずれ・TikTok のログイン・取得用の Chrome・最近のエラー・通知の出し方（runner.LOCAL.app_info）
+- storage: 分析ごとの容量・様子・しまったか・取り直したか、合計と Mac の空き容量（0.8.1〜。消すのは archive_analysis の delete）
 """
 import json
 import re
@@ -188,9 +189,24 @@ def overview(a, runner) -> str:
         L.append(f"- コメント: {_n(com.get('videos_ok'))}本の動画から {_n(com.get('comments'))}件（返信 {_n(com.get('replies'))}件）"
                  + ("・TikTok に一時止められた" if com.get("blocked") else ""))
     dh = (m.get("deepen_history") or []) + ([m["deepen"]] if m.get("deepen") else [])
+    kinds = {"recut": "切り直し", "add": "動画を足した", "videos": "動画ごとの取り足し"}
     for d in dh:
-        kind = "切り直し" if d.get("kind") == "recut" else f"掘り下げ（{d.get('community')}）"
+        kind = ("全部の界隈の取り足し" if d.get("community") == "all" else kinds.get(d.get("kind")) or f"掘り下げ（{d.get('community')}）")
         L.append(f"- 取り足し（{kind}・{_date(d.get('requested_at'))}）: {d.get('status')}・対象 {len(d.get('targets') or [])}本")
+    # 利用者が外した・足した動画と章立て（0.8.1〜）
+    ex = [x for x in m.get("excluded_videos") or [] if isinstance(x, dict)]
+    if ex:
+        L.append(f"- 利用者が外した動画: {len(ex)}本（" + "、".join(
+            (f"seq {x['seq']}" if x.get("seq") is not None else str(x.get("video_id"))) + (f"「{x['why'][:30]}」" if x.get("why") else "")
+            for x in ex) + "）。分析・本数・記事に使っていない。videos の include で戻せる")
+    uv = [x for x in m.get("user_videos") or [] if isinstance(x, dict)]
+    if uv:
+        L.append(f"- 利用者が足した動画: {len(uv)}本（" + "、".join(str(x.get("url") or x.get("video_id")) for x in uv) + "）")
+    plan = _j(a.dir / "outputs" / "chapter_plan.json")
+    if plan and plan.get("items"):
+        names = {"intro": "冒頭", "path": "拡大経路", "branch": "分岐点", "music": "音楽", "result": "結果"}
+        L.append("- 章立て（利用者が変えた）: " + " → ".join(names.get(x.get("id"), x.get("title") or x.get("id"))
+                                                     for x in plan["items"] if isinstance(x, dict)))
 
     L.append("\n## AI の作業")
     try:
@@ -418,4 +434,33 @@ def app(info: dict | None) -> str:
     for p in probs:
         L.append(f"  - {p if isinstance(p, str) else json.dumps(p, ensure_ascii=False)}")
     L.append("- 通知: " + (info.get("notifications") or NOTIFY_TEXT))
+    return "\n".join(L)
+
+
+def storage(analyses: list, runner) -> str:
+    """分析ごとの容量（大きい順）。消すときの手掛かり（2026-10-12 0.8.1。1つ 144〜443MB）"""
+    import shutil
+    rows = []
+    for a in analyses:
+        size, shared = runner._dir_bytes(a.dir)
+        flags = []
+        if a.meta.get("archived_at"):
+            flags.append("しまってある")
+        if a.meta.get("superseded_by"):
+            flags.append(f"取り直し済み（新しい分析 {a.meta['superseded_by']}）")
+        rows.append((size, shared, a, flags))
+    rows.sort(key=lambda r: -r[0])
+    L = ["# 分析の容量（大きい順）"]
+    for size, shared, a, flags in rows:
+        L.append(f"- {a.title}（分析 ID: {a.id}・{str(a.meta.get('created_at') or '')[:10]}・{runner._state_label(a)}"
+                 + ("・" + "・".join(flags) if flags else "") + f"）: {runner._mb(size)}"
+                 + (f"（うちサムネ {runner._mb(shared)} はほかの分析と分け合っている）" if shared else ""))
+    L.append(f"- 合計: 約{runner._mb(sum(r[0] for r in rows))}（{len(rows)}件）")
+    try:
+        free = shutil.disk_usage(str(runner.ANALYSES_DIR)).free
+        L.append(f"- Mac の空き容量: 約{free / 1e9:.1f}GB")
+    except OSError:
+        pass
+    L.append("- 消すときは、利用者が頼んだ分析を archive_analysis の delete=true で（ゴミ箱へ。Finder の「戻す」で戻せる。"
+             "ゴミ箱を空にすると容量が空く）。レポートのフォルダも消すなら with_report=true")
     return "\n".join(L)

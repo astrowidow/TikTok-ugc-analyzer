@@ -71,6 +71,13 @@ ASK_RULE = (
     "集めたデータのまま AI の作業を段からやり直す頼み（界隈の案から・段階から・構成から・〇章を書き直して など）は redo。"
     "どちらも完成の前でも後でも使える。時間がかかるときは、道具が返す見込みを利用者に一度伝えてそのまま進める（確かめを求めない）。"
     "道具が断ったら、その理由を利用者にそのまま伝える。同じ頼みを言い換えて何度も呼ばない。できないことを「します」と言わない。"
+    "\nほかの頼みと道具（どれも完成の前でも後でも使える。書いている途中なら道具が積んで、終わったら始める）: "
+    "章を足す・外す・並べ替える（「音楽の章はいらない」「〇〇の章を足して」）は restructure、"
+    "動画を外す・戻す・足す（「この動画は関係ないから外して」「この動画も入れて」）は videos（exclude・include・add）、"
+    "動画ごと・全体のコメントの取り足し（「この動画のコメントを全部読んで」「全体でコメントをもっと」）は deepen（videos・community=\"all\"・per_video）、"
+    "比べる（「前回からどれだけ伸びた？」「〇〇と△△を比べて」）は compare、"
+    "分析を消して容量を空ける（「古い分析を消して」）は archive_analysis の delete（ゴミ箱へ。どれが大きいかは info の about=storage）、"
+    "一人称や文体を今後ずっと変える（「一人称は私で」）は settings の style。分析を消すのは、利用者が頼んだときだけ。"
 )
 
 INSTRUCTIONS = (
@@ -339,9 +346,9 @@ def _build_server(user_of=None, local: bool = False, version: str | None = None)
         description="**利用者が設定の確認や変更を頼んだときだけ使う**（自分の判断では使わない）。"
                     "次の分析以降もずっと使う指示を、利用者ごとに見る・変える・デフォルトに戻す。"
                     "action: get（見る）/ set（変える）/ reset（デフォルトに戻す、item を省くと全部）。"
-                    "item: style（文体。value は追記したい指定、use_style_guide=false で著者の文体ガイドを使わない）／"
+                    "item: style（文体。value は追記したい指定（例「一人称は『私』」）、use_style_guide=false で著者の文体ガイドを使わない）／"
                     "focus（レポートの重点）／community_policy（界隈の分け方の方針）／comment_lens（コメント分析の観点）。"
-                    "各400字まで。出力の形・検算・仕事の刻み方は変えられない。"
+                    "各2000字まで。出力の形・検算・仕事の刻み方は変えられない。"
                     "「このレポートだけ」の直しは settings ではなく revise。",
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                                     open_world_hint=False),
@@ -368,9 +375,12 @@ def _build_server(user_of=None, local: bool = False, version: str | None = None)
         return mcp
 
     @mcp.tool(
-        title="界隈を掘り下げる",
-        description="レポートの、ある界隈の話を掘り下げる（このレポートだけ。書いている途中に頼まれたら、今の作業のあとに積む）。利用者がレポートを読んで"
+        title="コメントを取り足して掘り下げる",
+        description="レポートの、ある界隈の話・ある動画の話を、コメントを取り足して掘り下げる（このレポートだけ。書いている途中に頼まれたら、今の作業のあとに積む）。利用者がレポートを読んで"
                     "「△△界隈のところが浅い」「なぜバズったのかが弱い」「もっとコメントを取って掘り下げて」のように頼んだときに使う。"
+                    "動画ごと（「この動画のコメントを全部読んで」）は videos に動画の URL か番号（seq）を並べる（community は空でよい）。"
+                    "全部の界隈（「全体でコメントをもっと取って」）は community=\"all\"。"
+                    "per_video は動画1本あたりに取るコメントの件数（数）か \"all\"（その動画のコメントを全部）。利用者が件数や「全部」を言ったときだけ。"
                     "まず Mac がその界隈のコメントを取り足す（時間では切らずに全部取る。かかる時間は返事に出るので伝える。終わると Mac の通知が出る）。そのあと利用者が「〇〇の分析を続けて」と言ったら、"
                     "next_task で、その界隈の分析のやり直し・構成案と関わる章の書き直し・全章の通し読みを片付ける。"
                     "community は界隈の key か、レポートでの呼び名"
@@ -380,7 +390,11 @@ def _build_server(user_of=None, local: bool = False, version: str | None = None)
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
                                     open_world_hint=True),
     )
-    async def deepen(ctx: Context, community: str, instruction: str, analysis_id: str | None = None) -> str:
+    async def deepen(ctx: Context, community: str = "", instruction: str = "", analysis_id: str | None = None,
+                     videos: list[str] | None = None, per_video: str | None = None) -> str:
+        if videos or per_video:
+            return _waiting_text(ctx, _call(runner.deepen, _user(ctx), analysis_id, community, instruction, videos or None,
+                                            per_video or None))
         return _waiting_text(ctx, _call(runner.deepen, _user(ctx), analysis_id, community, instruction))
 
     @mcp.tool(
@@ -480,7 +494,8 @@ def _build_server(user_of=None, local: bool = False, version: str | None = None)
                     "target に楽曲ページの URL を入れると、それが入っているか）／"
                     "video（target に動画の URL か番号。一覧にあるか・詳しく読んだか・コメントの件数・界隈）／"
                     "report（レポートの版・検算・界隈ごとの本数・ウェブで調べたか・界隈の確認の答え）／"
-                    "app（アプリの版・この会話の道具の版・TikTok のログイン・最近のエラー・通知の出し方。analysis_id は要らない）。"
+                    "app（アプリの版・この会話の道具の版・TikTok のログイン・最近のエラー・通知の出し方。analysis_id は要らない）／"
+                    "storage（分析ごとの容量・様子と Mac の空き容量。analysis_id は要らない）。"
                     "analysis_id は分析 ID か曲名（省くとその利用者の分析）。記録に無いことは「記録に無い」と返るので、そのまま伝える。" + rule,
         annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
     )
@@ -488,15 +503,65 @@ def _build_server(user_of=None, local: bool = False, version: str | None = None)
         return _call(runner.info, _user(ctx), analysis_id, about, target or "")["text"]
 
     @mcp.tool(
-        title="分析をしまう・戻す",
-        description="**利用者が「〇〇の分析をしまって・片付けて・一覧から消して」「しまった〇〇を戻して」と頼んだときだけ使う**。"
+        title="分析をしまう・戻す・消す",
+        description="**利用者が「〇〇の分析をしまって・片付けて・一覧から消して」「しまった〇〇を戻して」「〇〇の分析を消して・容量を空けて」と頼んだときだけ使う**。"
                     "しまった分析は一覧・曲名での引き当てに出なくなる（消さない。レポートのフォルダもそのまま）。restore=true で戻す。"
-                    "analysis_id は分析 ID か曲名。" + rule,
-        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
+                    "delete=true は分析のフォルダをゴミ箱に入れる（Finder のゴミ箱から「戻す」で戻せる。ゴミ箱を空にすると容量が空く）。"
+                    "レポートのフォルダもゴミ箱に入れるのは with_report=true（利用者が言ったときだけ）。取得中・取り足し中は先に cancel_analysis。"
+                    "どれが大きいかは info の about=storage。analysis_id は分析 ID か曲名。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True,
                                     open_world_hint=False),
     )
-    async def archive_analysis(ctx: Context, analysis_id: str, restore: bool = False) -> str:
+    async def archive_analysis(ctx: Context, analysis_id: str, restore: bool = False, delete: bool = False,
+                               with_report: bool = False) -> str:
+        if delete:
+            return _call(runner.archive_analysis, _user(ctx), analysis_id, False, True, bool(with_report))["text"]
         return _call(runner.archive_analysis, _user(ctx), analysis_id, bool(restore))["text"]
+
+    @mcp.tool(
+        title="章立てを変える",
+        description="レポートの章立てを、利用者の頼みどおりに変える（章を足す・外す・並べ替える）。**完成の前でも後でも使える**。"
+                    "利用者が「音楽の章はいらない」「ファン心理の章を足して」「結果の章を分岐点の前に」「界隈ごとの章立てにして」のように頼んだときに使う。"
+                    "章の id は read の chapters（intro＝冒頭・path＝拡大経路の章のまとまり・branch＝分岐点・music＝音楽・result＝結果・足した章は c1…）。"
+                    "remove は外す章の id、add は足す章 [{\"title\": \"章の題\", \"about\": \"どんな章か（利用者の言葉）\", \"after\": \"<この章の後ろ>\"}]、"
+                    "order は並べ替えたあとの id の並び（省いた章は後ろに）。instruction は利用者の言葉そのまま。"
+                    "書く前なら章立てを変えるだけ（最初からその章立てで書く）。書いたあとは構成案を直して、足した章・冒頭・話がずれる章を書き直す"
+                    "（返事に見込みが出るので伝え、確かめを求めずに next_task で進める）。前の版は残る。外した章も消さない。"
+                    "章の中身だけの直しは revise。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                    open_world_hint=False),
+    )
+    async def restructure(ctx: Context, instruction: str = "", analysis_id: str | None = None, remove: list[str] | None = None,
+                          add: list[dict] | None = None, order: list[str] | None = None) -> str:
+        return _call(runner.restructure, _user(ctx), analysis_id, remove or [], add or [], order or [], instruction)["text"]
+
+    @mcp.tool(
+        title="動画を外す・戻す・足す",
+        description="分析に使う動画を、利用者の頼みどおりに外す・戻す・足す。**完成の前でも後でも使える**。"
+                    "action: exclude（「この動画は関係ないから外して」。以後の分析・本数・記事に使わない）／include（外した動画を戻す）／"
+                    "add（「この動画も入れて」。Mac の UGC Analyzer が属性とコメントを取り、ラベルを付けて、関わるところを書き直す）。"
+                    "targets は動画の URL（https://www.tiktok.com/@…/video/…）か番号（seq）。足す（add）は URL で。instruction は利用者の言葉そのまま。"
+                    "外す・戻すはすぐ効き、書いてある章に関わるときは、関わる界隈のコメント分析と章を直す（返事のとおり next_task で進める）。"
+                    "足すときは Mac が取得するので、返事を伝えて止まる（終わると Mac の通知。利用者が「〇〇の分析を続けて」と言ったら next_task）。"
+                    "動画がこの分析に入っているかは info の about=video で確かめられる。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                    open_world_hint=True),
+    )
+    async def videos(ctx: Context, action: str, targets: list[str], instruction: str = "", analysis_id: str | None = None) -> str:
+        return _waiting_text(ctx, _call(runner.videos, _user(ctx), analysis_id, action, targets, instruction))
+
+    @mcp.tool(
+        title="分析を比べる",
+        description="2つ以上の分析を比べたレポートを書く。利用者が「前回からどれだけ伸びた？」「前の分析と比べて」「〇〇と△△を比べて」と頼んだときに使う。"
+                    "analysis_ids は比べる分析の ID か曲名（2つ以上）。曲名を1つだけ渡すと、同じ曲の前回と今回を比べる"
+                    "（比べる相手が無ければ、最新の数字で集め直す道が返るので、利用者に伝える）。instruction は利用者の言葉そのまま。"
+                    "受け付けたら next_task で進める。できたレポートはレポートのフォルダの「比較」に置く。"
+                    "数字だけ知りたいときは、レポートを書かずに info の overview を2つ読んで答えてもよい。" + rule,
+        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False,
+                                    open_world_hint=False),
+    )
+    async def compare(ctx: Context, analysis_ids: list[str], instruction: str = "") -> str:
+        return _call(runner.compare, _user(ctx), analysis_ids, instruction)["text"]
 
     @mcp.tool(
         title="知識ベースを新しくする",

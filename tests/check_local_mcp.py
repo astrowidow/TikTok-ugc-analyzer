@@ -7,7 +7,7 @@ TikTok には触らない（メニューバーのアプリも起こさない）�
   python tests/check_local_mcp.py --analysis <分析フォルダ>   … W1 の確かめに使う分析（取得済みのもの）を写して使う
 
 確かめること:
-  1. 初期化・道具16・instructions
+  1. 初期化・道具19・instructions
   2. status / start_analysis（URL が無ければ探し方を返す。URL があればそのまま始め、どの楽曲ページで進めるかを返す。この Mac の取得の設定・ポート 9250）
   3. W1 の next_task（編集できる指示書から組み立てる）・read のシート画像
   4. 指示書の道具: 一覧・全文・使えない書き換えは断る・使える書き換えは使われる・初期に戻す

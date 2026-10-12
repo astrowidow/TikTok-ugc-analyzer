@@ -16,6 +16,12 @@ CSV（詳しく読んだ動画）は台帳から選んだ一部なので、週�
 （2026-10-07 ユーザー「再生数が少ないものはリストに入れなくていい。この時期に何本投稿されたかだけ取っといて。どの楽曲ページのものかは残したい」）
 
 サンプルの選び方は決定論的（seed 固定）。LLM に渡すのは sample_*。
+
+--keep-seqs <前の videos.jsonl>（0.8.1。取得のあとに動画を足したとき。acquire/pipeline.py の Run.derive_keep_seqs）:
+  通し番号（seq）を変えずに作り直す。前からある動画は前の seq（中身も前の行のまま）、新しい動画は前の最大の次から日付順。
+  ラベル・章・コメントの整形は seq で引くので、番号を振り直すと全部ずれる。見本は前のものを残す: sample_taxonomy.md はそのまま、
+  sample_label.jsonl は前の行に新しい動画の行を足す（サムネの一覧に載せるため）。週次（weekly*.tsv）は今までどおり作る
+  （台帳があれば台帳で数えるので、台帳に無い動画を足しても変わらない）
 """
 import csv
 import datetime
@@ -30,6 +36,11 @@ ledger_path = None
 if "--ledger" in args:
     i = args.index("--ledger")
     ledger_path = pathlib.Path(args[i + 1])
+    del args[i:i + 2]
+keep_path = None
+if "--keep-seqs" in args:
+    i = args.index("--keep-seqs")
+    keep_path = pathlib.Path(args[i + 1])
     del args[i:i + 2]
 src = pathlib.Path(args[0])
 out = pathlib.Path(args[1])
@@ -68,8 +79,26 @@ with open(src, encoding="utf-8-sig", newline="") as fh:
             "shares": num(r.get("Shares")) or 0,
         })
 rows.sort(key=lambda r: (r["date"], -r["plays"]))
-for i, r in enumerate(rows):
-    r["seq"] = i  # 時系列の通し番号（最初期の判定に使う）
+prev = {}      # --keep-seqs: 前の videos.jsonl の行（video_id → 行）
+if keep_path:
+    for line in open(keep_path, encoding="utf-8"):
+        if line.strip():
+            x = json.loads(line)
+            prev[str(x["video_id"])] = x
+    nxt = max([int(x["seq"]) for x in prev.values()] + [-1]) + 1
+    have = set()
+    for k, r in enumerate(rows):
+        if r["video_id"] in prev:
+            rows[k] = prev[r["video_id"]]   # 前からある動画は前の行のまま（seq も中身も）
+        else:
+            r["seq"] = nxt   # 新しい動画は前の最大の次から（日付順）
+            nxt += 1
+        have.add(r["video_id"])
+    rows += [x for v, x in prev.items() if v not in have]   # 一覧から消えた動画も前の行を残す（seq で引くものが壊れないように）
+    rows.sort(key=lambda r: int(r["seq"]))
+else:
+    for i, r in enumerate(rows):
+        r["seq"] = i  # 時系列の通し番号（最初期の判定に使う）
 
 with open(out / "videos.jsonl", "w", encoding="utf-8") as f:
     for r in rows:
@@ -123,6 +152,25 @@ grand = len(counted)
 line = min(grand * 0.05, max(w["n"] for w in weeks.values()) * 0.5)
 takeoff = next((k for k in sorted(weeks) if weeks[k]["n"] >= line), sorted(weeks)[-1])
 
+LABEL_KEYS = ("seq", "video_id", "date", "week", "type", "username", "desc", "plays", "likes", "comments")
+if keep_path:
+    # 見本は前のものを残す。sample_label.jsonl には新しい動画を足す（前の控えのフォルダにあればそれ、無ければ今のもの）
+    prev_dir = keep_path.parent
+    tax_src = prev_dir / "sample_taxonomy.md" if (prev_dir / "sample_taxonomy.md").exists() else out / "sample_taxonomy.md"
+    if tax_src.exists() and tax_src.resolve() != (out / "sample_taxonomy.md").resolve():
+        (out / "sample_taxonomy.md").write_text(tax_src.read_text(encoding="utf-8"), encoding="utf-8")
+    lab_src = prev_dir / "sample_label.jsonl" if (prev_dir / "sample_label.jsonl").exists() else out / "sample_label.jsonl"
+    old_lines = [ln for ln in lab_src.read_text(encoding="utf-8").splitlines() if ln.strip()] if lab_src.exists() else []
+    added = [r for r in rows if r["video_id"] not in prev]
+    with open(out / "sample_label.jsonl", "w", encoding="utf-8") as f:
+        for ln in old_lines:
+            f.write(ln + "\n")
+        for r in added:
+            f.write(json.dumps({k: r[k] for k in LABEL_KEYS}, ensure_ascii=False) + "\n")
+    print(f"rows={len(rows)} ledger={len(ledger)} takeoff={takeoff} kept={len(prev)} new={len(added)} "
+          f"label_set={len(old_lines) + len(added)} (keep-seqs: 見本は前のまま、新しい動画をラベルの対象に足した)")
+    sys.exit(0)
+
 # --- 分類軸の提案用サンプル ---
 top = sorted(rows, key=lambda r: -r["plays"])[:100]
 earliest = rows[:40]
@@ -164,7 +212,7 @@ label_set = {r["video_id"]: r for r in pre + post_top + post_rand}
 label_set = sorted(label_set.values(), key=lambda r: r["seq"])
 with open(out / "sample_label.jsonl", "w", encoding="utf-8") as f:
     for r in label_set:
-        f.write(json.dumps({k: r[k] for k in ("seq", "video_id", "date", "week", "type", "username", "desc", "plays", "likes", "comments")}, ensure_ascii=False) + "\n")
+        f.write(json.dumps({k: r[k] for k in LABEL_KEYS}, ensure_ascii=False) + "\n")
 
 print(f"rows={total} ledger={len(ledger)} takeoff={takeoff} taxonomy_sample={len(sample_tax)} label_set={len(label_set)} "
       f"(pre-takeoff {len(pre)} + post top {len(post_top)} + post random {len(post_rand)})")

@@ -32,7 +32,8 @@ CHATGPT_APPS = [Path("/Applications/ChatGPT.app"), Path.home() / "Applications" 
 # 道具（mcp_proto.py。tests/check_local_mcp.py で、道具の一覧と同じかを確かめる）
 TOOLS = ("start_analysis", "status", "next_task", "submit", "read", "revise", "deepen", "recut", "settings", "prompts",
          "update_knowledge", "cancel_analysis", "restart_analysis",
-         "info", "redo", "archive_analysis")   # 2026-10-12（0.8.0）: 調べる・AI の段のやり直し・しまう
+         "info", "redo", "archive_analysis",   # 2026-10-12（0.8.0）: 調べる・AI の段のやり直し・しまう
+         "restructure", "videos", "compare")   # 2026-10-12（0.8.1）: 章立て・動画の足し外し・比べる
 STARTUP_TIMEOUT_SEC = 60    # 入れた直後の初回は、macOS の検査で起動が遅いことがある
 TOOL_TIMEOUT_SEC = 300      # start_analysis（30〜40秒）と、仕事の合間のサービスの工程（組み立て・Excel 用 ZIP）
 MARK = "# UGC Analyzer の道具（メニュー「ChatGPT につなぐ」が書いた。この節は UGC Analyzer が書き直す）"
@@ -50,6 +51,13 @@ ASK_RULE = (
     "集めたデータのまま AI の作業を段からやり直す頼み（界隈の案から・段階から・構成から・〇章を書き直して など）は redo。"
     "どちらも完成の前でも後でも使える。時間がかかるときは、道具が返す見込みを利用者に一度伝えてそのまま進める（確かめを求めない）。"
     "道具が断ったら、その理由を利用者にそのまま伝える。同じ頼みを言い換えて何度も呼ばない。できないことを「します」と言わない。"
+    "\nほかの頼みと道具（どれも完成の前でも後でも使える。書いている途中なら道具が積んで、終わったら始める）: "
+    "章を足す・外す・並べ替える（「音楽の章はいらない」「〇〇の章を足して」）は restructure、"
+    "動画を外す・戻す・足す（「この動画は関係ないから外して」「この動画も入れて」）は videos（exclude・include・add）、"
+    "動画ごと・全体のコメントの取り足し（「この動画のコメントを全部読んで」「全体でコメントをもっと」）は deepen（videos・community=\"all\"・per_video）、"
+    "比べる（「前回からどれだけ伸びた？」「〇〇と△△を比べて」）は compare、"
+    "分析を消して容量を空ける（「古い分析を消して」）は archive_analysis の delete（ゴミ箱へ。どれが大きいかは info の about=storage）、"
+    "一人称や文体を今後ずっと変える（「一人称は私で」）は settings の style。分析を消すのは、利用者が頼んだときだけ。"
 )
 
 # いつ使うかは道具の案内（mcp_proto.USE_RULE）と同じ。ChatGPT は道具の案内を会話に入れないので、ここにも書く
@@ -60,7 +68,7 @@ description: UGC Analyzer（この Mac のアプリ。TikTok の楽曲の UGC �
 
 # UGC Analyzer
 
-道具は MCP サーバー `ugc-analyzer`。道具の一覧（ALL_TOOLS など）で `ugc_analyzer` を探す: start_analysis・status・next_task・submit・read・revise・deepen・recut・settings・prompts・update_knowledge・cancel_analysis・restart_analysis・info・redo・archive_analysis。
+道具は MCP サーバー `ugc-analyzer`。道具の一覧（ALL_TOOLS など）で `ugc_analyzer` を探す: start_analysis・status・next_task・submit・read・revise・deepen・recut・settings・prompts・update_knowledge・cancel_analysis・restart_analysis・info・redo・archive_analysis・restructure・videos・compare。
 
 - 「UGC Analyzer で〇〇／△△を分析して」→ `start_analysis`（曲名とアーティスト名。30〜40秒かかる）
 - 名指しの無い「〇〇を分析して」→ 道具を使わず、ふつうに答える
@@ -74,7 +82,9 @@ description: UGC Analyzer（この Mac のアプリ。TikTok の楽曲の UGC �
 - 分析やアプリについての質問（「自己紹介の音源は入ってる？」「どのページで取った？」「アプリの版は？」「通知が来ない」など）→ まず `info`（読むだけ。about に overview・sounds・video・report・app）で確かめてから答える
 - 「最初から分析し直して」「このページも足して取り直して」→ `restart_analysis`（TikTok から集め直す。見込みを伝えて止まる）
 - 「界隈の案から・構成から・〇章をやり直して」→ `redo`（集めたデータのまま AI の作業を段からやり直す。待たずにそのまま `next_task` を続ける）
-- 「〇〇の分析をしまって・一覧から消して」「しまった〇〇を戻して」→ `archive_analysis`（消さない。restore=true で戻す）
+- 「〇〇の分析をしまって・一覧から消して」「しまった〇〇を戻して」→ `archive_analysis`（消さない。restore=true で戻す）。「〇〇の分析を消して・容量を空けて」→ `archive_analysis` の delete=true（ゴミ箱へ。どれが大きいかは `info` の about=storage）
+- 「音楽の章はいらない」「〇〇の章を足して」→ `restructure`。「この動画は外して・戻して・この動画も入れて」→ `videos`（exclude・include・add）
+- 「この動画のコメントを全部読んで」「全体でコメントをもっと」→ `deepen`（videos・community="all"・per_video）。「前回と比べて」「〇〇と△△を比べて」→ `compare`
 - そのほか（進み具合・取得をやめる・レポートの直し）は、道具の説明に従う。道具の説明と返事に書いてある決まりが、ここより優先する
 
 ## 質問とやり直しの決まり

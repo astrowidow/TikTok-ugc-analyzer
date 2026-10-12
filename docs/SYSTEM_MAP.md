@@ -45,7 +45,7 @@ UGC Analyzer（メニューバー）── 5秒おきに見る ─────�
 | 部品 | ファイル | 役 |
 |---|---|---|
 | メニューバー | `collector/collector_app/app.py` | 取得の見張り・ログイン・通知・メニュー（指示書の編集・知識ベース・Claude につなぐ） |
-| Claude の道具 | `collector/collector_app/mcp_local.py` | `--mcp` の入口。中身は本線の `mcp_proto.py`（道具16）・`proto_runner.py`・`flow_w1.py`・`analysis_info.py`（info の中身）。アプリを入れ替えると、道具の処理が自分で気づいて「開き直して」と返す（0.8.0〜） |
+| Claude の道具 | `collector/collector_app/mcp_local.py` | `--mcp` の入口。中身は本線の `mcp_proto.py`（道具19）・`proto_runner.py`・`flow_w1.py`・`analysis_info.py`（info の中身）。アプリを入れ替えると、道具の処理が自分で気づいて「開き直して」と返す（0.8.0〜） |
 | Claude につなぐ | `collector/collector_app/claude_link.py` | Claude の設定ファイルに道具を1行足す（控えを取る） |
 | ChatGPT につなぐ | `collector/collector_app/codex_link.py` | Codex の設定ファイル（`~/.codex/config.toml`）に道具の節と道具ごとの許可を足し（控えを取る）、スキル（`~/.agents/skills/ugc-analyzer/`）を置く。ChatGPT は道具の案内を会話に入れないので、スキルで気づかせる |
 | 取得 | 本線の `acquire/`・`analysis/` | 一覧（台帳）→ 属性 → プール → コメント（Windows 機と同じ部品）。一覧の段でグリッドの裏の一覧データを全部拾い、詳しく読む（属性を取る）動画を選ぶ（0.7.0〜。`docs/LIST_CUT.md` 第6章）。どの動画のコメントを何件取るかは `docs/COMMENT_TARGETS.md` |
@@ -67,7 +67,7 @@ UGC Analyzer（メニューバー）── 5秒おきに見る ─────�
 | 言葉 | 指すもの |
 |---|---|
 | UGC Analyzer | 友達の Mac に入れるアプリ（メニューバー）と、それが AI に出す道具。利用者に見せる呼び方はこれだけ（2026-10-05 に UGC Collector・取得アプリ・分析アプリから統一。中の部品の名前 collector_app・UGC_COLLECTOR_HOME などはそのまま） |
-| 道具 | アプリが AI に出す16（start_analysis・status・next_task・submit・read・revise・deepen・recut・settings・prompts・update_knowledge・cancel_analysis・restart_analysis・info・redo・archive_analysis）。deepen は界隈の掘り下げ（`docs/DEEPEN_COMMUNITY.md`）、recut は界隈の切り直し（`docs/RECUT_COMMUNITY.md`）。0.8.0 から: restart_analysis はどの状態の分析でも TikTok から集め直す（新しい分析を作り、前は残す）、redo は集めたデータのまま AI の作業を段からやり直す、info は分析・アプリについての質問に記録から答える（読むだけ）、archive_analysis は分析をしまう（`docs/PLAN_0_8.md`） |
-| 指示書 | AI に渡す作業の指示（21本。0.6.2 でウェブで調べる research・時代背景の era を足した）。利用者が直せる |
+| 道具 | アプリが AI に出す19（start_analysis・status・next_task・submit・read・revise・deepen・recut・settings・prompts・update_knowledge・cancel_analysis・restart_analysis・info・redo・archive_analysis・restructure・videos・compare）。deepen は界隈の掘り下げ（`docs/DEEPEN_COMMUNITY.md`）、recut は界隈の切り直し（`docs/RECUT_COMMUNITY.md`）。0.8.0 から: restart_analysis はどの状態の分析でも TikTok から集め直す（新しい分析を作り、前は残す）、redo は集めたデータのまま AI の作業を段からやり直す、info は分析・アプリについての質問に記録から答える（読むだけ）、archive_analysis は分析をしまう（`docs/PLAN_0_8.md`）。0.8.1 から: restructure は章立てを変える、videos は動画を外す・戻す・足す、compare は分析どうしを比べたレポート、deepen は動画ごと・全体・件数の指定も、archive_analysis は消す（ゴミ箱へ）も、info は容量（storage）も（`docs/PLAN_0_8_1.md`） |
+| 指示書 | AI に渡す作業の指示（24本。0.6.2 でウェブで調べる research・時代背景の era、0.8.1 で変更の回の change_plan・change_review と比べる compare を足した）。利用者が直せる |
 | 知識ベース | 著者（山本慶太朗）の note 記事と、その蒸留物（用語集・文体ガイド・カード） |
 | 取得用の Chrome | アプリが開く、専用プロファイルの Chrome（捨て垢のログインはここだけ） |

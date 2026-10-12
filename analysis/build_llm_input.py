@@ -58,7 +58,8 @@ if len(PAGES) >= 2:
                 g = json.loads(line)
             except ValueError:
                 continue
-            SOURCE[str(g.get("video_id"))] = int(g.get("source") or 1)
+            # 0 は台帳に無い、利用者が足した動画（0.8.1）。音源の id が合わなければ、どのページの音源とも言わない
+            SOURCE[str(g.get("video_id"))] = int(g["source"]) if g.get("source") is not None else 1
     for k, p in enumerate(PAGES, 1):
         tag = chr(ord("A") + k - 1) if k <= 26 else str(k)
         mid = p["url"].rstrip("/").split("?")[0].rsplit("-", 1)[-1]

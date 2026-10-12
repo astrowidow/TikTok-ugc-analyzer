@@ -1191,6 +1191,22 @@ def _seed_from(old_id: str, new_id: str, enriched: bool = True, comments: bool =
     return done
 
 
+def _carry_over(old_id: str, new_id: str) -> dict:
+    """取り直すとき、利用者の決めたこと（外した動画・足した動画・章立て）を新しい分析へ引き継ぐ（0.8.1〜）"""
+    om = _read_json(ANALYSES_DIR / old_id / "analysis.json", {}) or {}
+    keys = {k: om[k] for k in ("excluded_videos", "user_videos") if om.get(k)}
+    if keys:
+        p = ANALYSES_DIR / new_id / "analysis.json"
+        m = _read_json(p, {}) or {}
+        m.update(keys)
+        _write_json(p, m)
+    plan = ANALYSES_DIR / old_id / "outputs" / "chapter_plan.json"
+    if plan.exists():
+        (ANALYSES_DIR / new_id / "outputs").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(plan, ANALYSES_DIR / new_id / "outputs" / "chapter_plan.json")
+    return {**{k: len(v) for k, v in keys.items()}, "chapter_plan": plan.exists()}
+
+
 def _set_aside(a: Analysis) -> bool:
     """取り直した・しまった分析か（acquire/launch.set_aside）"""
     from acquire import launch
@@ -1416,7 +1432,8 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
                 gb = None
             if gb is not None and gb < 1.0:
                 raise RunnerError(f"Mac の空き容量が約{gb:.1f}GB しかなく、取得の途中で止まるおそれがあります（1曲で 0.2〜0.5GB 使います）。"
-                                  "空きを増やしてから、もう一度頼んでください（使わなくなった分析は archive_analysis でしまえます）")
+                                  "空きを増やしてから、もう一度頼んでください（使わなくなった分析は「〇〇の分析を消して」でゴミ箱へ入れられます。"
+                                  "どれが大きいかは info の about=storage）")
             if gb is not None and gb < 5.0:
                 disk_note = f"（Mac の空き容量が約{gb:.1f}GB です。1曲で 0.2〜0.5GB 使います）"
         if supersede is not None:
@@ -1439,6 +1456,8 @@ def _start_analysis(user_id: str, song: str, artist: str = "", music_url: str = 
             old_opts = _options(ANALYSES_DIR / supersede)
             if old_opts.get("skip_confirm") and created:   # 界隈の確認を省く頼みは引き継ぐ
                 _set_options(ANALYSES_DIR / aid, skip_confirm=True, skip_confirm_at=_now())
+            if created:
+                _carry_over(supersede, aid)
         seeded = _seed_from(seed["from"], aid, seed.get("enriched", True), seed.get("comments", True)) \
             if (seed and created) else {}
     if LOCAL is not None and created and pages is None:   # どの楽曲ページで進めるかを見せるため、題・作者・UGC 数を読む（読めなくても進める）
@@ -1983,11 +2002,15 @@ def _pages_of(a: Analysis, name: str) -> list:
             chs = sorted(p.stem for p in (out / "chapters").glob("*.md")) if (out / "chapters").is_dir() else []
             if not chs:
                 raise RunnerError("章はまだ書かれていません")
+            if is_w1(a):
+                import flow_w1
+                return [flow_w1.chapters_listing(a)]
             return [("章の名前（chapter:<名前> で本文、note_chapter:<名前> で note 用の仕上げを読む）:\n"
                      + "\n".join(f"- {c}" for c in chs))]
         if name == "appendix":
             md = (out / "REPORT.md").read_text(encoding="utf-8") if (out / "REPORT.md").exists() else ""
-            i = md.find("\n## 9")
+            m_ = re.search(r"\n## \d+\. 付録", md)   # 番号は章立てで変わる（組み立てで振り直す。0.8.1〜）
+            i = m_.start() if m_ else -1
             if i < 0:
                 raise RunnerError("付録はまだありません（レポートの完成のときに作る）")
             return _paginate([md[i:]])
@@ -2067,7 +2090,9 @@ def read(user_id: str, ref: str | None, name: str, page: int = 1) -> dict:
 # 前は「レポートがまだできていません。完成してから」「いま〇〇の途中です。終わってから」と断っていた。
 # 今の作業（第1版・掘り下げ・切り直し・取得）が終わって完了の知らせを出すときに、積んだ順に1つずつ始める
 # ---------------------------------------------------------------------------
-PENDING_KINDS = {"revise": "レポートの直し", "deepen": "界隈の掘り下げ", "recut": "界隈の切り直し"}
+PENDING_KINDS = {"revise": "レポートの直し", "deepen": "コメントの取り足し", "recut": "界隈の切り直し",
+                 "restructure": "章立ての変更", "videos": "動画の足し外し", "videos_change": "動画を外した（戻した）ところの書き直し",
+                 "compare": "比べるレポート"}
 MAX_REQUEST_CHARS = 8000   # 直し・掘り下げ・切り直しの頼みの言葉（前は 2000字。長い頼みも受ける）
 
 
@@ -2102,6 +2127,9 @@ def _busy_label(a: Analysis, st: dict | None) -> str:
         if cur is not None and cur["kind"] != "done":
             if _recut_pending(st) or _recut_rest(st, cur):
                 return "界隈の切り直しの途中"
+            if any(t["type"] in DEEPEN_TASKS and t["status"] != "done" and (t.get("params") or {}).get("generic") for t in st["tasks"]) \
+                    or any(t["type"] == "change_prep" and t["status"] != "done" for t in st["tasks"]):
+                return "レポートを直している途中"
             if any(t["type"] in DEEPEN_TASKS and t["status"] != "done" for t in st["tasks"]):
                 return "界隈の掘り下げの途中"
             return "レポートの第1版を書いている途中" if not _written_once(a) else "レポートを書き直している途中"
@@ -2114,9 +2142,18 @@ def _apply_pending(user_id: str, a: Analysis, job: dict) -> str:
         if kind == "revise":
             r = revise(user_id, a.id, job.get("instruction", ""))
         elif kind == "deepen":
-            r = deepen(user_id, a.id, job.get("community", ""), job.get("instruction", ""))
+            r = deepen(user_id, a.id, job.get("community", ""), job.get("instruction", ""), job.get("videos"), job.get("per_video"))
         elif kind == "recut":
             r = recut(user_id, a.id, job.get("instruction", ""))
+        elif kind == "restructure":
+            r = restructure(user_id, a.id, job.get("remove"), job.get("add"), job.get("order"), job.get("instruction", ""))
+        elif kind == "videos":
+            r = videos(user_id, a.id, job.get("action", ""), job.get("targets") or [], job.get("instruction", ""),
+                       job.get("per_video"))
+        elif kind == "videos_change":
+            r = _videos_change(a, job.get("action", ""), job.get("video_ids") or [], job.get("instruction", ""))
+        elif kind == "compare":
+            r = compare(user_id, [a.id] + list(job.get("others") or []), job.get("instruction", ""))
         else:
             return ""
         return r["text"]
@@ -2186,11 +2223,31 @@ def _match_community(tax: dict, text: str) -> str:
                       f"key を community に入れて deepen を呼び直してください（利用者には聞かない）:\n{listing}")
 
 
-def deepen(user_id: str, ref: str | None, community: str, instruction: str) -> dict:
-    """完成したレポートの、ある界隈の掘り下げ。取る動画を決めて取得の待ち行列に入れ、AI の仕事を末尾に足す"""
-    instruction = (instruction or "").strip() or "この界隈をもっと掘り下げて"
+ALL_WORDS = ("all", "全部", "すべて", "全体", "全界隈", "全部の界隈")
+
+
+def _per_video(v):
+    """動画1本あたりに取るコメントの件数の指定（None・数・"all"）"""
+    if v in (None, "", 0):
+        return None
+    if str(v).strip().lower() in ("all", "全部", "すべて", "ぜんぶ"):
+        return "all"
+    try:
+        return max(1, int(v))
+    except (TypeError, ValueError):
+        raise RunnerError("per_video は動画1本あたりに取るコメントの件数（数）か \"all\"（その動画のコメントを全部）です")
+
+
+def deepen(user_id: str, ref: str | None, community: str, instruction: str, videos=None, per_video=None) -> dict:
+    """完成したレポートの掘り下げ（コメントを取り足して、関わるところを書き直す）。取る動画を決めて取得の待ち行列に入れ、AI の仕事を末尾に足す。
+    community は界隈（今まで）か "all"（全部の界隈）。videos は動画の URL・seq（動画ごと）。per_video は1本あたりの件数か "all"（0.8.1〜。
+    2026-10-12 ユーザー「全て盛り込んで」: 前は界隈ごとにしか頼めず、件数も決まっていた。docs/PLAN_0_8_1.md 2-4）"""
+    instruction = (instruction or "").strip() or ("この動画のコメントをもっと読んで" if videos else "この界隈をもっと掘り下げて")
     if len(instruction) > MAX_REQUEST_CHARS:
         raise RunnerError(f"頼みの言葉は{MAX_REQUEST_CHARS}字までにしてください（分けて頼めば全部受けます）")
+    per_video = _per_video(per_video)
+    videos = [str(v).strip() for v in (videos if isinstance(videos, list) else re.split(r"[,、\s]+", videos or "")) if str(v).strip()]
+    every = not videos and str(community or "").strip().lower() in ALL_WORDS
     with _lock:
         a = resolve(user_id, ref)
         if not is_w1(a):
@@ -2199,22 +2256,60 @@ def deepen(user_id: str, ref: str | None, community: str, instruction: str) -> d
         st = _load_state(a) if not (acq and acq.get("status") != "done") else None
         busy = _busy_label(a, st)
         if busy:   # 途中の頼みは積んで、今の作業が終わったら始める（前は断っていた）
-            return _queue_request(a, "deepen", busy, community=community, instruction=instruction)
-        tax = _taxonomy(a)
-        k = _match_community(tax, community)
+            return _queue_request(a, "deepen", busy, community=community, instruction=instruction, videos=videos, per_video=per_video)
         from acquire import deepen as dp
         import flow_w1
-        pl = dp.plan(a.dir, k)
-        job = dp.request(a.dir, k, instruction, pl)
+        tax = _taxonomy(a)
+        if videos:
+            items, bad = flow_w1.video_targets(a, videos)
+            if bad:
+                raise RunnerError(f"動画は URL（https://www.tiktok.com/@…/video/…）か番号（seq）で: {bad}")
+            unread = [x for x in items if x["seq"] is None]
+            if unread:   # まだ詳しく読んでいない動画は、先に足す（足すときにコメントも取る）
+                return videos_add_first(user_id, a, unread, instruction)
+            vids = [x["video_id"] for x in items]
+            k = "videos"
+            pl = dp.plan_videos(a.dir, vids, per_video)
+            job = dp.request(a.dir, "videos", instruction, pl, kind="videos", video_ids=vids, per_video=per_video)
+            stage = "label"
+        elif every:
+            k = "all"
+            pl = dp.plan_all(a.dir, per_video)
+            job = dp.request(a.dir, "all", instruction, pl, kind="videos", per_video=per_video)
+            stage = "plan"
+        else:
+            k = _match_community(tax, community)
+            if per_video is None:
+                pl = dp.plan(a.dir, k)
+                job = dp.request(a.dir, k, instruction, pl)
+                stage = None
+            else:   # 件数の指定つき: その界隈の動画を全部、指定の件数まで
+                labs = flow_w1.labels(a)
+                recs = flow_w1.records(a)
+                vids = [str(recs[s_]["video_id"]) for s_, l in labs.items() if l["community"] == k and s_ in recs]
+                pl = dp.plan_videos(a.dir, vids, per_video)
+                job = dp.request(a.dir, k, instruction, pl, kind="videos", video_ids=vids, per_video=per_video)
+                stage = "plan"
         for t in st["tasks"]:   # 前の完了の知らせを AI が受け取らないまま会話が終わっていたら、済んだことにする
             if t["kind"] == "done" and t["status"] != "done":
                 t.update({"status": "done", "done_at": _now()})
-        st["tasks"] += flow_w1.deepen_tasks(st, job)
+        if stage is None:
+            st["tasks"] += flow_w1.deepen_tasks(st, job)
+        else:
+            st["tasks"].append(flow_w1._task(st, "change_prep", "service", "直す章の準備（サービス）",
+                                             {"round": job["round"], "instruction": instruction, "stage": stage}))
         _write_json(a.state_path, st)
         a.log(event="deepen_requested", community=k, round=job["round"], n_new=pl["n_new"], n_more=pl["n_more"],
-              est_min=pl["est_min"], chars=len(instruction))
-    name = _first_sentence(str(tax["community"].get(k, k)), 40)
-    head = f"「{a.title}」の界隈 `{k}`（{name}）を掘り下げます。"
+              est_min=pl["est_min"], chars=len(instruction), videos=len(videos), per_video=per_video)
+    if k == "videos":
+        head = f"「{a.title}」の動画{len(videos)}本のコメントを取り足して、レポートの関わるところを直します。"
+    elif k == "all":
+        head = f"「{a.title}」の全部の界隈のコメントを取り足して、レポートを直します。"
+    else:
+        name = _first_sentence(str(tax["community"].get(k, k)), 40)
+        head = f"「{a.title}」の界隈 `{k}`（{name}）を掘り下げます。"
+    if per_video is not None:
+        head += f"（1本あたり{'その動画のコメントを全部' if per_video == 'all' else f'{per_video}件まで'}）"
     if job["status"] != "queued":
         return {"text": head + "取り足せる動画（コメントの無い動画・続きのある動画）が無いので、手元のコメントを前回より深く読み直して直します。"
                        "利用者にそう短く伝え、続けて next_task を呼んで、仕事を片付けてください。", "analysis_id": a.id}
@@ -2224,7 +2319,9 @@ def deepen(user_id: str, ref: str | None, community: str, instruction: str) -> d
         from acquire import launch
         launch.ensure_worker()
     eta = pl["est_min"] * 60
-    head += f"コメントを取り足します: 新しく{pl['n_new']}本・続きを{pl['n_more']}本。"
+    head += (f"コメントを取り足します: 新しく{pl['n_new']}本・続きを{pl['n_more']}本（見込み 約{_hm(eta)}"
+             + ("。これは最大の見込みで、上位のコメントが尽きたところで止まるので、ふつうはもっと短く済みます" if per_video == "all" else "")
+             + "）。")
     if pl["left_new"] or pl["left_more"]:
         head += f"時間の都合で取らない動画もあります（新しく{pl['left_new']}本・続き{pl['left_more']}本）。"
     if DEEPEN_WAIT_IN_CHAT:
@@ -2232,7 +2329,8 @@ def deepen(user_id: str, ref: str | None, community: str, instruction: str) -> d
                 f"{DEEPEN_WAIT_S}秒待って様子を返す）。会話が途中で止まっても、取得が終わると Mac の通知が出るので、"
                 f"利用者が「{a.title}の分析を続けて」と言えば再開できる。")
     else:
-        back = come_back_line(eta, "この界隈のコメントを取り足すの", a.title, "取り足した分でレポートを書き直します。")
+        back = come_back_line(eta, "コメントを取り足すの" if k in ("videos", "all") else "この界隈のコメントを取り足すの", a.title,
+                              "取り足した分でレポートを書き直します。")
         tail = ("（AI へ: この内容を利用者に短く伝えて止まる。取得を待たない・見に来ない。返事の最後に、下の「」の文を言い換えずにそのまま入れる。"
                 "「続けて」と言われたら next_task で、その界隈の分析のやり直し・構成案と章の書き直し・全章の通し読みを片付ける）\n"
                 f"「{back}」")
@@ -2265,7 +2363,8 @@ def _deepen_view(a: Analysis):
         except ValueError:
             pass
     back = f"終わったら「{a.title}の分析を続けて」と言ってください。"
-    what = "切り直した界隈" if dp.get("kind") == "recut" else f"界隈 `{dp.get('community')}` "
+    what = ("切り直した界隈" if dp.get("kind") == "recut" else "足した動画" if dp.get("kind") == "add" else
+            "全部の界隈" if dp.get("community") == "all" else "指定の動画" if dp.get("kind") == "videos" else f"界隈 `{dp.get('community')}` ")
     if LOCAL is not None:
         app = LOCAL.app_state() or {}
         if not app.get("running"):
@@ -2318,15 +2417,27 @@ def _deepen_wait_task(a: Analysis, dv: dict) -> dict:
                "途中経過を毎回書かない。")
     else:
         how = "ここで止まって、利用者にこの内容を短く伝える。next_task を繰り返し呼ばない（待つ間に見に来ない）。"
-    what = "界隈の切り直し" if (a.meta.get("deepen") or {}).get("kind") == "recut" else "界隈の掘り下げ"
+    what = _dp_what(a.meta.get("deepen") or {})
     text = f"# 待ち: {a.title}（{what}）\n\n- kind: `wait`\n\n{dv['message']}\n\n{how}\n\n---\n" + REPEAT_RULE
     a.log(event="issue", task_id=f"{a.id}/deepen-wait", kind="wait", chars=len(text))
     return {"text": text, "task_id": None, "kind": "wait", "analysis_id": a.id, "progress": _acq_label(a), "state": dv["state"]}
 
 
+def _dp_what(dp: dict) -> str:
+    """取り足しの回の名前（界隈の掘り下げ・切り直し・動画ごと・全体・動画を足す）"""
+    kind = dp.get("kind") or "deepen"
+    if kind == "recut":
+        return "界隈の切り直し"
+    if kind == "add":
+        return "動画を足す"
+    if kind == "videos":
+        return "全部の界隈のコメントの取り足し" if dp.get("community") == "all" else "動画のコメントの取り足し"
+    return "界隈の掘り下げ"
+
+
 def _acq_label(a: Analysis) -> str:
-    """完成後の取り足しの進み具合の名前（掘り下げか、切り直しか）"""
-    return "界隈の切り直しの取り足し" if (a.meta.get("deepen") or {}).get("kind") == "recut" else "界隈の掘り下げの取り足し"
+    """完成後の取り足しの進み具合の名前（掘り下げか、切り直しか、動画ごとか、動画を足すか）"""
+    return _dp_what(a.meta.get("deepen") or {}) + "の取り足し"
 
 
 # ---------------------------------------------------------------------------
@@ -2544,7 +2655,7 @@ def cancel_analysis(user_id: str, ref: str | None) -> dict:
             m["deepen"].update({"status": "cancelled", "cancelled_at": _now(), "cancel_reason": "利用者がやめた"})
             _write_json(a.dir / "analysis.json", m)
             LOCAL.request_stop(a.id)
-            what = "界隈の切り直し" if dp.get("kind") == "recut" else "界隈の掘り下げ"
+            what = _dp_what(dp)
             return {"text": f"「{a.title}」の{what}のコメントの取り足しをやめました（UGC Analyzer が数秒で止めます）。"
                             f"取れた分だけで書き直すなら「{a.title}の分析を続けて」と言ってください。", "analysis_id": a.id}
         if acq.get("status") == "done":
@@ -2777,7 +2888,7 @@ def redo(user_id: str, ref: str | None, frm: str = "", chapters=None, instructio
     return {"text": "\n".join(lines), "analysis_id": a.id}
 
 
-INFO_ABOUT = ("overview", "sounds", "video", "report", "app")
+INFO_ABOUT = ("overview", "sounds", "video", "report", "app", "storage")
 
 
 def info(user_id: str, ref: str | None = None, about: str = "overview", target: str = "") -> dict:
@@ -2793,6 +2904,9 @@ def info(user_id: str, ref: str | None = None, about: str = "overview", target: 
         except Exception as e:
             data = {"recent_problems": [f"アプリの状態を読めなかった（{type(e).__name__}）"]}
         return {"text": analysis_info.app(data)}
+    if about == "storage":
+        with _lock:
+            return {"text": analysis_info.storage(list_analyses(user_id), sys.modules[__name__])}
     with _lock:
         a = resolve(user_id, ref)
         if about == "overview":
@@ -2816,23 +2930,30 @@ def info(user_id: str, ref: str | None = None, about: str = "overview", target: 
         return {"text": text + "\n\n（AI へ: ここに無いことは「UGC Analyzer の記録には無い」と言い、推測で埋めない）", "analysis_id": a.id}
 
 
-def archive_analysis(user_id: str, ref: str | None, restore: bool = False) -> dict:
-    """分析をしまう（一覧・曲名での引き当て・「分析して」の再開に出さない。消さない）／戻す
-    （2026-10-12: 古い分析が溜まると、一覧が長くなり、曲名の取り違えも増える。docs/PLAN_0_8.md 第6章）"""
+def archive_analysis(user_id: str, ref: str | None, restore: bool = False, delete: bool = False,
+                     with_report: bool = False) -> dict:
+    """分析をしまう（一覧・曲名での引き当て・「分析して」の再開に出さない。消さない）／戻す／消す（ゴミ箱へ）
+    （2026-10-12: 古い分析が溜まると、一覧が長くなり、曲名の取り違えも増える。docs/PLAN_0_8.md 第6章。
+    消すのは 0.8.1 から: 1つ 144〜443MB あり、しまうだけでは容量が空かなかった。docs/PLAN_0_8_1.md 2-6）"""
     if not (ref or "").strip():
-        raise RunnerError("しまう（戻す）分析の曲名か分析 ID を教えてください")
+        raise RunnerError(f"{'消す' if delete else 'しまう（戻す）'}分析の曲名か分析 ID を教えてください")
     with _lock:
         mine = list_analyses(user_id)
         ref_n = ref.strip().lower()
-        hits = [b for b in mine if b.id.lower() == ref_n] or \
-            [b for b in mine if ref_n in b.title.lower() and bool(b.meta.get("archived_at")) == bool(restore)]
+        hits = [b for b in mine if b.id.lower() == ref_n]
+        if not hits and delete:
+            hits = [b for b in mine if ref_n in b.title.lower()]
+        elif not hits:
+            hits = [b for b in mine if ref_n in b.title.lower() and bool(b.meta.get("archived_at")) == bool(restore)]
         if not hits:
             raise RunnerError(f"「{ref}」に当たる{'しまってある' if restore else ''}分析がありません")
-        if len(hits) >= 2 and not any(b.id.lower() == ref_n for b in hits):
+        if len(hits) >= 2:
             return {"text": "当たる分析が複数あります: " + "、".join(f"{b.title}（{_state_label(b)}・{str(b.meta.get('created_at') or '')[:10]}・"
-                                                         f"分析 ID: {b.id}）" for b in hits)
+                                                         f"{_mb(_dir_bytes(b.dir)[0])}・分析 ID: {b.id}）" for b in hits)
                             + "。（AI へ: どれか利用者に1回聞き、分析 ID で呼び直す）"}
         a = hits[0]
+        if delete:
+            return _delete_analysis(a, with_report)
         if not restore and _acq_status(a) in ("queued", "running"):
             raise RunnerError(f"「{a.title}」は取得中です。しまう前に取得をやめてください（cancel_analysis）")
         m = _read_json(a.dir / "analysis.json")
@@ -2842,9 +2963,377 @@ def archive_analysis(user_id: str, ref: str | None, restore: bool = False) -> di
         else:
             m["archived_at"] = _now()
             msg = (f"「{a.title}」（{a.id}）をしまいました（消してはいません。レポートのフォルダもそのまま）。"
-                   "戻すときは「〇〇の分析を戻して」。")
+                   "戻すときは「〇〇の分析を戻して」。容量を空けたいときは「〇〇の分析を消して」。")
         _write_json(a.dir / "analysis.json", m)
         return {"text": msg, "analysis_id": a.id}
+
+
+def _dir_bytes(d: Path) -> tuple:
+    """フォルダの容量（バイト）と、そのうちほかの分析とハードリンクで分け合っているサムネの分（両方消すまで空かない）"""
+    total = shared = 0
+    seen = set()
+    for root, _dirs, files in os.walk(d):
+        for f in files:
+            try:
+                stt = os.lstat(os.path.join(root, f))
+            except OSError:
+                continue
+            if (stt.st_dev, stt.st_ino) in seen:
+                continue
+            seen.add((stt.st_dev, stt.st_ino))
+            total += stt.st_size
+            if stt.st_nlink > 1:
+                shared += stt.st_size
+    return total, shared
+
+
+def _mb(n: int) -> str:
+    return f"{n / 1e9:.1f}GB" if n >= 1e9 else f"{max(1, round(n / 1e6))}MB" if n else "0MB"
+
+
+def _trash_dir() -> Path:
+    return Path(os.environ.get("UGC_TRASH_DIR") or Path.home() / ".Trash")
+
+
+def _to_trash(p: Path, label: str) -> str:
+    """ゴミ箱へ移す。Mac の決まりの口（NSFileManager）が使えれば、Finder の「戻す」で元の場所に戻せる。
+    使えなければ（試験・ほかの OS）ゴミ箱のフォルダへ名前を付けて移す。戻り値はゴミ箱での名前"""
+    if not os.environ.get("UGC_TRASH_DIR"):
+        try:
+            from Foundation import NSFileManager, NSURL   # PyObjC（メニューバーのアプリが同梱している）
+            ok, url, err = NSFileManager.defaultManager().trashItemAtURL_resultingItemURL_error_(
+                NSURL.fileURLWithPath_(str(p)), None, None)
+            if ok:
+                return Path(str(url.path())).name if url is not None else p.name
+        except Exception:
+            pass
+    t = _trash_dir()
+    t.mkdir(parents=True, exist_ok=True)
+    dest = t / label
+    if dest.exists():
+        dest = t / f"{label}（{datetime.datetime.now():%Y%m%d-%H%M%S}）"
+    shutil.move(str(p), str(dest))
+    return dest.name
+
+
+def _delete_analysis(a: Analysis, with_report: bool) -> dict:
+    """分析のフォルダをゴミ箱へ（消す。戻せる）。取得中・取り足し中は断る。この分析を「取り直した先」にしていた前の分析は、印を外して一覧に戻す"""
+    if _acq_status(a) in ("queued", "running"):
+        raise RunnerError(f"「{a.title}」は取得中です。消す前に取得をやめてください（cancel_analysis）")
+    if (a.meta.get("deepen") or {}).get("status") in ("queued", "running"):
+        raise RunnerError(f"「{a.title}」はコメントの取り足しの途中です。消す前に取り足しをやめてください（cancel_analysis）")
+    size, shared = _dir_bytes(a.dir)
+    rep = None
+    if with_report and is_w1(a):
+        import flow_w1
+        if flow_w1.REPORTS_DIR:
+            d = flow_w1.report_folder(a)
+            rep = d if d.exists() else None
+    back = []
+    for b in list_analyses(a.owner):   # 取り直した先がこの分析だった前の分析は、印を外す（ゴミ箱から戻したら、取り直し直す）
+        if b.id != a.id and b.meta.get("superseded_by") == a.id:
+            m = _read_json(b.dir / "analysis.json")
+            for k in ("superseded_by", "superseded_at", "superseded_reason"):
+                m.pop(k, None)
+            _write_json(b.dir / "analysis.json", m)
+            back.append(b)
+    name = _to_trash(a.dir, f"UGC Analyzer の分析 {a.title}（{a.id}）")
+    rep_name = _to_trash(rep, f"{rep.name}（UGC Analyzer のレポート）") if rep else None
+    _append_jsonl(ANALYSES_DIR / ".deleted.jsonl", {"at": _now(), "analysis_id": a.id, "title": a.title, "owner": a.owner,
+                                                     "bytes": size, "trash_name": name, "report_trash_name": rep_name})
+    lines = [f"「{a.title}」（{a.id}・{_mb(size)}）をゴミ箱に入れました。Finder のゴミ箱から「戻す」で戻せます。"
+             f"ゴミ箱を空にすると、約{_mb(size - shared)}空きます"
+             + (f"（サムネ {_mb(shared)} はほかの分析と分け合っているので、両方消すまで空きません）" if shared else "") + "。"]
+    if rep_name:
+        lines.append(f"レポートのフォルダ（{rep.name}）もゴミ箱に入れました。")
+    elif with_report:
+        lines.append("レポートのフォルダは見つかりませんでした（まだ書いていないか、動かしてある）。")
+    else:
+        lines.append("レポートのフォルダ（「レポート」の中）は残してあります。")
+    if back:
+        lines.append("この分析の前の分析（" + "、".join(f"{b.title}・{b.id}" for b in back) + "）を一覧に戻しました。")
+    return {"text": "\n".join(lines), "analysis_id": a.id, "deleted": True, "bytes": size}
+
+
+# ---------------------------------------------------------------------------
+# 章立てを変える・動画を外す／戻す／足す・比べる（2026-10-12 0.8.1〜。docs/PLAN_0_8_1.md）
+# ---------------------------------------------------------------------------
+def _as_list(v) -> list:
+    if v in (None, ""):
+        return []
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    return [x for x in re.split(r"[,、\s]+", str(v)) if x]
+
+
+PLAN_NAMES = {"intro": "冒頭", "path": "拡大経路", "branch": "分岐点", "music": "音楽", "result": "結果"}
+
+
+def _plan_line(items: list) -> str:
+    return " → ".join(PLAN_NAMES.get(x["id"], x.get("title") or x["id"]) if isinstance(x, dict) else PLAN_NAMES.get(x, x)
+                      for x in items)
+
+
+def restructure(user_id: str, ref: str | None, remove=None, add=None, order=None, instruction: str = "") -> dict:
+    """章立てを変える（章を足す・外す・並べ替える）。書く前なら章立ての表を書くだけ（最初から効く）。書いたあとは変更の回
+    （版を残す → 構成案の直し → 足した章と冒頭ほかの書き直し → 通し読み → 仕上げ）。書いている途中なら積む"""
+    instruction = (instruction or "").strip()
+    if len(instruction) > MAX_REQUEST_CHARS:
+        raise RunnerError(f"頼みの言葉は{MAX_REQUEST_CHARS}字までにしてください（分けて頼めば全部受けます）")
+    remove, order = _as_list(remove), _as_list(order)
+    add = add if isinstance(add, list) else ([add] if add else [])
+    if not (remove or add or order):
+        raise RunnerError("どう変えるかを remove（外す章）・add（足す章: title・about・after）・order（並び）で渡してください。"
+                          "章の id は read の chapters で見られる")
+    import flow_w1
+    with _lock:
+        a = resolve(user_id, ref)
+        if not is_w1(a):
+            raise RunnerError("この分析（試作）は章立ての変更に対応していません")
+        acq = a.meta.get("acquisition") or {}
+        acquiring = bool(acq) and acq.get("status") != "done"
+        st = None if acquiring else _load_state(a)
+        plan = flow_w1.restructure_plan(a, remove, add, order)
+        before, after = _plan_line(plan["before"]), _plan_line(plan["items"])
+        written = _written_once(a)
+        if acquiring or (not written and not a.outputs("outline.json").exists()):   # 構成案の前: 表を書くだけで、最初から新しい章立てで書く
+            flow_w1.save_chapter_plan(a, plan, instruction)
+            n = flow_w1.rebuild_write_tail(a, st) if st else 0
+            if st is not None:
+                _write_json(a.state_path, st)
+            a.log(event="restructure", early=True, before=plan["before"], after=plan["after"], rebuilt=n)
+            return {"text": f"「{a.title}」の章立てを {before} から {after} にしました。まだ書く前なので、最初からこの章立てで書きます。"
+                            "（AI へ: 利用者にそう短く伝える。いま進めている作業があれば next_task で続ける）", "analysis_id": a.id}
+        busy = _busy_label(a, st)
+        if busy:
+            return _queue_request(a, "restructure", busy, remove=remove, add=add, order=order,
+                                  instruction=instruction or f"章立てを {after} に")
+        r = flow_w1.start_change(a, st, "restructure", instruction, before=plan["before"], after=plan["after"],
+                                 added=plan["added"], removed=plan["removed"])
+        flow_w1.save_chapter_plan(a, plan, instruction)
+        _write_json(a.state_path, r["st"])
+        n_ch = len(flow_w1.chapter_order(a))
+        k = len(plan["added"]) + 2
+        est = flow_w1.estimate(a, {"outline_revise": 1, "write": k, "review": 1, "finish": k},
+                               {"write": n_ch, "finish": n_ch, "outline_revise": 1, "review": 1})
+        a.log(event="restructure", round=r["round"], before=plan["before"], after=plan["after"], est_min=est["est_min"])
+    lines = [f"「{a.title}」の章立てを変えます: {before} から {after} へ。"]
+    if plan["added"]:
+        lines.append("足す章: " + "、".join(f"「{x['title']}」" for x in plan["added"]) + "。")
+    if plan["removed"]:
+        lines.append("外す章: " + "、".join(PLAN_NAMES.get(x, x) for x in plan["removed"]) + "（消さずに残すので、戻せます）。")
+    lines.append("構成案を直して、足した章と冒頭（章立ての予告）と、話がずれる章を書き直し、全章を通して読みます。"
+                 f"見込み: {est['est_text']}。前の版は残してあり、「前の版に戻して」で戻せます。")
+    lines.append("（AI へ: この内容を利用者に短く伝え、確かめを求めずに、続けて next_task を呼んで進める）")
+    return {"text": "\n".join(lines), "analysis_id": a.id, "round": r["round"]}
+
+
+VIDEO_ACTIONS = {"exclude": "外す", "include": "戻す", "add": "足す"}
+
+
+def videos(user_id: str, ref: str | None, action: str, targets, instruction: str = "", per_video=None) -> dict:
+    """動画を外す（exclude）・戻す（include）・足す（add）。外す・戻すの印はすぐ付け、このあとの仕事から効く。
+    書いてある章に関わるときは、変更の回（関わる界隈のコメント分析 → 構成案の直し → 書き直し → 通し読み）。書いている途中なら、その直しを積む"""
+    action = str(action or "").strip().lower()
+    if action not in VIDEO_ACTIONS:
+        raise RunnerError("action は exclude（外す）・include（戻す）・add（足す）のどれかです")
+    targets = [str(x).strip() for x in _as_list(targets) if str(x).strip()]
+    if not targets:
+        raise RunnerError("動画の URL（https://www.tiktok.com/@…/video/…）か番号（seq）を targets に入れてください")
+    instruction = (instruction or "").strip()
+    if len(instruction) > MAX_REQUEST_CHARS:
+        raise RunnerError(f"頼みの言葉は{MAX_REQUEST_CHARS}字までにしてください（分けて頼めば全部受けます）")
+    import flow_w1
+    with _lock:
+        a = resolve(user_id, ref)
+        if not is_w1(a):
+            raise RunnerError("この分析（試作）は動画の足し外しに対応していません")
+        if action == "add":
+            return _videos_add(user_id, a, targets, instruction)
+        items, bad = flow_w1.video_targets(a, targets)
+        if bad:
+            raise RunnerError(f"動画は URL（https://www.tiktok.com/@…/video/…）か番号（seq）で教えてください: {bad}")
+        changed = flow_w1.set_excluded(a, items, include=(action == "include"), why=instruction)
+        if not changed:
+            return {"text": f"「{a.title}」で、その動画はもう{'外してあります' if action == 'exclude' else '外していません（使っています）'}。"
+                            "（AI へ: 利用者にそう短く伝える）", "analysis_id": a.id}
+        names = "、".join(f"seq {x['seq']}" if x.get("seq") is not None else x["video_id"] for x in changed)
+        verb = "外しました" if action == "exclude" else "戻しました"
+        acq = a.meta.get("acquisition") or {}
+        a.log(event="videos", action=action, n=len(changed))
+        if (acq and acq.get("status") != "done") or not a.outputs("labels.tsv").exists():
+            return {"text": f"「{a.title}」から動画（{names}）を{verb}。まだラベルを付ける前なので、このあとの分析に"
+                            f"{'使いません' if action == 'exclude' else '使います'}（書き直しは要りません）。"
+                            "（AI へ: 利用者にそう短く伝える。いま進めている作業があれば next_task で続ける）", "analysis_id": a.id}
+    return _videos_change(a, action, [x["video_id"] for x in changed], instruction, names=names)
+
+
+def _videos_change(a: Analysis, action: str, video_ids: list, instruction: str = "", names: str = "") -> dict:
+    """外した・戻した動画に合わせて、書いてあるレポートを直す（変更の回）。書いている途中なら積む"""
+    import flow_w1
+    with _lock:
+        a = Analysis(a.id)
+        st = _load_state(a)
+        busy = _busy_label(a, st)
+        verb = "外した" if action == "exclude" else "戻した"
+        done_verb = "外しました" if action == "exclude" else "戻しました"
+        if busy:
+            r = _queue_request(a, "videos_change", busy, action=action, video_ids=video_ids,
+                               instruction=instruction or f"動画を{verb}ところを直して")
+            r["text"] = (f"動画（{names or len(video_ids)}）を{verb}（このあとの仕事から効きます）。" + r["text"])
+            return r
+        recs = flow_w1.records(a, all_=True)
+        seq_of = {str(rr["video_id"]): s_ for s_, rr in recs.items()}
+        seqs = [seq_of[v] for v in video_ids if v in seq_of]
+        r = flow_w1.start_change(a, st, action, instruction, video_ids=list(video_ids), seqs=seqs)
+        _write_json(a.state_path, r["st"])
+        where = flow_w1.cited_where(a, seqs) if seqs else {"chapters": []}
+    lines = [f"「{a.title}」で動画（{names or '、'.join(f'seq {x}' for x in seqs)}）を{done_verb}。"]
+    if action == "exclude" and where["chapters"]:
+        lines.append("この動画を名指ししている章（" + "、".join(flow_w1.chapter_name(c_, a) for c_ in where["chapters"]) +
+                     "）と、関わる界隈のコメント分析を直します。")
+    elif action == "exclude":
+        lines.append("本文では名指ししていないので、関わる界隈のコメント分析と付録の数字を直します（名指しが無く、コメントも読んでいなければ数字だけ）。")
+    else:
+        lines.append("関わる界隈のコメント分析と、構成案・関わる章を直します。")
+    lines.append("前の版は残してあり、「前の版に戻して」で戻せます。")
+    lines.append("（AI へ: この内容を利用者に短く伝え、確かめを求めずに、続けて next_task を呼んで進める）")
+    return {"text": "\n".join(lines), "analysis_id": a.id, "round": r["round"]}
+
+
+def videos_add_first(user_id: str, a: Analysis, unread: list, instruction: str) -> dict:
+    """コメントを読ませたい動画が、まだ詳しく読んでいない動画だったとき: 先に足す（足すときに属性とコメントを取る）"""
+    r = _videos_add(user_id, a, [x["url"] or x["video_id"] for x in unread], instruction, locked=True)
+    r["text"] = ("その動画はまだ詳しく読んでいなかったので、先に分析に足します（属性とコメントを取ります）。" + r["text"]
+                 + "\n（足し終えたあと、もっとコメントを読ませたいなら、もう一度「この動画のコメントを全部読んで」と頼めば取り足す）")
+    return r
+
+
+def _videos_add(user_id: str, a: Analysis, targets: list, instruction: str, locked: bool = True) -> dict:
+    """動画を足す。取得の一覧の段の前なら user_videos に書くだけ（一覧の段で必ず詳しく読む）。それ以外は取得の回（kind add）:
+    一覧に足す → 属性 → 番号を変えずに作り直す → コメント → ラベル → 関わるところの書き直し。書いている途中なら積む"""
+    import flow_w1
+    from acquire import deepen as dp
+    items, bad = flow_w1.video_targets(a, targets)
+    bad += [x["video_id"] for x in items if not x.get("url") and x.get("seq") is None]
+    if bad:
+        raise RunnerError(f"足す動画は URL（https://www.tiktok.com/@…/video/…）で教えてください: {bad}")
+    ex = flow_w1.excluded_ids(a)
+    have = [x for x in items if x.get("seq") is not None and x["video_id"] not in ex]
+    gone = [x for x in items if x["video_id"] in ex]
+    new = [x for x in items if x.get("seq") is None]
+    notes = []
+    if have:
+        notes.append("もう詳しく読んでいる動画: " + "、".join(f"seq {x['seq']}" for x in have)
+                     + "（コメントをもっと読ませたいなら deepen の videos）")
+    if gone:
+        notes.append("外してある動画: " + "、".join(f"seq {x['seq']}" for x in gone) + "（戻すなら videos の include）")
+    if not new:
+        return {"text": f"「{a.title}」に足す動画はありません。" + "。".join(notes) + "。（AI へ: 利用者にそう短く伝える）",
+                "analysis_id": a.id}
+    m = _read_json(a.dir / "analysis.json", {}) or {}
+    uv = [x for x in m.get("user_videos") or [] if isinstance(x, dict)]
+    known = {str(x.get("video_id")) for x in uv}
+    uv += [{"video_id": x["video_id"], "url": x["url"], "at": _now()} for x in new if x["video_id"] not in known]
+    m["user_videos"] = uv
+    _write_json(a.dir / "analysis.json", m)
+    a.meta = m
+    acq = m.get("acquisition") or {}
+    list_done = ((acq.get("steps") or {}).get("list") or {}).get("status") == "done"
+    names = "、".join(x["url"] for x in new)
+    if acq and acq.get("status") in ("queued", "running") and not list_done:
+        a.log(event="videos", action="add", when="before_list", n=len(new))
+        return {"text": f"「{a.title}」に動画（{names}）を足しました。動画の一覧を集めるときに、必ず詳しく読みます（属性とコメントも取ります）。"
+                        + ("。".join(notes) + "。" if notes else "") + "（AI へ: 利用者にそう短く伝えて止まる）", "analysis_id": a.id}
+    st = _state(a)
+    labeled = a.outputs("labels.tsv").exists()
+    dpj = m.get("deepen") or {}
+    deepen_busy = dpj.get("status") in ("queued", "running")
+    busy = _busy_label(a, st) if (st is not None and labeled) else ""
+    if deepen_busy or busy:
+        r = _queue_request(a, "videos", busy or "コメントを取り足している途中", action="add",
+                           targets=[x["url"] for x in new], instruction=instruction or "この動画も入れて")
+        return r
+    targets_ = [{"video_id": x["video_id"], "url": x["url"]} for x in new]
+    job = dp.request_add(a.dir, targets_, instruction or "この動画も入れて")
+    if st is not None and _written_once(a):
+        for t in st["tasks"]:
+            if t["kind"] == "done" and t["status"] != "done":
+                t.update({"status": "done", "done_at": _now()})
+        st["tasks"].append(flow_w1._task(st, "change_prep", "service", "直す章の準備（サービス）",
+                                         {"round": job["round"], "instruction": instruction or "この動画も入れて", "stage": "label"}))
+        _write_json(a.state_path, st)
+        tail = "足したあと、ラベルを付け、関わる界隈のコメント分析と章を直します。"
+    elif st is not None:   # 書く前（ラベルを付ける前）: 足した動画にもラベルを付ける（段階の区切りの前に）
+        ph = next((t for t in st["tasks"] if t["type"] == "phases" and t["status"] != "done"), None)
+        if ph is not None:
+            st["tasks"].insert(st["tasks"].index(ph), flow_w1._task(
+                st, "change_prep", "service", "足した動画のラベルの準備（サービス）",
+                {"round": job["round"], "instruction": instruction, "stage": "label", "inline": True}))
+            _write_json(a.state_path, st)
+        tail = "足したあと、最初からこの動画も入れて書きます。"
+    else:
+        tail = "足したあと、最初からこの動画も入れて書きます。"
+    if LOCAL is not None:
+        LOCAL.ensure_app()
+    else:
+        from acquire import launch
+        launch.ensure_worker()
+    eta = float(job.get("est_min") or 3) * 60
+    a.log(event="videos", action="add", round=job["round"], n=len(new), est_min=job.get("est_min"))
+    back = come_back_line(eta, "足した動画の属性とコメントを取るの", a.title, "レポートに入れます。")
+    return {"text": f"「{a.title}」に動画（{names}）を足します。Mac の UGC Analyzer が属性とコメントを取ります（見込み 約{_hm(eta)}）。" + tail
+                    + ("。".join(notes) + "。" if notes else "")
+                    + "\n（AI へ: この内容を利用者に短く伝えて止まる。取得を待たない・見に来ない。返事の最後に、下の「」の文を言い換えずにそのまま入れる）\n"
+                    + f"「{back}」", "analysis_id": a.id, "round": job["round"]}
+
+
+def compare(user_id: str, refs, instruction: str = "") -> dict:
+    """2つ以上の分析を比べたレポート（2026-10-12 0.8.1〜。docs/PLAN_0_8_1.md 2-5）。曲名を1つだけ渡されたら、同じ曲の新しい2つ（前回と今回）。
+    比べる相手が無ければ、最新の数字で集め直す道を返す。新しいほうの分析が書いている途中なら積む"""
+    refs = [str(x).strip() for x in _as_list(refs) if str(x).strip()]
+    instruction = (instruction or "").strip() or "比べて"
+    if len(instruction) > MAX_REQUEST_CHARS:
+        raise RunnerError(f"頼みの言葉は{MAX_REQUEST_CHARS}字までにしてください（分けて頼めば全部受けます）")
+    if not refs:
+        raise RunnerError("比べる分析の曲名か分析 ID を analysis_ids に入れてください（曲名1つなら、同じ曲の前回と今回を比べる）")
+    import flow_w1
+    with _lock:
+        mine = list_analyses(user_id)
+        picked = []
+        for r in refs:
+            hit = next((b for b in mine if b.id.lower() == r.lower()), None) or resolve(user_id, r)
+            if all(b.id != hit.id for b in picked):
+                picked.append(hit)
+        if len(picked) == 1:   # 同じ曲の前回と今回
+            b0 = picked[0]
+            same = sorted((b for b in mine if flow_w1.same_song(b, b0) and _acq_status(b) == "done"
+                           and (b.dir / "derived" / "llm_input" / "records.jsonl").exists()),
+                          key=lambda b: b.meta.get("created_at", ""))
+            if len(same) < 2:
+                return {"text": f"「{b0.title}」は集めた分析が1つしかないので、比べる相手がありません。"
+                                "最新の数字で集め直す（restart_analysis の refresh=true。前の分析は残る）と、集め終わってから前回と比べられます。"
+                                "そのときは、集め直した分析に compare を頼めば、新しい版ができたあとに比べたレポートを作ります。"
+                                "（AI へ: 利用者にそう伝え、集め直すか聞く）", "analysis_id": b0.id}
+            picked = same[-2:]
+        not_ready = [b for b in picked if _acq_status(b) not in ("done", None) or not (b.dir / "derived" / "llm_input" / "records.jsonl").exists()]
+        host = max(picked, key=lambda b: b.meta.get("created_at", ""))
+        others = [b.id for b in picked if b.id != host.id]
+        if not_ready and any(b.id != host.id for b in not_ready):
+            raise RunnerError("まだ集め終わっていない分析とは比べられません: " + "、".join(f"{b.title}（{_state_label(b)}・{b.id}）" for b in not_ready)
+                              + "。集め終わってから頼んでください")
+        if not_ready:   # 新しいほうがまだ集めている途中: 書き終えたあとに作る
+            return _queue_request(host, "compare", "TikTok から集めている途中", others=others, instruction=instruction)
+        st = _load_state(host)
+        busy = _busy_label(host, st)
+        if busy:
+            return _queue_request(host, "compare", busy, others=others, instruction=instruction)
+        r = flow_w1.start_compare(host, st, [host.id] + others, instruction)
+        _write_json(host.state_path, r["st"])
+    names = "」と「".join(f"{b.title}（{flow_w1._collected_day(b)}）" for b in picked)
+    return {"text": f"「{names}」を比べたレポートを書きます（AI の作業 約5〜10分）。できたらレポートのフォルダの「比較」に置きます。"
+                    "（AI へ: 利用者にそう短く伝え、確かめを求めずに、続けて next_task を呼んで進める）",
+            "analysis_id": host.id, "round": r["round"]}
 
 
 def update_knowledge(user_id: str) -> dict:

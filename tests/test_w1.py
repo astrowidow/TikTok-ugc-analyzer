@@ -141,8 +141,9 @@ class TestUserSettings(unittest.TestCase):
     def test_limits(self):
         with self.assertRaises(self.us.SettingsError):
             self.us.set_item("u1", "nope", "x")
+        self.us.set_item("u1", "focus", "あ" * 2000)                # 2026-10-12 0.8.1: 400字 → 2000字
         with self.assertRaises(self.us.SettingsError):
-            self.us.set_item("u1", "focus", "あ" * 401)
+            self.us.set_item("u1", "focus", "あ" * 2001)
         with self.assertRaises(self.us.SettingsError):
             self.us.get("../etc")
 

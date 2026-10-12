@@ -211,15 +211,30 @@ def deepening(m: dict) -> bool:
     return ((m.get("deepen") or {}).get("status")) in ("queued", "running")
 
 
+def deepen_what(dp: dict) -> str:
+    """取り足しの回の呼び名（メニューと知らせ）。kind は acquire/deepen.py の回の種類（0.8.1 から videos・add・exclude・include も）"""
+    kind = dp.get("kind") or "deepen"
+    if kind == "videos":   # 動画ごとの取り足し・全体の取り足し（community="all"）
+        return "全体のコメントの取り足し" if dp.get("community") == "all" else "動画のコメントの取り足し"
+    return {"recut": "界隈の切り直し", "add": "動画の追加（属性とコメント）", "exclude": "動画を外す",
+            "include": "動画を戻す"}.get(kind, "界隈の掘り下げ")
+
+
 def describe_deepen(m: dict) -> str:
     dp = m.get("deepen") or {}
     title = m.get("title") or m.get("analysis_id")
-    recut = dp.get("kind") == "recut"   # 界隈の切り直しの取り足し（acquire/recut.py）
+    kind = dp.get("kind") or "deepen"
+    recut = kind == "recut"   # 界隈の切り直しの取り足し（acquire/recut.py）
     if dp.get("status") == "queued":
-        return f"順番待ち: {title}（{'界隈の切り直し' if recut else '界隈の掘り下げ'}）"
+        return f"順番待ち: {title}（{deepen_what(dp)}）"
+    if kind == "add":   # 一覧に足す → 属性 → 作り直す → コメント（何本目かは段をまたぐので数えない）
+        return f"動画を足しています: {title}（属性とコメント）{len(dp.get('targets') or [])}本"
     d = config.ANALYSES_DIR / m["analysis_id"] / "raw" / "deepen" / f"r{dp.get('round')}.jsonl"
     done = sum(1 for _ in open(d, encoding="utf-8")) if d.exists() else 0
-    return f"取り足し中: {title}（{'切り直した界隈' if recut else '界隈 ' + str(dp.get('community'))}）{done}/{len(dp.get('targets') or [])}本"
+    where = ("切り直した界隈" if recut else
+             ("全体のコメント" if dp.get("community") == "all" else "動画のコメント") if kind == "videos" else
+             "界隈 " + str(dp.get("community")))
+    return f"取り足し中: {title}（{where}）{done}/{len(dp.get('targets') or [])}本"
 
 
 MAX_RETRIES = 3

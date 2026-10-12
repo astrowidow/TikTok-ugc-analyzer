@@ -3305,8 +3305,14 @@ def compare(user_id: str, refs, instruction: str = "") -> dict:
     with _lock:
         mine = list_analyses(user_id)
         picked = []
+        def has_data(b) -> bool:
+            return _acq_status(b) in ("done", None) and (b.dir / "derived" / "llm_input" / "records.jsonl").exists()
         for r in refs:
-            hit = next((b for b in mine if b.id.lower() == r.lower()), None) or resolve(user_id, r)
+            hit = next((b for b in mine if b.id.lower() == r.lower()), None)
+            if hit is None:   # 曲名: データのある分析（書き終えたもの → 集め終わったもの）の新しいものを先に（集めている途中の取り直しより前の分析）
+                hits = [b for b in mine if r.lower() in b.title.lower() or r.lower() in b.song_line.lower()]
+                good = [b for b in hits if has_data(b)]
+                hit = max(good, key=lambda b: (_written_once(b), b.meta.get("created_at", ""))) if good else resolve(user_id, r)
             if all(b.id != hit.id for b in picked):
                 picked.append(hit)
         if len(picked) == 1:   # 同じ曲の前回と今回

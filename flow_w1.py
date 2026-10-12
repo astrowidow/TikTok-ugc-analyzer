@@ -1613,7 +1613,18 @@ def service_change_prep(a, t: dict, st: dict) -> dict:
         mode = "dcomments"
     elif kind == "restructure":
         chs = chapter_order(a)
-        must = [c_ for c_ in chs if not a.outputs("chapters", f"{c_}.md").exists()] + (["intro"] if "intro" in chs else [])
+        # 次に来る章が変わった章（外した章・足した章・並べ替えた章の直前）は、最後のつなぎが前の並びのままになる
+        # （2026-10-12 写しの置き場: 音楽の章を外したあと、分岐点の章の最後に「楽曲の側から見ていきます」が残っていた）
+        def expand(ids):
+            out = []
+            for x in ids:
+                out += [f"path_{p['id']}" for p in phases(a)] if x == "path" else [x]
+            return out
+        old_chs = expand(info.get("before") or [])
+        nxt_old = {c_: (old_chs[i + 1] if i + 1 < len(old_chs) else None) for i, c_ in enumerate(old_chs)}
+        nxt_new = {c_: (chs[i + 1] if i + 1 < len(chs) else None) for i, c_ in enumerate(chs)}
+        moved = [c_ for c_ in chs if c_ in nxt_old and nxt_old[c_] != nxt_new[c_] and a.outputs("chapters", f"{c_}.md").exists()]
+        must = [c_ for c_ in chs if not a.outputs("chapters", f"{c_}.md").exists() or c_ in moved or c_ == "intro"]
     comms = [k for k in dict.fromkeys(comms) if k and k != "unknown"]
     have = comment_seqs(a)
     if mode == "dcomments":
@@ -4197,7 +4208,7 @@ def accept_revise(a, t, raw, st) -> list:
     changed = sorted(set(ids), key=allc.index)
     r = _next_round(a, "revise")
     keep_version(a, "revise", r, st=copy.deepcopy(st),
-                 what="直し（" + "・".join(chapter_name(c_) for c_ in changed) + "）" + _ask_line(t["params"].get("instruction")))
+                 what="直し（" + "・".join(chapter_name(c_, a) for c_ in changed) + "）" + _ask_line(t["params"].get("instruction")))
     for x in direct:
         ch = x["chapter"]
         old = a.outputs("chapters", f"{ch}.md")
@@ -4214,11 +4225,11 @@ def accept_revise(a, t, raw, st) -> list:
         ws = _rewrite_tasks(a, st, t, rw, "直しの書き直し", {"revise": r, "instruction": t["params"].get("instruction", "")})
         insert_after(st, t, ws)
         anchor = ws[-1]
-    _queue_finish(st, anchor, changed, title="intro" in changed or len(changed) >= 3)
+    _queue_finish(st, anchor, changed, title="intro" in changed or len(changed) >= 3, a=a)
     return []
 
 
-def _queue_finish(st, anchor, chs, title=False) -> None:
+def _queue_finish(st, anchor, chs, title=False, a=None) -> None:
     """直した章ごとに note 用の仕上げを積む。あとに「仕上げ直す（章は未定）」の仕事（revise の道具が足す）があればそれを使い、足りない分を足す"""
     i = st["tasks"].index(anchor)
     holder = next((x for x in st["tasks"][i + 1:] if x["type"] == "finish" and x["params"].get("chapter") is None
@@ -4226,7 +4237,7 @@ def _queue_finish(st, anchor, chs, title=False) -> None:
     order = sorted(chs, key=lambda c_: (c_ != "intro", chs.index(c_)))   # 仕上げは冒頭から（レポートの順）
     fins = []
     for k, ch in enumerate(order, 1):
-        title_ = f"note 用に仕上げ直す（{ch}）" if len(order) == 1 else f"note 用に仕上げ直す（{k}/{len(order)}: {chapter_name(ch)}）"
+        title_ = f"note 用に仕上げ直す（{ch}）" if len(order) == 1 else f"note 用に仕上げ直す（{k}/{len(order)}: {chapter_name(ch, a)}）"
         if k == 1 and holder is not None:
             holder["params"].update({"chapter": ch, "i": 1, "n": len(order)})
             holder["title"] = title_
@@ -4264,7 +4275,7 @@ def _rewrite_tasks(a, st, t, items: list, label: str, extra: dict | None = None)
         base = {k: pm[k] for k in ("change", "round", "instruction") if k in pm}
     else:
         base = {"community": pm["community"], "round": pm["round"], "instruction": pm["instruction"]}
-    return [_task(st, "write", "ai", f"{label}（{i}/{len(items)}: {chapter_name(x['chapter'])}）",
+    return [_task(st, "write", "ai", f"{label}（{i}/{len(items)}: {chapter_name(x['chapter'], a)}）",
                   {"chapter": x["chapter"], "i": i, "n": len(items), "first": False, "rewrite": True, "why": x.get("why", ""), **base})
             for i, x in enumerate(items, 1)]
 

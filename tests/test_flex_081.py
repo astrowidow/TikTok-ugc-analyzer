@@ -118,31 +118,37 @@ class TestChapterPlan(Flow):
         self.assertIn("outline_revise", t["task_id"])
         self.assertIn("☆`c1`", t["text"])
         self.assertNotIn("{{", t["text"])
-        self.assertIn("`intro`、`c1`", t["text"])
+        self.assertIn("`intro`、`branch`、`c1`", t["text"])   # 分岐点は次の章が音楽から足した章に変わった（最後のつなぎを直す）
         self.assertIn("ファンが何を感じたかの章", t["text"])
         bad = pr.submit("u1", t["task_id"], json.dumps(outline_json(["path_P1"]), ensure_ascii=False))
         self.assertFalse(bad["ok"])
         self.assertIn("c1", bad["text"])
-        self.submit(t, outline_json(["c1", "intro"]))
-        t = self.next()
-        self.assertIn("write", t["task_id"])
-        self.assertIn("利用者が頼んで足した章「ファン心理」", t["text"])
-        self.assertIn("## ファン心理", t["text"])
-        self.submit(t, long_body("## ファン心理"))
-        t = self.next()
-        self.assertIn("write", t["task_id"])
-        self.assertIn("書き直し", t["text"])
-        self.submit(t, long_body(fw.heading_of(a, "intro") + " 〜TikTok今週の1曲"))
+        self.submit(t, outline_json(["c1", "intro"], ["c1", "intro", "branch"]))
+        heads = {"branch": fw.heading_of(a, "branch"), "c1": "## ファン心理", "intro": fw.heading_of(a, "intro") + " 〜TikTok今週の1曲"}
+        seen = []
+        for _ in range(3):                                                    # 書く順: 分岐点（つなぎの直し）→ 足した章 → 冒頭
+            t = self.next()
+            self.assertIn("write", t["task_id"])
+            ch = next(c for c in ("branch", "c1", "intro") if f"{fw.chapter_name(c, a)}）" in t["text"].splitlines()[0])
+            seen.append(ch)
+            if ch == "c1":
+                self.assertIn("利用者が頼んで足した章「ファン心理」", t["text"])
+                self.assertIn("## ファン心理", t["text"])
+            else:
+                self.assertIn("書き直し", t["text"])
+            self.submit(t, long_body(heads[ch]))
+        self.assertEqual(seen, ["branch", "c1", "intro"])
         t = self.next()
         self.assertIn("review", t["task_id"])
         self.assertIn("章立てを変えた", t["text"])
         self.assertNotIn("{{", t["text"])
         self.submit(t, {"fixes": [], "note_to_user": "通して読んだ"})
-        for _ in range(2):
+        for _ in range(3):
             t = self.next()
             self.assertIn("finish", t["task_id"])
-            self.submit(t, "## ファン心理\n\n" + "仕上げた本文。" * 40 if "ファン心理）" in t["text"].splitlines()[0]
-                        else fw.heading_of(a, "intro") + "\n\n" + "仕上げた本文。" * 40)
+            first = t["text"].splitlines()[0]
+            ch = next(c for c in ("branch", "c1", "intro") if f"{fw.chapter_name(c, a)}）" in first)
+            self.submit(t, ("## ファン心理" if ch == "c1" else heads[ch].split(" 〜")[0]) + "\n\n" + "仕上げた本文。" * 40)
         t = self.next()
         self.assertEqual(t["kind"], "done")
         self.assertIn("章立てを変えた", t["text"])

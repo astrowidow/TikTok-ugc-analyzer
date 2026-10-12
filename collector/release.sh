@@ -21,6 +21,13 @@ INNER=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$MNT/UGC 
 hdiutil detach "$MNT" >/dev/null
 [ "$INNER" = "$VERSION" ] || { echo "$DMG の中のアプリは $INNER です（$VERSION ではない）"; exit 1; }
 
+# 友達が見る始め方のページと紙の「いまの版は UGC Analyzer <版>」が、出す版と合っているか（2026-10-12: 0.8.1 を出したのに、
+# ページの入れ替えの手順に「例: UGC Analyzer 0.8.0」が残っていた。ユーザー「そういうところが信用を損ねる」）
+for DOC in ../docs/pages/guide.html ../docs/FRIEND_GUIDE.md; do
+  grep -q "いまの版は.*UGC Analyzer $VERSION" "$DOC" \
+    || { echo "$DOC の「いまの版は UGC Analyzer …」が $VERSION になっていません（直して、始め方のページを公開し直してから）"; exit 1; }
+done
+
 # 印（v<版>）は、その版に上げたコミットに付ける。GitHub に無いコミットには付けられない
 COMMIT=$(git log --reverse --format=%H -S "VERSION = \"$VERSION\"" -- collector_app/__init__.py | sed -n 1p)
 [ -n "$COMMIT" ] || { echo "版 $VERSION に上げたコミットが見つかりません（コミットしてから）"; exit 1; }

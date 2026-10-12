@@ -157,6 +157,9 @@ class TestPlanVideos(Base):
         self.assertEqual(pl["skipped"], {"top_list_done": 1, "no_gain": 1})
         pl = deepen.plan_videos(self.d, [td.vid(0)], per_video="all")
         self.assertEqual([(x["seq"], x["cap"]) for x in pl["targets"]], [(0, 300)])
+        # 件数の指定があれば上位リストで止めないので、前の回が同じ上限・続きありで止まっていても取り直す（2026-10-12 本物のきゃわ）
+        pl = deepen.plan_videos(self.d, [td.vid(0)], per_video=120)
+        self.assertEqual([(x["seq"], x["cap"]) for x in pl["targets"]], [(0, 120)])
 
     def test_excluded_videos_are_skipped_everywhere(self):
         """外した動画（analysis.json の excluded_videos）は、名指し・界隈・全体・切り直しのどの候補にも出さない"""
@@ -294,6 +297,7 @@ class TestRunVideos(RunBase):
         ap = spatest.build_parser()
         for c in FakeCollector.made:
             self.assertEqual(c.a.cap, 200)
+            self.assertEqual(c.a.min_comments, 200)   # 件数の指定があれば上位リストで止めない（2026-10-12 本物のきゃわで20件で止まった）
             self.assertEqual(c.a.max_steps, -(-ap.get_default("max_steps") * 200 // 120))
             self.assertEqual(c.a.max_calls_per_video, -(-ap.get_default("max_calls_per_video") * 200 // 120))
             self.assertIsNone(c.a.candidates)
@@ -318,6 +322,7 @@ class TestRunVideos(RunBase):
         ap = spatest.build_parser()
         self.assertEqual((a.cap, a.max_steps, a.max_calls_per_video),
                          (120, ap.get_default("max_steps"), ap.get_default("max_calls_per_video")))
+        self.assertEqual(a.min_comments, 20)                 # 指定が無ければ今までどおり上位リストで止める
         self.assertEqual(deepen.what_of(self.meta()["deepen"]), "全体のコメントの取り足し")
 
 
@@ -575,6 +580,23 @@ class TestKeepSeqs(unittest.TestCase):
         self.assertEqual([json.loads(ln)["seq"] for ln in new[len(old):]], [3, 4])
         self.assertEqual((der / "weekly.tsv").read_text(encoding="utf-8").splitlines()[0], "week\tn\tplays")
 
+
+    def test_keep_seqs_line_separator_in_description(self):
+        """説明文に U+2028（行の区切りの文字）があっても、ラベルの対象の行を壊さない（2026-10-12 本物のきゃわで build_llm_input が落ちた。
+        splitlines() はこの文字でも行を分けてしまう）"""
+        der, prev = self.tmp / "derived", self.tmp / "prev"
+        self.write_csv([("1001", "2026-06-01", 500), ("1002", "2026-06-02", 400)])
+        p = self.tmp / "list.csv"
+        p.write_text(p.read_text(encoding="utf-8").replace("#tag 1001", "一行目\u2028二行目\u2029三行目\x85四行目"), encoding="utf-8")
+        self.prep(der)
+        shutil.copytree(der, prev)
+        self.write_csv([("1001", "2026-06-01", 500), ("1002", "2026-06-02", 400), ("2001", "2026-06-10", 900)])
+        p.write_text(p.read_text(encoding="utf-8").replace("#tag 1001", "一行目\u2028二行目\u2029三行目\x85四行目"), encoding="utf-8")
+        self.prep(der, "--keep-seqs", str(prev / "videos.jsonl"))
+        lines = [ln for ln in (der / "sample_label.jsonl").read_text(encoding="utf-8").split("\n") if ln.strip()]
+        rows = [json.loads(ln) for ln in lines]                      # どの行も読める
+        self.assertIn("一行目\u2028二行目", next(r["desc"] for r in rows if r["video_id"] == "1001"))
+        self.assertEqual(rows[-1]["video_id"], "2001")
 
 # ---------------------------------------------------------------------------
 # 一覧の段: 利用者が足した動画（user_videos）を必ず読む

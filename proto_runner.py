@@ -2319,9 +2319,8 @@ def deepen(user_id: str, ref: str | None, community: str, instruction: str, vide
         from acquire import launch
         launch.ensure_worker()
     eta = pl["est_min"] * 60
-    head += (f"コメントを取り足します: 新しく{pl['n_new']}本・続きを{pl['n_more']}本（見込み 約{_hm(eta)}"
-             + ("。これは最大の見込みで、上位のコメントが尽きたところで止まるので、ふつうはもっと短く済みます" if per_video == "all" else "")
-             + "）。")
+    head += (f"コメントを取り足します: 新しく{pl['n_new']}本・続きを{pl['n_more']}本。"
+             + ("下のかかる時間は最大の見込みで、コメントが尽きたところで止まるので、もっと短く済むことがあります。" if per_video == "all" else ""))
     if pl["left_new"] or pl["left_more"]:
         head += f"時間の都合で取らない動画もあります（新しく{pl['left_new']}本・続き{pl['left_more']}本）。"
     if DEEPEN_WAIT_IN_CHAT:
@@ -3282,7 +3281,7 @@ def _videos_add(user_id: str, a: Analysis, targets: list, instruction: str, lock
     eta = float(job.get("est_min") or 3) * 60
     a.log(event="videos", action="add", round=job["round"], n=len(new), est_min=job.get("est_min"))
     back = come_back_line(eta, "足した動画の属性とコメントを取るの", a.title, "レポートに入れます。")
-    return {"text": f"「{a.title}」に動画（{names}）を足します。Mac の UGC Analyzer が属性とコメントを取ります（見込み 約{_hm(eta)}）。" + tail
+    return {"text": f"「{a.title}」に動画（{names}）を足します。Mac の UGC Analyzer が属性とコメントを取ります。" + tail
                     + ("。".join(notes) + "。" if notes else "")
                     + "\n（AI へ: この内容を利用者に短く伝えて止まる。取得を待たない・見に来ない。返事の最後に、下の「」の文を言い換えずにそのまま入れる）\n"
                     + f"「{back}」", "analysis_id": a.id, "round": job["round"]}
@@ -3317,7 +3316,9 @@ def compare(user_id: str, refs, instruction: str = "") -> dict:
                                 "（AI へ: 利用者にそう伝え、集め直すか聞く）", "analysis_id": b0.id}
             picked = same[-2:]
         not_ready = [b for b in picked if _acq_status(b) not in ("done", None) or not (b.dir / "derived" / "llm_input" / "records.jsonl").exists()]
-        host = max(picked, key=lambda b: b.meta.get("created_at", ""))
+        # 置き先: 書き終えて手の空いている分析の新しいもの（まだ書いていない分析に置くと、その第1版まで待たされる）。無ければ新しいもの
+        idle = [b for b in picked if _written_once(b) and not _busy_label(b, _state(b))]
+        host = max(idle or picked, key=lambda b: b.meta.get("created_at", ""))
         others = [b.id for b in picked if b.id != host.id]
         if not_ready and any(b.id != host.id for b in not_ready):
             raise RunnerError("まだ集め終わっていない分析とは比べられません: " + "、".join(f"{b.title}（{_state_label(b)}・{b.id}）" for b in not_ready)

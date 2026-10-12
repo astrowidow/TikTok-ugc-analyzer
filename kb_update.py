@@ -253,7 +253,7 @@ COMMUNITY_SIGNALS_MAX = 120
 
 
 def community_defs() -> list:
-    return [json.loads(ln) for ln in (kb_dir() / "distilled" / COMMUNITY_DEFS).read_text(encoding="utf-8").splitlines()
+    return [json.loads(ln) for ln in (kb_dir() / "distilled" / COMMUNITY_DEFS).read_text(encoding="utf-8").split("\n")
             if ln.strip()] if (kb_dir() / "distilled" / COMMUNITY_DEFS).exists() else []
 
 
@@ -380,7 +380,7 @@ def render(t: dict) -> str:
         cut = ""
         if len(body) > ARTICLE_MAX_CHARS:
             body, cut = body[:ARTICLE_MAX_CHARS], f"\n（本文が長いので {ARTICLE_MAX_CHARS} 字で切った）\n"
-        sample = next(iter(reversed((kb_dir() / "distilled" / "cards.jsonl").read_text(encoding="utf-8").splitlines())), "")
+        sample = next(iter(reversed((kb_dir() / "distilled" / "cards.jsonl").read_text(encoding="utf-8").split("\n"))), "")
         return head + f"""## 指示書
 
 著者（山本慶太朗）の note の新しい記事を、知識ベースに取り込む。知識ベースは、分析レポートを書くときに AI が読む「著者の分析の言語」。

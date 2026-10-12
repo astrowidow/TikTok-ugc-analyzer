@@ -1345,6 +1345,11 @@ def fetched_note(a, n) -> str:
     pl = job.get("plan") or {}
     if job.get("kind") == "add":   # 利用者が足した動画（0.8.1〜）
         added = [x for x in res.get("added") or [] if isinstance(x, dict)]
+        if not [x for x in added if x.get("enriched")]:   # 足せなかった（取得が止まった・動画のページが読めない）
+            why = (job.get("error") or res.get("error") or
+                   "、".join(str(x.get("why")) for x in res.get("not_found") or [] if isinstance(x, dict) and x.get("why"))
+                   or "理由の記録なし")
+            return f"動画を足せなかった（{why}）。レポートは前の版のまま"
         s = (f"利用者が足した動画 {len(added)}本（" + "、".join(f"seq {x.get('seq')}" for x in added) + "）。"
              f"属性を{'取り' if any(x.get('enriched') for x in added) else '取れず'}、コメント {res.get('comments_added', 0)}件を取った")
         if res.get("not_found"):
@@ -1410,6 +1415,11 @@ def deepen_summary(a, n) -> str:
         lines.append(f"- 構成案の変更: {rec['outline_note']}" + ("（記事全体の主張も変えた）" if rec.get("thesis_changed") else ""))
     if rec.get("review_note"):
         lines.append(f"- 通し読み: {rec['review_note']}")
+    if kind == "add" and not [x for x in (job.get("result") or {}).get("added") or [] if isinstance(x, dict) and x.get("enriched")]:
+        lines[2] = f"- 結果: {fetched_note(a, n)}"
+        lines.append("- 返答の 1 では、拡散の流れの代わりに、動画を足せなかったことと理由を1文で伝え、"
+                     "「もう一度足して」と頼めば足し直せること（URL の違いなら正しい URL で）を添える。2 の成果物は前の版のもの")
+        return "\n".join(lines)
     lines.append("- 返答の 1 では、拡散の流れの代わりに、この直しで何が分かり何を変えたかを1〜3文で伝える。前の版は残してある")
     return "\n".join(lines)
 

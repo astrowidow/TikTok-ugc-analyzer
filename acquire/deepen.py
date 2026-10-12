@@ -220,9 +220,12 @@ def unreachable(d: Path) -> set:
 # 決める
 # ---------------------------------------------------------------------------
 def _more_left(r: dict, cap: int) -> bool:
-    """続きを取れば増えるか（per_video を指定したとき）: 上位リストがまだ続いていて、今の件数が上限より少ない"""
+    """続きを取れば増えるか（per_video を指定したとき）: 続きがあり、今の件数が上限より少ない。指定があるときは上位リストを抜けても取るので、
+    上位リストの件数では止めない（2026-10-12 本物のきゃわ: 上位20件で止まった動画が「増えない」と読まれていた）"""
     n = len(r.get("comments") or [])
-    return bool(r.get("has_more")) and int(r.get("top_list") or 0) >= n > 0 and n < cap
+    if r.get("has_more") is None:   # 続きがあるか記録が無い（最初のページを描画だけで読み、要求を出さなかった。2026-10-12 きゃわ seq 204: 105件中20件）
+        return 0 < n < cap
+    return bool(r.get("has_more")) and 0 < n < cap
 
 
 class _Look:
@@ -433,13 +436,19 @@ def plan_videos(d: Path, video_ids, per_video=None) -> dict:
             continue
         n = len(o.get("comments") or [])
         cap = cap_of(per_video, r, "more")
-        if not o.get("has_more"):
+        # 続きがあるか記録が無い（最初のページを描画だけで読み、要求を出さなかった）動画は、動画のコメント数より少なければ続きを取る
+        # （2026-10-12 きゃわ seq 204: コメント105件のうち20件で、「全部取ってある」と読み違えていた）
+        unknown = o.get("has_more") is None and n < int(r.get("comments") or 0)
+        if not o.get("has_more") and not unknown:
             skip("all_fetched", given, vid, r)
         elif n >= cap:
             skip("enough", given, vid, r)
-        elif int(o.get("top_list") or 0) < n:
+        elif int(o.get("top_list") or 0) < n and not unknown and per_video is None:   # 指定があれば上位リストを抜けても取る
             skip("top_list_done", given, vid, r)
-        elif t.get("status") == "ok" and int(t.get("cap") or 0) >= cap:
+        elif t.get("status") == "ok" and int(t.get("cap") or 0) >= cap and (
+                per_video is None or not t.get("has_more") or len(t.get("comments") or []) >= cap):
+            # 件数・「全部」の指定があれば上位リストで止めずに取るので、前の回が上位リストで止まっていた（続きあり・上限未満）なら取り直す
+            # （2026-10-12 本物のきゃわ: 「全部」で上位20件で止まった回を「増えなかった」と読み、取り直せなかった）
             skip("no_gain", given, vid, r)
         else:
             more.append({**x, "cap": cap, "kind": "more", "had": n})
@@ -752,12 +761,15 @@ class Run:
                 break
             # 1本の上限は pool の cap 列（spatest が行ごとに守る）。--cap はその最大（per_video で 120件を超えることがある）
             cap = max(int(x["cap"]) for x in by_page[k])
+            # 件数・「全部」の指定（per_video）があれば、上位リストを抜けても上限（か続き無し）まで取る。指定が無ければ今までどおり
+            # 上位リストを取り切ったら止める（最低20件）。2026-10-12 本物のきゃわ: 「全部」で上限105件なのに、上位20件で止まっていた
+            min_comments = cap if job.get("per_video") not in (None, "") else 20
             args = ["--port", str(s["chrome_port"]), "--music-url", url, "--pool", str(pool),
                     "--subs-out", str(self.p("fetch_log", f"deepen_r{n}_subs_{tag}.tsv")),
                     "--resume", "--collect-scrolls", str(s["collect_scrolls"]),
                     "--reply-policy", "targets", "--reply-top", str(s["reply_top"]),
                     "--reply-questions", str(s["reply_questions"]), "--reply-author", str(s["reply_author"]),
-                    "--cap", str(cap), "--min-comments", "20",
+                    "--cap", str(cap), "--min-comments", str(min_comments),
                     "--calls-per-min", str(s["calls_per_min"]), "--max-calls-per-min", str(s["max_calls_per_min"]),
                     "--interval", str(s["interval"]), "--jitter", "0.5", "--deadline-hours", f"{left:.3f}",
                     "--out", str(out), "--log", str(self.p("fetch_log", f"deepen_r{n}.log")),

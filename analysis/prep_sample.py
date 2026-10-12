@@ -160,7 +160,8 @@ if keep_path:
     if tax_src.exists() and tax_src.resolve() != (out / "sample_taxonomy.md").resolve():
         (out / "sample_taxonomy.md").write_text(tax_src.read_text(encoding="utf-8"), encoding="utf-8")
     lab_src = prev_dir / "sample_label.jsonl" if (prev_dir / "sample_label.jsonl").exists() else out / "sample_label.jsonl"
-    old_lines = [ln for ln in lab_src.read_text(encoding="utf-8").splitlines() if ln.strip()] if lab_src.exists() else []
+    # 改行（\n）だけで分ける。splitlines() は説明文の中の U+2028 などでも分けてしまい、行が壊れる（2026-10-12 本物のきゃわで build_llm_input が落ちた）
+    old_lines = [ln for ln in lab_src.read_text(encoding="utf-8").split("\n") if ln.strip()] if lab_src.exists() else []
     added = [r for r in rows if r["video_id"] not in prev]
     with open(out / "sample_label.jsonl", "w", encoding="utf-8") as f:
         for ln in old_lines:

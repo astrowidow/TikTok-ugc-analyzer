@@ -127,10 +127,10 @@ def sync_shipped_knowledge(src: Path, dst: Path) -> list:
         done.append(g.name)
     d = src / "community_defs.jsonl"
     if d.exists():
-        rows = [_json.loads(x) for x in d.read_text(encoding="utf-8").splitlines() if x.strip()]
+        rows = [_json.loads(x) for x in d.read_text(encoding="utf-8").split("\n") if x.strip()]
         have = {r.get("file") for r in rows}
         old = dst / d.name
-        local = [_json.loads(x) for x in old.read_text(encoding="utf-8").splitlines() if x.strip()] if old.exists() else []
+        local = [_json.loads(x) for x in old.read_text(encoding="utf-8").split("\n") if x.strip()] if old.exists() else []
         rows += [r for r in local if r.get("from") == "kb_update" and r.get("file") not in have]
         text = "".join(_json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
         if not old.exists() or old.read_text(encoding="utf-8") != text:

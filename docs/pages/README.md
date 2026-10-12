@@ -5,7 +5,7 @@
 
 | ページ | URL | 元のファイル | 中身 |
 |---|---|---|---|
-| UGC Analyzer の始め方 | https://claude.ai/artifact/Tp343YwoMtSrFWKuJcCLmC | `docs/pages/guide.html` | 入れ方（「開いていません」の越え方の画面の見本つき）・頼み方（実際の会話の吹き出し）・直し方・やり直し方・新しい版にするとき・困ったとき。2026-10-06（2026-10-12 に 0.8.0 の節を足した。Version 21。同じ日に 0.8.1 のカード（章立て・使う動画・比べる・消す・一人称）を足した） |
+| UGC Analyzer の始め方 | https://claude.ai/artifact/Tp343YwoMtSrFWKuJcCLmC | `docs/pages/guide.html` | 入れ方（「開いていません」の越え方の画面の見本つき）・頼み方（実際の会話の吹き出し）・直し方・やり直し方・新しい版にするとき・困ったとき。2026-10-06（2026-10-12 に 0.8.0 の節を足した。Version 21。同じ日に 0.8.1 のカード（章立て・使う動画・比べる・消す・一人称）を足した。Version 22） |
 | きゃわぽっぴんどぅー分析の実例 | https://claude.ai/artifact/PhDfG1qMWM2z9bMHHN2iu6 | `output/case_kyawa_20261008_074/` の `build_page.py` で作る（output/ は Git に入れていない。前の版の元は `output/case_kyawa_20261006_064/`・`output/case_kyawa_20261006/`） | 実際の会話と、できたレポート3本（第1版・掘り下げ・切り直し）。2026-10-08 に 0.7.5 で0から通して作り直した（取得も同じ日）。載せるレポートは利用者のフォルダの「レポート.md」 |
 
 - UGC Analyzer のダウンロード: https://github.com/astrowidow/TikTok-ugc-analyzer/releases/latest/download/UGC-Analyzer.dmg （始め方のページの手順2のボタン・紙・LINE の文面はこのリンク）。GitHub の公開リポジトリのリリースなので、友達は登録なしで落とせる。リンクはいつも最新のリリースを指すので、版を上げても直さなくてよい。載せるのは `collector/release.sh`（`collector/build.sh` のあと、コミットを push してから）。.dmg には著者の記事（知識ベース）が入っていて、リンクを知っていれば誰でも取れる（2026-10-06、それを伝えたうえでユーザーが本体のリポジトリを選んだ）

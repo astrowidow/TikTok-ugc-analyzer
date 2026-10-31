@@ -280,15 +280,39 @@ def save(**kv) -> dict:
 
 
 # --- 3. 入れ替えるか決める ---
+# 道具の記録（logs/mcp.log）の、道具を1回使い終えたときの行（mcp_proto._call が書く。前の版の道具も同じ形）
+_CALL_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ .*道具の中身 ")
+
+
+def last_tool_call() -> float | None:
+    """AI が UGC Analyzer の道具を最後に使った時刻（epoch 秒）。道具の記録の終わりのほう（入れ替わった1つ前の記録も）から探す。
+    道具の処理を開いた・閉じたの行は数えない（Claude を開いただけで作業中にしない）"""
+    for name in ("mcp.log", "mcp.log.1"):
+        p = config.LOG_DIR / name
+        try:
+            with open(p, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 512_000))
+                lines = f.read().decode("utf-8", "replace").splitlines()
+        except OSError:
+            continue
+        for ln in reversed(lines):
+            m = _CALL_RE.match(ln)
+            if m:
+                try:
+                    return time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+                except ValueError:
+                    continue
+    return None
+
+
 def ai_active(now: float | None = None) -> bool:
-    """AI が UGC Analyzer の道具を使っている途中か: 道具の記録（logs/mcp.log。Claude・ChatGPT の道具の処理が全部書く）が
-    15分以内に書かれた、または Claude の Code タブの待つ命令（--wait）が動いている"""
+    """AI が UGC Analyzer の道具を使っている途中か: 道具を最後に使ってから15分以内（logs/mcp.log。Claude・ChatGPT の道具の処理が
+    全部書く）、または Claude の Code タブの待つ命令（--wait）が動いている"""
     now = time.time() if now is None else now
-    try:
-        if now - (config.LOG_DIR / "mcp.log").stat().st_mtime < AI_QUIET:
-            return True
-    except OSError:
-        pass
+    t = last_tool_call()
+    if t is not None and now - t < AI_QUIET:
+        return True
     try:
         return any(p["kind"] == "wait" for p in system.tool_processes())
     except Exception:

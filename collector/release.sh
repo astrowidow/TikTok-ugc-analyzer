@@ -1,7 +1,8 @@
 #!/bin/bash
 # 作った .dmg を GitHub のリリースに載せる。2段（0.9.0〜。2026-10-31 ユーザー決定「友達に届くのは『友達に出して』と言ったときだけ」）:
-#   collector/release.sh [版]                         … 試し版（prerelease）として載せる。友達には届かない（友達のリンクも前の版のまま）。
-#                                                       運営の Mac の UGC Analyzer は試し版も受け取る（collector_app/updater.py）
+#   collector/release.sh [版] [--note 文]             … 試し版（prerelease）として載せる。友達には届かない（友達のリンクも前の版のまま）。
+#                                                       運営の Mac の UGC Analyzer は試し版も受け取る（collector_app/updater.py）。
+#                                                       --note を付けると、運営の Mac の窓と通知に「今回の版: …」が出る（--friends でも引き継ぐ）
 #   collector/release.sh --friends [版] [--note 文]   … その版を友達向けの最新（latest）に切り替える。友達の UGC Analyzer（0.9.0〜）は
 #                                                       3時間以内に自分で入れ替え、友達のリンクもこの版になる。
 #                                                       --note は窓と通知に出す「今回の版: …」の1行（友達向けの言葉で。裏の仕組みを書かない）
@@ -84,10 +85,19 @@ STAGE=$(mktemp -d)
 cp "$DMG" "$STAGE/UGC-Analyzer.dmg"
 if gh release view "v$VERSION" --repo "$REPO" >/dev/null 2>&1; then
   gh release upload "v$VERSION" "$STAGE/UGC-Analyzer.dmg" --repo "$REPO" --clobber
+  if [ -n "$NOTE" ]; then   # 「今回の版: …」を付け直す
+    BODY=$(gh release view "v$VERSION" --repo "$REPO" --json body --jq .body | grep -v '^今回の版[:：]' || true)
+    gh release edit "v$VERSION" --repo "$REPO" --notes "${BODY}
+
+今回の版: ${NOTE}" >/dev/null
+  fi
 else
   NOTES="$(git log -1 --format=%s "$COMMIT")
 
 試し版（友達にはまだ届かない）。友達に出すときは collector/release.sh --friends $VERSION --note \"…\""
+  [ -n "$NOTE" ] && NOTES="${NOTES}
+
+今回の版: ${NOTE}"
   gh release create "v$VERSION" "$STAGE/UGC-Analyzer.dmg" --repo "$REPO" --target "$COMMIT" \
     --title "UGC Analyzer $VERSION" --notes "$NOTES" --prerelease
 fi

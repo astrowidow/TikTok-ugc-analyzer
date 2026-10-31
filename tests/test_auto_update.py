@@ -387,14 +387,24 @@ class TestApply(HomeCase):
 
     def test_ai_active(self):
         log = self.config.LOG_DIR / "mcp.log"
+        stamp = lambda t: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t)) + ",123"
+        now = time.time()
         with mock.patch.object(self.u.system, "tool_processes", return_value=[]):
             self.assertFalse(self.u.ai_active())   # 道具を使ったことが無い
-            log.write_text("x")
+            log.write_text(f"{stamp(now - 60)} INFO    [1] === AI の道具を開きます（UGC Analyzer 0.9.0）\n", encoding="utf-8")
+            self.assertFalse(self.u.ai_active())   # Claude を開いただけ（道具の処理を開いた行）は作業に数えない
+            log.write_text(f"{stamp(now - 120)} INFO    [1] 道具の中身 status: 0.2秒\n"
+                           f"{stamp(now - 60)} INFO    [1] === AI の道具を閉じました\n", encoding="utf-8")
             self.assertTrue(self.u.ai_active())
-            old = time.time() - self.u.AI_QUIET - 5
-            os.utime(log, (old, old))
+            self.assertAlmostEqual(self.u.last_tool_call(), now - 120, delta=2)
+            log.write_text(f"{stamp(now - self.u.AI_QUIET - 60)} INFO    [1] 道具の中身 status: 0.2秒\n", encoding="utf-8")
             self.assertFalse(self.u.ai_active())
+            log.write_text("", encoding="utf-8")   # 記録が入れ替わった直後: 1つ前の記録から
+            (self.config.LOG_DIR / "mcp.log.1").write_text(f"{stamp(now - 30)} INFO    [1] 道具の中身 next_task: 1.0秒\n",
+                                                            encoding="utf-8")
+            self.assertTrue(self.u.ai_active())
         with mock.patch.object(self.u.system, "tool_processes", return_value=[{"kind": "wait"}]):
+            (self.config.LOG_DIR / "mcp.log.1").unlink()
             self.assertTrue(self.u.ai_active())   # Code タブで待っている
 
 
@@ -444,6 +454,22 @@ class TestNotice(AppCase):
         self.assertEqual(self.app.startup_restarts, ["Claude"])
         self.assertEqual(self.app.startup_alerts, [])
         self.assertEqual(len(self.sent), 1)
+
+    def test_updated_now_without_old_tools(self):
+        # 窓で「今すぐ」を押したが、Claude の中の前の版の道具はもう止まっていた: 伝えたとおり Claude を開き直す
+        st = {"update_pending": {"from": "0.0.1", "to": self.app.VERSION, "mode": "now", "restart": ["Claude"]},
+              "app_version": "0.0.1", "first_run_done": True}
+        p = self.app.update_notice(st, LOG)
+        with mock.patch.object(self.app, "AI_LINKS", self.links()), \
+                mock.patch.object(self.app.system, "old_tool_processes", return_value=[]):
+            self.app.version_notice(st, LOG, p)
+        self.assertEqual(self.app.startup_restarts, ["Claude"])
+        self.assertEqual(self.app.startup_alerts, [])
+        self.app.startup_restarts.clear()
+        with mock.patch.object(self.app, "AI_LINKS", self.links(claude=False)), \
+                mock.patch.object(self.app.system, "old_tool_processes", return_value=[]):
+            self.app.version_notice(st, LOG, p)   # その間に Claude を閉じていた: 開かない
+        self.assertEqual(self.app.startup_restarts, [])
 
     def test_updated_silently_but_claude_opened(self):
         st = {"update_pending": {"from": "0.0.1", "to": self.app.VERSION, "mode": "silent", "restart": []},

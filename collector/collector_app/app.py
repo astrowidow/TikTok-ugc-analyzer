@@ -1345,12 +1345,15 @@ def version_notice(st: dict, log, updated: dict | None = None) -> None:
     if names and not updated:
         notify.send(f"{config.APP_NAME} を {VERSION} にしました",
                     f"{'と'.join(names)} を開き直してください。開き直すと、新しい版の UGC Analyzer が使えます（話している途中の会話は保存されています）")
-    if not old:
-        return
     # 開き直すのは、開いている AI（つないだかに関わらず。道具を起こしたのは開いている AI のどれか）
     running = [name for _, name, link, _, is_running in AI_LINKS if getattr(link, is_running)()]
-    if updated and updated.get("mode") == "now" and running:
-        startup_restarts.extend(running)
+    if updated and updated.get("mode") == "now":
+        # 窓で「今すぐ」（「Claude を一度閉じて開き直します」と伝えた）: 前の版の道具が止まっていても、伝えたとおり開き直す
+        want = [n for n in updated.get("restart") or [] if n in running] or (running if old else [])
+        if want:
+            startup_restarts.extend(want)
+            return
+    if not old:
         return
     who = "と".join(running) or "Claude（ChatGPT）"
     msg = (f"{who} を開き直すと新しい版が使えます（話している途中の会話は消えません）。\n"

@@ -177,6 +177,11 @@ def queued_ids() -> list:
     return worker.queue()
 
 
+# メニューの1行目に出す取得の段の名前（名詞の形。acquire/pipeline.py の STEP_LABELS は記録と AI の返事に使う「〜を取る」の形）
+STEP_SHOW = {"resolve": "楽曲ページの検索", "list": "動画の一覧", "enrich": "動画の属性", "derive": "集計",
+             "pool": "コメントを取る動画の選定", "comments": "コメント", "comments_md": "コメントの整形", "notify": "仕上げ"}
+
+
 def describe(m: dict) -> str:
     """メニューの状態の1行"""
     from acquire import launch, pipeline
@@ -185,13 +190,13 @@ def describe(m: dict) -> str:
     st = acq.get("status")
     if st == "done":
         c = ((acq.get("steps") or {}).get("comments") or {}).get("detail") or {}
-        return f"取得済み: {title}（コメント {c.get('videos_ok', '?')}本・{c.get('comments', '?')}件）"
+        return f"取得完了: {title}（コメント {c.get('videos_ok', '?')}本・{c.get('comments', '?')}件）"
     if st == "failed":
-        return f"止まっています: {title} — {acq.get('error')}"
+        return f"停止中: {title} — {acq.get('error')}"
     if st == "queued":
         return f"順番待ち: {title}"
     step = acq.get("step")
-    label = pipeline.STEP_LABELS.get(step, "準備") if step else "準備"
+    label = STEP_SHOW.get(step, "準備") if step else "準備"
     extra = ""
     if step == "comments":
         d = config.ANALYSES_DIR / m["analysis_id"]
@@ -215,9 +220,9 @@ def deepen_what(dp: dict) -> str:
     """取り足しの回の呼び名（メニューと知らせ）。kind は acquire/deepen.py の回の種類（0.8.1 から videos・add・exclude・include も）"""
     kind = dp.get("kind") or "deepen"
     if kind == "videos":   # 動画ごとの取り足し・全体の取り足し（community="all"）
-        return "全体のコメントの取り足し" if dp.get("community") == "all" else "動画のコメントの取り足し"
-    return {"recut": "界隈の切り直し", "add": "動画の追加（属性とコメント）", "exclude": "動画を外す",
-            "include": "動画を戻す"}.get(kind, "界隈の掘り下げ")
+        return "全体のコメントの追加取得" if dp.get("community") == "all" else "動画のコメントの追加取得"
+    return {"recut": "界隈の切り直し", "add": "動画の追加（属性とコメント）", "exclude": "動画の除外",
+            "include": "除外の取り消し"}.get(kind, "界隈の掘り下げ")
 
 
 def describe_deepen(m: dict) -> str:
@@ -228,13 +233,13 @@ def describe_deepen(m: dict) -> str:
     if dp.get("status") == "queued":
         return f"順番待ち: {title}（{deepen_what(dp)}）"
     if kind == "add":   # 一覧に足す → 属性 → 作り直す → コメント（何本目かは段をまたぐので数えない）
-        return f"動画を足しています: {title}（属性とコメント）{len(dp.get('targets') or [])}本"
+        return f"動画を追加中: {title}（属性とコメント）{len(dp.get('targets') or [])}本"
     d = config.ANALYSES_DIR / m["analysis_id"] / "raw" / "deepen" / f"r{dp.get('round')}.jsonl"
     done = sum(1 for _ in open(d, encoding="utf-8")) if d.exists() else 0
     where = ("切り直した界隈" if recut else
              ("全体のコメント" if dp.get("community") == "all" else "動画のコメント") if kind == "videos" else
              "界隈 " + str(dp.get("community")))
-    return f"取り足し中: {title}（{where}）{done}/{len(dp.get('targets') or [])}本"
+    return f"追加取得中: {title}（{where}）{done}/{len(dp.get('targets') or [])}本"
 
 
 MAX_RETRIES = 3

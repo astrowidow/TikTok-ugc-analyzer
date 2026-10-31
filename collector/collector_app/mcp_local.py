@@ -94,11 +94,11 @@ def _stat_mark(exe):
 def stale_text(old: str, new: str | None, ai: str = "Claude（ChatGPT）") -> str:
     """版のずれを知らせる返事（道具の仕事はしない）"""
     if new is None:
-        return (f"UGC Analyzer がアプリケーションフォルダに見つかりません（入れ替えの途中か、ゴミ箱に入れた）。"
-                f"UGC Analyzer を入れ終えたら、{ai}を一度終了（⌘Q）して開き直してください。会話と分析は消えません。")
+        return (f"UGC Analyzer が「アプリケーション」フォルダに見つかりません（アップデートの途中か、ゴミ箱に入れた可能性があります）。"
+                f"UGC Analyzer を入れ終えたら、{ai}を一度終了（⌘Q）して、もう一度開いてください。会話と分析は消えません。")
     ver = f"{old}→{new}" if new != old else new
-    return (f"UGC Analyzer が新しくなりました（{ver}）。この会話の道具は前の版のままなので、"
-            f"{ai}を一度終了（⌘Q）して開き直してください。会話と分析は消えません。")
+    return (f"UGC Analyzer がアップデートされました（{ver}）。この会話では前のバージョンのまま動いているので、"
+            f"{ai}を一度終了（⌘Q）して、もう一度開いてください。会話と分析は消えません。")
 
 
 # Mac の通知についての決まった説明（info の about=app）。設定の名前は macOS 26 の日本語の表記
@@ -179,8 +179,8 @@ class LocalHooks:
             new = str(newer)
             app = system.bundle_of(self.exe)
             # 開き直しても古い方の .app が起こされるとき（つなぎを書き直せなかったなど）に、輪にならないように
-            extra = (f"開き直してもこの知らせが続くときは、アプリケーションフォルダの古い「{app.stem}」（{self.version}）を"
-                     "ゴミ箱に入れてから、もう一度開き直してください。") if app else ""
+            extra = (f"もう一度開いてもこのメッセージが続くときは、「アプリケーション」フォルダの古い「{app.stem}」（{self.version}）を"
+                     "ゴミ箱に入れてから、もう一度開いてください。") if app else ""
         else:
             app = system.bundle_of(self.exe)
             new = (system.bundle_version(app) if app else None) or "?"

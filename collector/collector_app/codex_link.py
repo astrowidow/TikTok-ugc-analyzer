@@ -1,4 +1,4 @@
-"""ChatGPT（Mac アプリの Work の画面）にこのアプリの道具をつなぐ（メニュー「ChatGPT につなぐ」）。docs/CHATGPT_HANDOVER.md。
+"""ChatGPT（Mac アプリの Work の画面）にこのアプリの道具をつなぐ（メニュー「ChatGPT に接続」）。docs/CHATGPT_HANDOVER.md。
 
 ChatGPT の Mac アプリは、Codex の設定ファイル（~/.codex/config.toml）の [mcp_servers.<名前>] にある道具を起こして使う。
 ここに道具の節を1つ足す。書くのは3つ（どれも 2026-10-04 に運営の Mac の ChatGPT で確かめた形）:
@@ -36,7 +36,7 @@ TOOLS = ("start_analysis", "status", "next_task", "submit", "read", "revise", "d
          "restructure", "videos", "compare")   # 2026-10-12（0.8.1）: 章立て・動画の足し外し・比べる
 STARTUP_TIMEOUT_SEC = 60    # 入れた直後の初回は、macOS の検査で起動が遅いことがある
 TOOL_TIMEOUT_SEC = 300      # start_analysis（30〜40秒）と、仕事の合間のサービスの工程（組み立て・Excel 用 ZIP）
-MARK = "# UGC Analyzer の道具（メニュー「ChatGPT につなぐ」が書いた。この節は UGC Analyzer が書き直す）"
+MARK = "# UGC Analyzer の道具（メニューの「ChatGPT に接続」で追加。この節は UGC Analyzer が書き直す）"
 
 # 分析・アプリについての質問とやり直しの頼みの決まり（mcp_proto.ASK_RULE と同じ文。tests/test_app_080.py で同じかを確かめる）。
 # mcp_proto はアプリの中で読むと重いので、写しを持つ（2026-10-12）
@@ -176,7 +176,7 @@ def _load() -> dict:
     try:
         return tomllib.loads(CONFIG.read_text(encoding="utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as e:
-        raise LinkError(f"ChatGPT（Codex）の設定ファイルが読めません（壊れている可能性）: {e}") from e
+        raise LinkError(f"ChatGPT（Codex）の設定ファイルを読み込めません（壊れている可能性があります）: {e}") from e
 
 
 def _skill_current() -> bool:
@@ -222,11 +222,11 @@ def _backup() -> str:
 def connect(enable: bool = False) -> str:
     """設定ファイルに道具の節を足し（前の節は置き換える）、スキルを置く。控えの場所を返す（元の設定ファイルが無ければ空）。
     前の節が ChatGPT の設定で切られていれば（enabled = false）、切ったまま書き直す（アプリを新しくしたときに勝手に戻さない）。
-    enable はメニューの「ChatGPT につなぐ」を押したとき（利用者がつなぎ直したい）"""
+    enable はメニューの「ChatGPT に接続」を押したとき（利用者がつなぎ直したい）"""
     try:
         old = CONFIG.read_text(encoding="utf-8") if CONFIG.exists() else ""
     except (OSError, UnicodeDecodeError) as e:   # UTF-8 でない・読めない設定ファイルには書き足さない
-        raise LinkError(f"ChatGPT（Codex）の設定ファイルが読めません（UTF-8 でない・壊れている可能性）: {e}") from e
+        raise LinkError(f"ChatGPT（Codex）の設定ファイルを読み込めません（UTF-8 でないか、壊れている可能性があります）: {e}") from e
     prev = (_load().get("mcp_servers") or {}).get(SERVER_NAME)   # 読めない設定ファイルには書き足さない
     disabled = not enable and isinstance(prev, dict) and prev.get("enabled") is False
     base = _with_web(_strip(old))   # ウェブ検索を live に（利用者が決めていれば触らない）
@@ -234,9 +234,9 @@ def connect(enable: bool = False) -> str:
     try:
         cur = (tomllib.loads(new).get("mcp_servers") or {}).get(SERVER_NAME) or {}
     except tomllib.TOMLDecodeError as e:
-        raise LinkError(f"書き足すと設定ファイルの形が崩れるため、やめました（{e}）") from e
+        raise LinkError(f"書き足すと設定ファイルの形式が崩れるため、中止しました（{e}）") from e
     if cur.get("command") != entry()["command"]:
-        raise LinkError("設定ファイルの中の ugc-analyzer の書き方が想定と違うため、書き足せませんでした")
+        raise LinkError("設定ファイルの中の ugc-analyzer の書き方が想定と異なるため、書き足せませんでした")
     backup = _backup()
     mode = (CONFIG.stat().st_mode & 0o777) if CONFIG.exists() else 0o600
     _write(CONFIG, new, mode)

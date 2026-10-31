@@ -132,14 +132,14 @@ class TestRestartFromMenu(unittest.TestCase):
             return True
         self.run_restart(restart)
         self.assertIn("「このまま終了」", self.sent[0][1])          # 確認の窓で押すボタン
-        self.assertEqual(self.sent[-1][0], "Claude を開き直しました")
+        self.assertEqual(self.sent[-1][0], "Claude を再起動しました")
         self.assertEqual(self.alerts, [])
 
     def test_failure_shows_window_not_notification(self):
         """閉じられなかったら、見落としやすい通知でなく窓で出す（画面のスレッドで）"""
         self.run_restart(lambda on_asking=None: False)
         self.assertEqual(len(self.alerts), 1)
-        self.assertIn("閉じられませんでした", self.alerts[0][0])
+        self.assertIn("終了できませんでした", self.alerts[0][0])
         self.assertIn("⌘Q", self.alerts[0][1])
 
     def test_no_double_restart(self):

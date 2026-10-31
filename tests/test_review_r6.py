@@ -413,7 +413,7 @@ class TestMenuLine(unittest.TestCase):
         ctl.start()
         with mock.patch.object(app, "ai_where", lambda: "Claude"), mock.patch.object(app, "ai_installed", lambda: True):
             ctl._tick()
-        self.assertIn("止まっています", ctl.status_text, f"1行目: {ctl.status_text}")
+        self.assertIn("停止中", ctl.status_text, f"1行目: {ctl.status_text}")
 
     def test_retry_survives_restart(self):
         """自動で取り直す前（5分待ち）にアプリが開き直された（Mac の再起動・終了・入れ替え）→ 開いたら取り直しを続けるべき
@@ -434,7 +434,7 @@ class TestMenuLine(unittest.TestCase):
         ctl = _controller(self)
         ctl.chrome = StubChrome(listening=True, logged=False)
         ctl._tick()
-        self.assertTrue(ctl.status_text.startswith("TikTok のログイン待ち"), ctl.status_text)
+        self.assertTrue(ctl.status_text.startswith("TikTok へのログインを待っています"), ctl.status_text)
         self.assertIn(("navigate", "https://www.tiktok.com/login"), ctl.chrome.calls)
 
     def test_idle_text_variants(self):
@@ -442,11 +442,11 @@ class TestMenuLine(unittest.TestCase):
         from collector_app import app
         ctl = _controller(self)
         with mock.patch.object(app, "ai_where", lambda: ""), mock.patch.object(app, "ai_installed", lambda: False):
-            self.assertIn("アプリを入れてください", ctl._idle_text())
+            self.assertIn("アプリをインストールしてください", ctl._idle_text())
         with mock.patch.object(app, "ai_where", lambda: ""), mock.patch.object(app, "ai_installed", lambda: True):
-            self.assertIn("「Claude につなぐ」か「ChatGPT につなぐ」", ctl._idle_text())
+            self.assertIn("「Claude に接続」か「ChatGPT に接続」", ctl._idle_text())
         with mock.patch.object(app, "ai_where", lambda: "Claude"), mock.patch.object(app, "ai_installed", lambda: True):
-            self.assertEqual(ctl._idle_text(), f"準備OK・待機中（Claude で「{app.START_PHRASE}」と言ってください）")
+            self.assertEqual(ctl._idle_text(), f"待機中（Claude で「{app.START_PHRASE}」と送ると分析を始めます）")
 
     def test_relogin_notifies_once(self):
         """取得の途中でログインが切れた（係が need_login.json を置いて10秒おきに見る）→ ログインし直したら「準備OK」は1回。
@@ -463,7 +463,7 @@ class TestMenuLine(unittest.TestCase):
             ctl.chrome.logged = True    # 利用者がログインした
             ctl._tick()                 # ログインを確かめる
             ctl._tick()                 # 係はまだ印を消していない（10秒おきに見る）
-        ready = [n for n in NOTES if n[0] == "準備OK"]
+        ready = [n for n in NOTES if n[0] == "準備ができました"]
         self.assertEqual(len(ready), 1, f"「準備OK」の通知が {len(ready)} 回出た")
 
 

@@ -81,7 +81,7 @@ class Chrome:
             return True
         exe = find_binary()
         if not exe:
-            raise ChromeError("Google Chrome が見つかりません。先に Google Chrome を入れてください")
+            raise ChromeError("Google Chrome が見つかりません。先に Google Chrome をインストールしてください")
         self.profile.mkdir(parents=True, exist_ok=True)
         self.log.info("取得用の Chrome を起動します（ポート %s）", self.port)
         self.proc = subprocess.Popen(
@@ -107,7 +107,7 @@ class Chrome:
         t0 = time.time()
         while self._page_target() is None:
             if time.time() - t0 > timeout:
-                raise ChromeError("取得用の Chrome の窓を開き直せませんでした")
+                raise ChromeError("取得用の Chrome のウインドウを開けませんでした")
             time.sleep(0.3)
         if minimized:
             time.sleep(1.0)

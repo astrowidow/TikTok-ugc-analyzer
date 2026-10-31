@@ -758,16 +758,16 @@ class TestMenuText(unittest.TestCase):
 
         def text(status, **dp):
             return jobs.describe_deepen({"analysis_id": "a1", "title": "曲", "deepen": {"status": status, "round": 1, **dp}})
-        self.assertEqual(text("queued", kind="videos", community="videos"), "順番待ち: 曲（動画のコメントの取り足し）")
-        self.assertEqual(text("queued", kind="videos", community="all"), "順番待ち: 曲（全体のコメントの取り足し）")
+        self.assertEqual(text("queued", kind="videos", community="videos"), "順番待ち: 曲（動画のコメントの追加取得）")
+        self.assertEqual(text("queued", kind="videos", community="all"), "順番待ち: 曲（全体のコメントの追加取得）")
         self.assertEqual(text("queued", kind="add"), "順番待ち: 曲（動画の追加（属性とコメント））")
-        self.assertEqual(text("running", kind="add", targets=[1, 2, 3]), "動画を足しています: 曲（属性とコメント）3本")
-        self.assertEqual(text("running", kind="videos", community="videos", targets=[1, 2]), "取り足し中: 曲（動画のコメント）0/2本")
+        self.assertEqual(text("running", kind="add", targets=[1, 2, 3]), "動画を追加中: 曲（属性とコメント）3本")
+        self.assertEqual(text("running", kind="videos", community="videos", targets=[1, 2]), "追加取得中: 曲（動画のコメント）0/2本")
         # 今までの掘り下げ・切り直しの文はそのまま
         self.assertEqual(text("queued"), "順番待ち: 曲（界隈の掘り下げ）")
         self.assertEqual(text("queued", kind="recut"), "順番待ち: 曲（界隈の切り直し）")
-        self.assertEqual(text("running", community="dancer", targets=[1]), "取り足し中: 曲（界隈 dancer）0/1本")
-        self.assertEqual(text("running", kind="recut", targets=[1]), "取り足し中: 曲（切り直した界隈）0/1本")
+        self.assertEqual(text("running", community="dancer", targets=[1]), "追加取得中: 曲（界隈 dancer）0/1本")
+        self.assertEqual(text("running", kind="recut", targets=[1]), "追加取得中: 曲（切り直した界隈）0/1本")
 
 
 if __name__ == "__main__":

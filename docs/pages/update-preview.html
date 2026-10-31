@@ -150,6 +150,8 @@ p { margin: 0; }
 .flowcol h3 { margin: 0; font-size: 16px; }
 .flowcol ol { margin: 0; padding-left: 1.4em; display: grid; gap: 6px; font-size: 15px; }
 .tbl-wrap { overflow-x: auto; }
+.words th, .words td { width: auto; white-space: normal; }
+.words tr.grp th { background: var(--accent-soft); color: var(--accent); font-size: 13px; }
 table { border-collapse: collapse; width: 100%; font-size: 15px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-top: 1px solid var(--line); }
 th { width: 30%; font-weight: 700; white-space: nowrap; }
@@ -172,7 +174,7 @@ footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line)
     <dl class="facts">
       <div><dt>友達がすること</dt><dd>0回か1回<small>窓の「今すぐアップデート」を押すだけ</small></dd></div>
       <div><dt>届くまで</dt><dd>3時間以内<small>運営が「友達に出して」と言ってから（Mac が起きていれば）</small></dd></div>
-      <div><dt>入れ替えの時間</dt><dd>1分ほど<small>Claude の開き直しを含めて（見込み）</small></dd></div>
+      <div><dt>入れ替えの時間</dt><dd>1分ほど<small>Claude の再起動を含めて（見込み）</small></dd></div>
       <div><dt>最初の1回</dt><dd>0.9.0 だけ手で<small>0.8.1 にはこの仕組みが無いので、今までの手順で入れる</small></dd></div>
     </dl>
   </header>
@@ -219,7 +221,7 @@ footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line)
       <p class="stage-cap">画面の見本：ふだん</p>
       <div class="stage-row">
         <div class="mac-menu" role="img" aria-label="メニューの見本。終了の上に、アップデートを確認の行がいつも出る" style="flex: 0 1 360px;">
-          <div class="it dim">準備OK・待機中（Claude で「UGC Analyzer で〇〇／△△を分析して」と言ってください）</div>
+          <div class="it dim">待機中（Claude で「UGC Analyzer で〇〇／△△を分析して」と送ると分析を始めます）</div>
           <div class="sep"></div>
           <div class="it dim">…（今と同じ）…</div>
           <div class="sep"></div>
@@ -241,20 +243,20 @@ footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line)
         <div style="display:grid; gap:4px; flex: 0 1 360px;">
           <div class="mac-bar"><span class="icon"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAALKADAAQAAAABAAAALAAAAAD8buejAAAC5klEQVRYCe2Xy6tNURzH78Elr/JIHiVH3kYiA3SViTwylDL0HGDAH+CWkkcxMWUgGSoDDMREKCYS8i4GHgPyuOT9+Hy1V/1arZ1zz1prn0PnV5+zfr/fXnv/vmfttdfau6urY//GCNSROQcGtLvcbgQegnfwBc7DJGhbW4eyXx7HcqqNvYWLAuIWkhsYyCdJxQoeFFAxmFwtkE+SihWs6eDbVBI9fjJVHCs4pEMjfBhGhQ7G5nIIlqZ5cBJGK0hpuQRL4yq4AIsVpLKcgqVxPlyEI6C53XKTEH8dLotf0nd2rOLcI2z1jSfohaiaUSdbNcb/YXzf1c44t0iq9iy/w9/iHILvU3QzPPWK9xFvg4dF/iftcjgFM4pc9iY0h28VVTUF9sIruAOhbXw4+WdFn520oZ2TdDoLCb7N5btNiSn440xs3SUEj8A9qGfxJ9sOqf1GBIdqjiG5Dz6DE+vae+TcPMdNa80I1tZ9ApzAUHud40NDUnM8dKE6NveVQPO1F97bA8ZfgB/caFohWLr0IO6BpXAJfOsj8cZPKm5GsJ7ssaBbptsZYzc5eSUcNRfRcqfV5YXJ9dvVF8RaOA2PQdus1tPn4M9Bf5WgS0OmNXk7aOWIsomcfQZ8YWVxs4KjRLqTtfzoiS0TF8q3VHBo2QqJtLkH/EG7cbg/n72tU0FPqxXTiK+nvwaV2wYqNiLQ9tlduUpTcH8/BOuVcpc517mbcPQSVIkdpIodvTJfO9cWT9FI4uOgDSLL17NX70+4ld8ykS7/kT7rvZOnEV8uztWLjN4dKjF9DXwCJ85vtXWu9pQsI34Cru9V73j2ULfVFbftW/ISZ20jwQew/XbYDlX42uXueiIkSILdi/YI/AOBPjfIDYHKbSYVdWvtyMl3q8KawLHv5FZAy2wYlfUBeQVeg+b2OahBHewG841YfdvGJqBkOmi6SLC4Bhp13YmsI6tiKayHi+haEqzp0LHOCHRG4H8Zgd+s9AjsAUWpnwAAAABJRU5ErkJggg==" alt=""></span><span>21:04</span></div>
           <div class="mac-menu" role="img" aria-label="メニューの見本。バージョン 0.9.1 にアップデートの行">
-            <div class="it dim">準備OK・待機中（Claude で「UGC Analyzer で〇〇／△△を分析して」と言ってください）</div>
+            <div class="it dim">待機中（Claude で「UGC Analyzer で〇〇／△△を分析して」と送ると分析を始めます）</div>
             <div class="sep"></div>
-            <div class="it">止まった取得を続きから再開</div>
-            <div class="it">取得の画面を見る</div>
-            <div class="it">取得の画面をしまう</div>
+            <div class="it">止まった取得を再開</div>
+            <div class="it">取得中の画面を表示</div>
+            <div class="it">取得中の画面を隠す</div>
             <div class="it">TikTok にログイン</div>
             <div class="sep"></div>
-            <div class="it chk">Claude につながっています</div>
-            <div class="it">ChatGPT につなぐ</div>
+            <div class="it chk">Claude に接続済み</div>
+            <div class="it">ChatGPT に接続</div>
             <div class="it">レポートのフォルダを開く</div>
             <div class="it sub">指示書を編集</div>
             <div class="it sub">知識ベース</div>
             <div class="sep"></div>
-            <div class="it sub">そのほか</div>
+            <div class="it sub">その他</div>
             <div class="sep"></div>
             <div class="it new">バージョン 0.9.1 にアップデート…</div>
             <div class="it dim">UGC Analyzer 0.9.0</div>
@@ -272,7 +274,7 @@ footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line)
       <p class="stage-cap">画面の見本：C のとき（取得中）</p>
       <div class="stage-row">
         <div class="mac-menu" role="img" aria-label="メニューの見本。取得中は、取得が終わったら入れますの行が灰色で出る" style="flex: 0 1 360px;">
-          <div class="it dim">取得中: 〇〇 — コメントを取る 18/40本・残り約35分</div>
+          <div class="it dim">取得中: 〇〇 — コメント 18/40本・残り約35分</div>
           <div class="sep"></div>
           <div class="it dim">…（今と同じ）…</div>
           <div class="sep"></div>
@@ -347,7 +349,7 @@ footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line)
             <li>Claude が自分で開きます</li>
             <li>下の通知が出たら完了です</li>
           </ol>
-          <p>この開き直しの仕組みは、今の 0.8.1 にもある「開き直す」のボタンと同じです。</p>
+          <p>この再起動の仕組みは、今の UGC Analyzer にもある「再起動」のボタン（Claude に接続したときの窓）と同じです。</p>
         </div>
       </div>
     </div>
@@ -386,6 +388,58 @@ footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line)
           <p>UGC Analyzer を「アプリケーション」の外（「ダウンロード」など）から開いているときも、この窓になります。</p>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section id="wording">
+    <h2>メニュー・窓・通知の文言の見直し（全体）</h2>
+    <p class="sub">ほかの Mac のアプリと同じ言葉にそろえました。確かめる → 確認、つなぐ → 接続、開き直す → 再起動、しまう → 隠す、入れる → インストール、取り足し → 追加取得、記録 → ログ、電池 → バッテリー、版 → バージョン、やめる（ボタン）→ キャンセル。AI への話しかけは「言ってください」→「送ってください」。取得・分析・レポート・界隈・知識ベース・指示書は、そのままです。友達向けの手順書と、AI の返事の中のメニューの名前もそろえました。</p>
+    <div class="tbl-wrap">
+      <table class="words">
+        <tr><th>いま</th><th>直したあと</th></tr>
+        <tr class="grp"><th colspan="2">メニュー</th></tr>
+        <tr><td>止まった取得を続きから再開</td><td>止まった取得を再開</td></tr>
+        <tr><td>取得の画面を見る ／ 取得の画面をしまう</td><td>取得中の画面を表示 ／ 取得中の画面を隠す</td></tr>
+        <tr><td>Claude につなぐ ／ Claude につながっています</td><td>Claude に接続 ／ Claude に接続済み（ChatGPT も同じ）</td></tr>
+        <tr><td>（知識ベース）今すぐ新しい記事を確かめる</td><td>新しい記事を確認</td></tr>
+        <tr><td>（指示書を編集）すべて初期の指示書に戻す…</td><td>すべての指示書を初期設定に戻す…</td></tr>
+        <tr><td>そのほか</td><td>その他</td></tr>
+        <tr><td>取得中は画面を消さない</td><td>取得中はディスプレイをスリープさせない</td></tr>
+        <tr><td>取得の記録を開く</td><td>取得のログを開く</td></tr>
+        <tr><td>新しい版を確かめる…</td><td>アップデートを確認…</td></tr>
+        <tr class="grp"><th colspan="2">メニューの1行目</th></tr>
+        <tr><td>準備OK・待機中（Claude で「…」と言ってください）</td><td>待機中（Claude で「…」と送ると分析を始めます）</td></tr>
+        <tr><td>準備OK・次は Claude か ChatGPT のアプリを入れてください（入れると自動でつなぎます）</td><td>準備完了：次に Claude か ChatGPT のアプリをインストールしてください（インストールすると自動で接続します）</td></tr>
+        <tr><td>TikTok のログイン待ち（取得用の Chrome で、サブアカウントでログイン）</td><td>TikTok へのログインを待っています（取得用の Chrome でサブアカウントにログインしてください）</td></tr>
+        <tr><td>取得中: 〇〇 — コメントを取る 18/40本・残り約35分</td><td>取得中: 〇〇 — コメント 18/40本・残り約35分</td></tr>
+        <tr><td>取り足し中: 〇〇（界隈 X）3/10本 ／ 動画を足しています: …</td><td>追加取得中: 〇〇（界隈 X）3/10本 ／ 動画を追加中: …</td></tr>
+        <tr><td>取得済み: 〇〇 ／ 止まっています: 〇〇 — 理由（メニューの「止まった取得を続きから再開」）</td><td>取得完了: 〇〇 ／ 停止中: 〇〇 — 理由（メニューの「止まった取得を再開」で再開できます）</td></tr>
+        <tr><td>少し待ってから続きを取ります（あと5分）</td><td>少し待ってから取得を再開します（あと5分）</td></tr>
+        <tr><td>（電池で動作中・電源につないでください）</td><td>（バッテリーで動作中。電源に接続してください）</td></tr>
+        <tr class="grp"><th colspan="2">窓</th></tr>
+        <tr><td>Claude につなぎました ／ Claude を開き直すと使えるようになります。今すぐ開き直しますか？ ［開き直す］［あとで自分で］</td><td>Claude に接続しました ／ Claude を再起動すると使えるようになります。今すぐ再起動しますか？（会話はそのまま残ります）［再起動］［あとで］</td></tr>
+        <tr><td>Claude につなげませんでした</td><td>Claude に接続できませんでした</td></tr>
+        <tr><td>Claude を閉じられませんでした ／ 自分で終了（前に出して ⌘Q）してから…</td><td>Claude を終了できませんでした ／ 前面に出して ⌘Q で終了し、もう一度開いてください。</td></tr>
+        <tr><td>先にアプリを「アプリケーション」フォルダに移してください ／ …からこのアプリを呼べません</td><td>先に UGC Analyzer を「アプリケーション」フォルダに移動してください ／ …から UGC Analyzer を使えません</td></tr>
+        <tr><td>すべて初期の指示書に戻しますか？ ［戻す］［やめる］</td><td>すべての指示書を初期設定に戻しますか？ ［初期設定に戻す］［キャンセル］</td></tr>
+        <tr><td>取得の途中です ／ 終了すると取得は止まります… ［終了する］［やめる］</td><td>取得中です ／ 終了すると取得が止まります… ［終了］［キャンセル］</td></tr>
+        <tr><td>UGC Analyzer が2つ入っています（新しい版を1つ残して…・版が読めません・いま動いているもの）</td><td>同じ題（新しいバージョンを1つ残し…・バージョン不明・使用中）</td></tr>
+        <tr><td>UGC Analyzer を 0.9.1 にしました ／ Claude を開き直すと新しい版が使えます ［開き直す］</td><td>UGC Analyzer を 0.9.1 にアップデートしました ／ Claude を再起動すると、新しいバージョンが使えるようになります ［Claude を再起動］</td></tr>
+        <tr class="grp"><th colspan="2">通知</th></tr>
+        <tr><td>準備OK ／ ログインできました。取得用の Chrome は Dock にしまいます</td><td>準備ができました ／ ログインしました。取得用の Chrome は Dock に最小化します。</td></tr>
+        <tr><td>「〇〇」の取得を始めます ／ 終わるまで Mac を開いたまま・電源につないでおいて…</td><td>「〇〇」の取得を開始しました ／ 終わるまで Mac を開いたまま、電源に接続しておいてください…</td></tr>
+        <tr><td>「〇〇」の取得が終わりました ／ Claude で「〇〇の分析を続けて」と言ってください</td><td>「〇〇」の取得が完了しました ／ Claude で「〇〇の分析を続けて」と送ってください。</td></tr>
+        <tr><td>「〇〇」のコメントを取り足します ／ 「〇〇」の取り足しが終わりました ／ …レポートに活かします</td><td>「〇〇」のコメントを追加取得します ／ 「〇〇」の追加取得が完了しました ／ …レポートに反映します</td></tr>
+        <tr><td>「〇〇」の取得をやめました ／ また集めるときは…</td><td>「〇〇」の取得を中止しました ／ もう一度取得するときは…</td></tr>
+        <tr><td>〇分後に続きから取り直します</td><td>〇分後に自動で再開します</td></tr>
+        <tr><td>電源につないでください ／ 電池が少なくなっています</td><td>電源に接続してください ／ バッテリー残量が少なくなっています</td></tr>
+        <tr><td>取得の画面の描画が止まっています ／ …メニューの「取得の画面を見る」で開いてください</td><td>取得中の画面の描画が止まっています ／ …メニューの「取得中の画面を表示」で表示してください。</td></tr>
+        <tr><td>知識ベースは最新です ／ 知識ベースを確かめられませんでした ／ ネットにつながっているか確かめてください</td><td>知識ベースは最新の状態です ／ 新しい記事を確認できませんでした ／ インターネットへの接続を確認してください。</td></tr>
+        <tr><td>Claude を開き直しました</td><td>Claude を再起動しました</td></tr>
+        <tr class="grp"><th colspan="2">AI の返事に出る文</th></tr>
+        <tr><td>UGC Analyzer が新しくなりました（…）。この会話の道具は前の版のままなので…開き直してください</td><td>UGC Analyzer がアップデートされました（…）。この会話では前のバージョンのまま動いているので…もう一度開いてください</td></tr>
+        <tr><td>UGC Analyzer のメニュー「止まった取得を続きから再開」で…</td><td>UGC Analyzer のメニュー「止まった取得を再開」で…</td></tr>
+      </table>
     </div>
   </section>
 

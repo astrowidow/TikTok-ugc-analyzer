@@ -1,4 +1,4 @@
-"""Claude デスクトップにこのアプリの道具をつなぐ（メニュー「Claude につなぐ」）。docs/ALL_IN_APP_PLAN.md 段2。
+"""Claude デスクトップにこのアプリの道具をつなぐ（メニュー「Claude に接続」）。docs/ALL_IN_APP_PLAN.md 段2。
 
 Claude デスクトップの設定ファイル（claude_desktop_config.json）の mcpServers に1行足すだけ。
 ほかの設定には触らない。書き換える前に、同じフォルダに控え（claude_desktop_config.json.bak-ugc-<日時>）を残す。
@@ -41,9 +41,9 @@ def _load() -> dict:
     try:
         data = json.loads(CONFIG.read_text(encoding="utf-8") or "{}")
     except ValueError as e:
-        raise LinkError(f"Claude の設定ファイルが読めません（壊れている可能性）: {e}") from e
+        raise LinkError(f"Claude の設定ファイルを読み込めません（壊れている可能性があります）: {e}") from e
     if not isinstance(data, dict):
-        raise LinkError("Claude の設定ファイルの形が想定と違います")
+        raise LinkError("Claude の設定ファイルの形式が想定と異なります")
     return data
 
 

@@ -774,8 +774,8 @@ def _acq_view(a: Analysis):
             return {"state": "failed", "message": f"取得が止まりました。{acq.get('error')}。", "eta_seconds": None,
                     "dead_end": True}
         if LOCAL is not None:
-            msg = (f"取得が止まりました（{acq.get('error')}）。UGC Analyzer のメニュー「止まった取得を続きから再開」で、"
-                   "済んだところの続きから取れます。何度も止まるときは運営に連絡してください。")
+            msg = (f"取得が止まりました（{acq.get('error')}）。UGC Analyzer のメニュー「止まった取得を再開」で、"
+                   "続きから取得できます。何度も止まるときは運営に連絡してください。")
         else:
             msg = f"取得が止まりました（{acq.get('error')}）。運営に連絡してください。"
         return {"state": "failed", "message": msg, "eta_seconds": None}

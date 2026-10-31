@@ -28,7 +28,7 @@ def ai_where() -> str:
     return "Claude" if c else "ChatGPT の Work" if g else ""
 
 
-CONNECT_HINT = "「Claude につなぐ」か「ChatGPT につなぐ」（使っている方）"
+CONNECT_HINT = "「Claude に接続」か「ChatGPT に接続」（使っている方）"
 # 新しい分析を頼む言い方（名指しのときだけ始まる。2026-10-05 ユーザー）
 START_PHRASE = "UGC Analyzer で〇〇／△△を分析して"
 
@@ -228,12 +228,12 @@ class Controller:
         pct = ps["percent"]
         if self.power_warned is None:
             self.power_warned = "battery"
-            notify.send("電源につないでください",
-                        f"取得の途中です。電池で動いていると、電池が切れたところで止まります（残り {pct}%）。ふたも閉じないでください")
+            notify.send("電源に接続してください",
+                        f"取得中です。バッテリーで動いていると、バッテリーが切れた時点で取得が止まります（残り {pct}%）。ふたも閉じないでください。")
             self.log.info("取得中に電池で動いている（残り %s%%）", pct)
         elif self.power_warned == "battery" and pct is not None and pct <= LOW_BATTERY:
             self.power_warned = "low"
-            notify.send("電池が少なくなっています", f"残り {pct}%。電源につながないと、このあと取得が止まります")
+            notify.send("バッテリー残量が少なくなっています", f"残り {pct}%。電源に接続しないと、まもなく取得が止まります。")
 
     def _side_jobs(self):
         """取得とは別の見張り: 編集された指示書・知識ベースの新着"""
@@ -411,7 +411,7 @@ class Controller:
                 self.known_deepen[(aid, dp.get("round"))] = "cancelled"
                 flag.unlink(missing_ok=True)
                 self.log.info("取り足しをやめました（利用者の頼み）: %s %s回目", aid, dp.get("round"))
-                notify.send(f"「{title}」のコメントの取り足しをやめました", "レポートは今のまま読めます")
+                notify.send(f"「{title}」の追加取得を中止しました", "レポートはこれまでどおり読めます。")
                 continue
             acq = m.get("acquisition") or {}
             if acq.get("status") != "cancelled" and (acq.get("status") != "done" or overwritten):   # 済んだ取得は「やめた」にしない
@@ -427,8 +427,8 @@ class Controller:
             self.log.info("取得をやめました（利用者の頼み）: %s", aid)
             # 取り直しでやめたのか、ただ「やめて」と言われたのかで文を分ける（2026-10-12）
             again = m.get("superseded_by")
-            notify.send(f"「{title}」の取得をやめました",
-                        "新しい分析で取り直します" if again else "また集めるときは、Claude（ChatGPT）に頼んでください")
+            notify.send(f"「{title}」の取得を中止しました",
+                        "新しい分析として取得し直します。" if again else "もう一度取得するときは、Claude（ChatGPT）に頼んでください。")
 
     @staticmethod
     def _busy_with_other(aid: str, pid) -> bool:
@@ -444,7 +444,7 @@ class Controller:
     def _tick(self):
         self._handle_cancels()
         if not chrome.find_binary():
-            self.status_text = "Google Chrome が必要です（入れてから開き直してください）"
+            self.status_text = "Google Chrome が必要です（インストールしてから UGC Analyzer をもう一度開いてください）"
             return
         self._check_transitions()
         st = config.load_state()
@@ -485,8 +485,8 @@ class Controller:
         waits = [w for w in [self.retry_after, *self.pending_retry.values()] if w > time.time()]
         if waits and (q or self.pending_retry):
             left = int(min(waits) - time.time())
-            self.status_text = (f"少し待ってから続きを取ります（あと{max(left // 60, 1)}分）" if left >= 60
-                                else f"少し待ってから続きを取ります（あと{max(left, 1)}秒）")
+            self.status_text = (f"少し待ってから取得を再開します（あと{max(left // 60, 1)}分）" if left >= 60
+                                else f"少し待ってから取得を再開します（あと{max(left, 1)}秒）")
             return
         if q:
             # 取得用の Chrome はここでは開かない（コメントの段の頭で worker_entry が開く）
@@ -494,7 +494,7 @@ class Controller:
             self.next_render = 0.0
             self.render_warned = False
             self.chrome_relaunch_noted = False
-            self.status_text = "取得を始めます…"
+            self.status_text = "取得を開始します…"
             return
         # 仕事が無い。自動では取り直さない止まった取得があれば、1行目に出す（友達向けの紙「『止まっています』と出ていたら」）
         failed = [m for m in jobs.analyses() if (m.get("acquisition") or {}).get("status") == "failed"]
@@ -502,7 +502,7 @@ class Controller:
             line = jobs.describe(failed[-1])
             line = line if len(line) <= 70 else line[:69] + "…"   # 止まった理由が長いとメニューの幅が広がりすぎる
             region = "日本の地域では使えません" in str((failed[-1].get("acquisition") or {}).get("error") or "")
-            self.status_text = line + ("" if "続きから再開" in line or region else "（メニューの「止まった取得を続きから再開」）")
+            self.status_text = line + ("" if "取得を再開" in line or region else "（メニューの「止まった取得を再開」で再開できます）")
         else:
             self.status_text = self._idle_text()
         if self.chrome.listening():
@@ -515,10 +515,10 @@ class Controller:
     def _idle_text(self, extra: str = "") -> str:
         where = ai_where()
         if not where and not ai_installed():
-            return "準備OK・次は Claude か ChatGPT のアプリを入れてください（入れると自動でつなぎます）" + extra
+            return "準備完了：次に Claude か ChatGPT のアプリをインストールしてください（インストールすると自動で接続します）" + extra
         if not where:
-            return f"準備OK・次はメニューの{CONNECT_HINT}を押してください" + extra
-        return f"準備OK・待機中（{where} で「{START_PHRASE}」と言ってください）" + extra
+            return f"準備完了：次にメニューの{CONNECT_HINT}を選んでください" + extra
+        return f"待機中（{where} で「{START_PHRASE}」と送ると分析を始めます）" + extra
 
     def _login_flow(self):
         """捨て垢のログインを待つ。ログインは利用者が自分で、取得用の Chrome の画面でする"""
@@ -532,7 +532,7 @@ class Controller:
                 self.chrome.navigate(chrome.LOGIN_URL)
                 self.chrome.show()
                 notify.send("TikTok にログインしてください",
-                            "開いた Chrome で、分析専用のサブアカウント（ふだんとは別のアカウント）でログインしてください")
+                            "開いた Chrome で、分析専用のサブアカウント（ふだんとは別のアカウント）にログインしてください。")
                 self.login_presented = True
             self.login_wanted = True
         if self.chrome.logged_in():
@@ -545,13 +545,13 @@ class Controller:
             self.chrome.minimize()
             self.log.info("TikTok のログインを確かめました")
             if ai_where():
-                notify.send("準備OK", "ログインできました。取得用の Chrome は Dock にしまいます。このまま使えます")
+                notify.send("準備ができました", "ログインしました。取得用の Chrome は Dock に最小化します。このまま使えます。")
             elif not ai_installed():
-                notify.send("ログインできました", "最後に、Claude か ChatGPT のアプリを入れて、ログインしてください（入れると自動でつなぎます）")
+                notify.send("ログインしました", "最後に、Claude か ChatGPT のアプリをインストールしてログインしてください（インストールすると自動で接続します）。")
             # AI のアプリが入っていれば、メニューのアプリがすぐ自動でつないで、開き直すかを聞く（CollectorApp._autolink）
             self.status_text = self._idle_text()
             return
-        self.status_text = "TikTok のログイン待ち（取得用の Chrome で、サブアカウントでログイン）"
+        self.status_text = "TikTok へのログインを待っています（取得用の Chrome でサブアカウントにログインしてください）"
 
     def _check_transitions(self):
         """分析の状態が変わったら知らせる。止まったものは続きから取り直す"""
@@ -566,13 +566,13 @@ class Controller:
             title = m.get("title") or aid
             if st == "queued" and before is None:
                 self.log.info("新しい取得を受け付けました: %s %s", aid, title)
-                notify.send(f"「{title}」の取得を始めます",
-                            "終わるまで Mac を開いたまま・電源につないでおいてください（画面は消えてもかまいません）")
+                notify.send(f"「{title}」の取得を開始しました",
+                            "終わるまで Mac を開いたまま、電源に接続しておいてください（画面は消えてもかまいません）。")
             elif st == "done" and before is not None:
                 c = (((m.get("acquisition") or {}).get("steps") or {}).get("comments") or {}).get("detail") or {}
-                notify.send(f"「{title}」の取得が終わりました",
-                            f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と言ってください"
-                            f"（コメント {c.get('videos_ok', '?')}本・{c.get('comments', '?')}件）")
+                notify.send(f"「{title}」の取得が完了しました",
+                            f"{ai_where() or 'Claude'} で「{title}の分析を続けて」と送ってください"
+                            f"（コメント {c.get('videos_ok', '?')}本・{c.get('comments', '?')}件）。")
                 self.log.info("取得が終わりました: %s %s", aid, c)
             elif st == "failed" and before is not None:
                 err = (m.get("acquisition") or {}).get("error") or ""
@@ -583,12 +583,12 @@ class Controller:
                     wait = self._schedule_retry(m)
                     if wait > 30:
                         notify.send(f"「{title}」の取得が止まりました",
-                                    f"{wait // 60}分後に続きから取り直します（{err[:60]}）")
+                                    f"{wait // 60}分後に自動で再開します（{err[:60]}）")
                 elif "日本の地域では使えません" in err:   # 再開しても同じ所で止まる。止まった文（ほかのページで頼み直す案内）を切らずに出す
                     notify.send(f"「{title}」の取得が止まりました", err)
                 else:
                     notify.send(f"「{title}」の取得が止まりました",
-                                f"{err[:80]}。メニューの「止まった取得を続きから再開」で続きから取れます")
+                                f"{err[:80]}。メニューの「止まった取得を再開」で続きから取得できます。")
 
     def _schedule_retry(self, m: dict, restarted: bool = False) -> int:
         """止まった取得を、少し待ってから続きから取り直す予定に入れる。待つ秒数を返す。
@@ -631,36 +631,36 @@ class Controller:
         n = len(dp.get("targets") or [])
         if st == "queued" and before is None:
             if kind == "add":
-                notify.send(f"「{title}」に動画を足します（属性とコメント）", f"{n}本・{est}。Mac を開いたままにしておいてください")
+                notify.send(f"「{title}」に動画を追加します（属性とコメント）", f"{n}本・{est}。Mac を開いたままにしておいてください。")
             elif kind == "videos":
-                notify.send(f"「{title}」の動画のコメントを取り足します",
-                            f"{'全部の界隈・' if dp.get('community') == 'all' else ''}{n}本・{est}。Mac を開いたままにしておいてください")
+                notify.send(f"「{title}」の動画のコメントを追加取得します",
+                            f"{'すべての界隈・' if dp.get('community') == 'all' else ''}{n}本・{est}。Mac を開いたままにしておいてください。")
             else:
-                notify.send(f"「{title}」のコメントを取り足します",
+                notify.send(f"「{title}」のコメントを追加取得します",
                             f"{'切り直した界隈' if recut else '界隈 ' + str(dp.get('community'))}・{est}。"
-                            "Mac を開いたままにしておいてください")
+                            "Mac を開いたままにしておいてください。")
         elif st == "done" and (r.get("error") or r.get("blocked")):
-            notify.send(f"「{title}」の{'動画の追加' if kind == 'add' else '取り足し'}が途中で止まりました",
-                        f"{ai} で「{title}の分析を続けて」と言うと、取れた分をレポートに活かします")
+            notify.send(f"「{title}」の{'動画の追加' if kind == 'add' else '追加取得'}が途中で止まりました",
+                        f"{ai} で「{title}の分析を続けて」と送ると、取得できた分をレポートに反映します。")
             self.log.warning("%sが途中で止まりました: %s %s", what, m["analysis_id"], r)
         elif st == "done":
             if kind == "add":
                 lost = len(r.get("not_found") or [])
-                notify.send(f"「{title}」に動画を足しました",
-                            f"{ai} で「{title}の分析を続けて」と言うと、足した動画をレポートに活かします"
-                            f"（{len(r.get('added') or [])}本、コメント{r.get('comments_added', 0)}件"
-                            + (f"。{lost}本は動画のページを読めませんでした" if lost else "") + "）")
+                notify.send(f"「{title}」に動画を追加しました",
+                            f"{ai} で「{title}の分析を続けて」と送ると、追加した動画をレポートに反映します"
+                            f"（{len(r.get('added') or [])}本・コメント{r.get('comments_added', 0)}件"
+                            + (f"。{lost}本は動画のページを読み込めませんでした" if lost else "") + "）")
             else:
-                notify.send(f"「{title}」の取り足しが終わりました",
-                            f"{ai} で「{title}の分析を続けて」と言うと、"
-                            + (f"新しい界隈の分け方でレポートを書き直します（{r.get('videos_new', 0)}本、コメント{r.get('comments_added', 0)}件）"
+                notify.send(f"「{title}」の追加取得が完了しました",
+                            f"{ai} で「{title}の分析を続けて」と送ると、"
+                            + (f"新しい界隈の分け方でレポートを書き直します（{r.get('videos_new', 0)}本・コメント{r.get('comments_added', 0)}件）"
                                if recut else
-                               f"レポートに活かします（新しく{r.get('videos_new', 0)}本・続き{r.get('videos_more', 0)}本、コメント{r.get('comments_added', 0)}件）"))
+                               f"レポートに反映します（新規{r.get('videos_new', 0)}本・追加{r.get('videos_more', 0)}本・コメント{r.get('comments_added', 0)}件）"))
             self.log.info("%sが終わりました: %s %s", what, m["analysis_id"], r)
         elif st == "failed":
-            notify.send(f"「{title}」の{'動画の追加' if kind == 'add' else '取り足し'}が止まりました",
-                        f"{ai} で「{title}の分析を続けて」と言えば、"
-                        + ("今ある動画で続きを進めます" if kind == "add" else
+            notify.send(f"「{title}」の{'動画の追加' if kind == 'add' else '追加取得'}が止まりました",
+                        f"{ai} で「{title}の分析を続けて」と送ると、"
+                        + ("今ある動画で続けます" if kind == "add" else
                            "手元のコメントでレポートを書き直します" if recut else
                            "手元のコメントでレポートを直します" if kind == "videos" else "手元のコメントで掘り下げを進めます"))
             self.log.warning("%sが止まりました: %s %s", what, m["analysis_id"], dp.get("error"))
@@ -674,8 +674,8 @@ class Controller:
         self.log.info("取得中に取得用の Chrome（の窓）が閉じられたので、最小化で開き直しました")
         if not self.chrome_relaunch_noted:
             self.chrome_relaunch_noted = True
-            notify.send("取得用の Chrome を開き直しました",
-                        "取得の途中は、取得用の Chrome を閉じないでください（Dock にしまってあります）")
+            notify.send("取得用の Chrome をもう一度開きました",
+                        "取得中は、取得用の Chrome を閉じないでください（Dock に最小化してあります）。")
 
     def _render_watch(self):
         """取得中のタブで描画が回っているか（止まると20件で頭打ちになる。2-9）。止まっていたら知らせる"""
@@ -704,8 +704,8 @@ class Controller:
             return
         if not self.render_warned:
             self.render_warned = True
-            notify.send("取得の画面の描画が止まっています",
-                        "このままだとコメントが20件で止まります。メニューの「取得の画面を見る」で開いてください")
+            notify.send("取得中の画面の描画が止まっています",
+                        "このままではコメントが20件までしか取得できません。メニューの「取得中の画面を表示」で表示してください。")
 
     # --- 指示書（段3） ---
     def _watch_prompts(self, first: bool = False):
@@ -726,8 +726,8 @@ class Controller:
             if first or before is None or before[0] == mt:
                 continue
             if not r["ok"]:
-                notify.send(f"指示書「{r['title']}」は使えません",
-                            f"{r['problems'][0][:70]}。直すまでは初期の指示書を使います")
+                notify.send(f"指示書「{r['title']}」を使えません",
+                            f"{r['problems'][0][:70]}。直すまでは初期設定の指示書を使います。")
                 self.log.warning("編集された指示書が使えません: %s %s", r["name"], r["problems"])
             else:
                 self.log.info("指示書が編集されました: %s", r["name"])
@@ -739,7 +739,7 @@ class Controller:
             import kb_update
             self.kb_text = kb_update.summary()
         except Exception as e:
-            self.kb_text = f"知識ベース: 読めません（{e}）"
+            self.kb_text = f"知識ベース: 読み込めません（{e}）"
 
     def check_knowledge(self, quiet: bool = False):
         """著者の note の新着を見る（裏で）。新しい記事は、次に AI に「〇〇の分析を続けて」と言ったときに取り込む"""
@@ -754,14 +754,14 @@ class Controller:
                 n = len(res["new"])
                 if n:
                     notify.send("知識ベースに新しい記事があります",
-                                f"著者の note の新しい記事 {n} 本。次に {ai_where() or 'Claude'} で「〇〇の分析を続けて」と言ったときに取り込みます"
-                                "（分析が無ければ「UGC Analyzer の知識ベースを更新して」）")
+                                f"著者の note に新しい記事が {n} 本あります。次に {ai_where() or 'Claude'} で「〇〇の分析を続けて」と送ったときに取り込みます"
+                                "（分析が無いときは「UGC Analyzer の知識ベースを更新して」と送ってください）。")
                 elif not quiet:
-                    notify.send("知識ベースは最新です", "著者の note に新しい記事はありませんでした")
+                    notify.send("知識ベースは最新の状態です", "著者の note に新しい記事はありません。")
             except Exception as e:
                 self.log.warning("知識ベースの新着を確かめられませんでした: %s", e)
                 if not quiet:
-                    notify.send("知識ベースを確かめられませんでした", f"ネットにつながっているか確かめてください（{type(e).__name__}）")
+                    notify.send("新しい記事を確認できませんでした", f"インターネットへの接続を確認してください（{type(e).__name__}）。")
             finally:
                 self.kb_busy = False
                 self._kb_refresh_text()
@@ -806,10 +806,10 @@ class CollectorApp(rumps.App):
         self._restarting = set()       # 開き直している最中の AI のアプリ
         self._restart_lock = threading.Lock()
         self.status_item = rumps.MenuItem("起動中…")
-        self.claude_item = rumps.MenuItem("Claude につなぐ", callback=self.connect_claude)
-        self.chatgpt_item = rumps.MenuItem("ChatGPT につなぐ", callback=self.connect_chatgpt)
+        self.claude_item = rumps.MenuItem("Claude に接続", callback=self.connect_claude)
+        self.chatgpt_item = rumps.MenuItem("ChatGPT に接続", callback=self.connect_chatgpt)
         self.kb_item = rumps.MenuItem("知識ベース: …")
-        self.keep_display = rumps.MenuItem("取得中は画面を消さない", callback=self.toggle_display)
+        self.keep_display = rumps.MenuItem("取得中はディスプレイをスリープさせない", callback=self.toggle_display)
         self.keep_display.state = int(ctl.worker.keep_display_on)
         self.login_item = rumps.MenuItem("ログイン時に起動", callback=self.toggle_login_item)
         self.login_item.state = int(system.login_item_enabled())
@@ -827,26 +827,26 @@ class CollectorApp(rumps.App):
             self.prompt_menu.add(item)
         self.prompt_menu.add(None)
         self.prompt_menu.add(rumps.MenuItem("指示書のフォルダを開く", callback=self.open_prompts_dir))
-        self.prompt_menu.add(rumps.MenuItem("すべて初期の指示書に戻す…", callback=self.reset_prompts))
+        self.prompt_menu.add(rumps.MenuItem("すべての指示書を初期設定に戻す…", callback=self.reset_prompts))
 
         kb_menu = rumps.MenuItem("知識ベース")
         kb_menu.add(self.kb_item)
-        kb_menu.add(rumps.MenuItem("今すぐ新しい記事を確かめる", callback=self.check_kb))
+        kb_menu.add(rumps.MenuItem("新しい記事を確認", callback=self.check_kb))
         kb_menu.add(rumps.MenuItem("知識ベースのフォルダを開く", callback=lambda _: subprocess.run(["open", str(config.KB_DIR)])))
 
-        other = rumps.MenuItem("そのほか")
+        other = rumps.MenuItem("その他")
         other.add(self.keep_display)
         other.add(self.login_item)
         other.add(None)
         other.add(rumps.MenuItem("データのフォルダを開く", callback=self.open_data))
-        other.add(rumps.MenuItem("取得の記録を開く", callback=self.open_logs))
+        other.add(rumps.MenuItem("取得のログを開く", callback=self.open_logs))
 
         items = [
             self.status_item,
             None,
-            rumps.MenuItem("止まった取得を続きから再開", callback=self.resume_failed),
-            rumps.MenuItem("取得の画面を見る", callback=self.show_chrome),
-            rumps.MenuItem("取得の画面をしまう", callback=self.hide_chrome),
+            rumps.MenuItem("止まった取得を再開", callback=self.resume_failed),
+            rumps.MenuItem("取得中の画面を表示", callback=self.show_chrome),
+            rumps.MenuItem("取得中の画面を隠す", callback=self.hide_chrome),
             rumps.MenuItem("TikTok にログイン", callback=self.login),
             None,
             self.claude_item,
@@ -881,16 +881,16 @@ class CollectorApp(rumps.App):
             name = startup_restarts.pop(0)
             threading.Thread(target=self._restart_after_update, args=(name,), daemon=True).start()
         self._update_menu()
-        t = self.ctl.status_text + ("（電池で動作中・電源につないでください）" if self.ctl.on_battery else "")
+        t = self.ctl.status_text + ("（バッテリーで動作中。電源に接続してください）" if self.ctl.on_battery else "")
         if self.status_item.title != t:
             self.status_item.title = t
         st = claude_link.status()
-        title = "Claude につながっています" if st == "connected" else "Claude につなぐ"
+        title = "Claude に接続済み" if st == "connected" else "Claude に接続"
         if self.claude_item.title != title:
             self.claude_item.title = title
         self.claude_item.state = int(st == "connected")
         gst = codex_link.status()
-        title = "ChatGPT につながっています" if gst == "connected" else "ChatGPT につなぐ"
+        title = "ChatGPT に接続済み" if gst == "connected" else "ChatGPT に接続"
         if self.chatgpt_item.title != title:
             self.chatgpt_item.title = title
         self.chatgpt_item.state = int(gst == "connected")
@@ -986,7 +986,7 @@ class CollectorApp(rumps.App):
                 rumps.alert("最新の状態です", f"{config.APP_NAME} {VERSION} は最新のバージョンです。")
             elif req["kind"] == "error":
                 rumps.alert("アップデートを確認できませんでした",
-                            "インターネットに接続されているか確かめて、しばらくしてからもう一度お試しください。")
+                            "インターネットへの接続を確認して、しばらくしてからもう一度お試しください。")
             elif req["kind"] == "wait":
                 rumps.alert(update_wait_title(req["why"]), UPDATE_WAIT_TEXT)
         finally:
@@ -1013,7 +1013,7 @@ class CollectorApp(rumps.App):
         s = c.update_staged
         try:
             if not s:
-                raise updater.UpdateError("入れる準備ができた版がありません")
+                raise updater.UpdateError("アップデートの準備ができていません")
             updater.apply(s, go["mode"], go.get("restart") or [], c.log)
         except Exception as e:
             c.log.warning("入れ替えの係を起こせませんでした: %s: %s", type(e).__name__, e)
@@ -1048,14 +1048,14 @@ class CollectorApp(rumps.App):
             if not linked:
                 return
             names = "と".join(linked)
-            say = f"使うときは、{ai_where()} で「{START_PHRASE}」と言ってください。"
+            say = f"使うときは、{ai_where()} で「{START_PHRASE}」と送ってください。"
             if not running:
-                notify.send(f"{names} につなぎました", say)
+                notify.send(f"{names} に接続しました", say)
                 return
-            r = rumps.alert(f"{names} につなぎました",
-                            f"{'と'.join(running)} を開き直すと、UGC Analyzer が使えるようになります。今すぐ開き直しますか？\n"
-                            "（話している途中の会話は保存されています）\n\n" + say,
-                            ok="開き直す", cancel="あとで自分で")
+            r = rumps.alert(f"{names} に接続しました",
+                            f"{'と'.join(running)} を再起動すると、UGC Analyzer を使えるようになります。今すぐ再起動しますか？"
+                            "（会話はそのまま残ります）\n\n" + say,
+                            ok="再起動", cancel="あとで")
             if r == 1:
                 for n in running:
                     threading.Thread(target=self._restart_claude if n == "Claude" else self._restart_chatgpt,
@@ -1063,32 +1063,32 @@ class CollectorApp(rumps.App):
         finally:
             self._autolinking = False
 
-    # --- Claude につなぐ（段2） ---
+    # --- Claude に接続（段2） ---
     def connect_claude(self, _):
         if config.FROZEN and (system.is_translocated() or not system.in_applications()):
-            rumps.alert("先にアプリを「アプリケーション」フォルダに移してください",
-                        "ダウンロードした場所のままだと、Claude からこのアプリを呼べません。"
-                        f"移したら、アプリケーションフォルダの「{config.APP_NAME}」を開き直してください。")
+            rumps.alert(f"先に {config.APP_NAME} を「アプリケーション」フォルダに移動してください",
+                        f"ダウンロードした場所のままでは、Claude から {config.APP_NAME} を使えません。"
+                        f"移動したら、「アプリケーション」フォルダの「{config.APP_NAME}」をもう一度開いてください。")
             return
         if not claude_link.claude_installed():
             rumps.alert("Claude のアプリが見つかりません",
-                        "Claude デスクトップアプリ（https://claude.ai/download）を入れて、ログインしてから、もう一度押してください。")
+                        "Claude のデスクトップアプリ（https://claude.ai/download）をインストールしてログインしてから、もう一度選んでください。")
             return
         try:
             backup = claude_link.connect()
         except claude_link.LinkError as e:
-            rumps.alert("Claude につなげませんでした", str(e))
+            rumps.alert("Claude に接続できませんでした", str(e))
             return
         self.ctl.log.info("Claude の設定に道具を足しました（控え: %s）", backup or "元の設定ファイル無し")
-        r = rumps.alert("Claude につなぎました",
-                        "Claude を開き直すと使えるようになります。今すぐ開き直しますか？\n"
-                        "（話している途中の会話は保存されています）",
-                        ok="開き直す", cancel="あとで自分で")
+        r = rumps.alert("Claude に接続しました",
+                        "Claude を再起動すると使えるようになります。今すぐ再起動しますか？"
+                        "（会話はそのまま残ります）",
+                        ok="再起動", cancel="あとで")
         if r == 1:
             threading.Thread(target=self._restart_claude, daemon=True).start()
 
     def _restart_claude(self):
-        self._restart_ai("Claude", claude_link.restart_claude, "「このまま終了」", f"Claude で「{START_PHRASE}」と言ってみてください")
+        self._restart_ai("Claude", claude_link.restart_claude, "「このまま終了」", f"Claude で「{START_PHRASE}」と送ってみてください")
 
     def _restart_ai(self, name: str, restart, button: str, after: str | None):
         """AI のアプリを開き直す（裏のスレッドで）。作業中で終了の確認が出たら案内し、答えてもらうまで最長10分待つ（system.relaunch_app）"""
@@ -1099,45 +1099,46 @@ class CollectorApp(rumps.App):
         try:
             ok = restart(on_asking=lambda: notify.send(
                 f"{name} が終了の確認をしています",
-                f"{name} の画面に出ている確認で、{button}を押してください（会話は消えません）。終了したら、UGC Analyzer が {name} を自動で起動します"))
+                f"{name} の画面に出ている確認で、{button}を押してください（会話はそのまま残ります）。終了したら、UGC Analyzer が {name} を自動で起動します"))
         finally:
             with self._restart_lock:
                 self._restarting.discard(name)
-        if ok and after:
-            notify.send(f"{name} を開き直しました", after)
+        if ok:
+            if after:   # アップデートのあとは出さない（アップデートの通知を1つだけにする）
+                notify.send(f"{name} を再起動しました", after)
         else:   # 通知は見落としやすいので、窓で出す（窓は画面のスレッドで）
-            AppHelper.callAfter(rumps.alert, f"{name} を閉じられませんでした",
-                                f"{name} を自分で終了（{name} を前に出して ⌘Q）してから、もう一度開いてください。"
-                                f"開き直すと、UGC Analyzer が使えるようになります。")
+            AppHelper.callAfter(rumps.alert, f"{name} を終了できませんでした",
+                                f"{name} を前面に出して ⌘Q で終了し、もう一度開いてください。"
+                                f"再起動すると、{config.APP_NAME} を使えるようになります。")
 
-    # --- ChatGPT につなぐ（2026-10-04。ChatGPT の Mac アプリの Work の画面で使う） ---
+    # --- ChatGPT に接続（2026-10-04。ChatGPT の Mac アプリの Work の画面で使う） ---
     def connect_chatgpt(self, _):
         if config.FROZEN and (system.is_translocated() or not system.in_applications()):
-            rumps.alert("先にアプリを「アプリケーション」フォルダに移してください",
-                        "ダウンロードした場所のままだと、ChatGPT からこのアプリを呼べません。"
-                        f"移したら、アプリケーションフォルダの「{config.APP_NAME}」を開き直してください。")
+            rumps.alert(f"先に {config.APP_NAME} を「アプリケーション」フォルダに移動してください",
+                        f"ダウンロードした場所のままでは、ChatGPT から {config.APP_NAME} を使えません。"
+                        f"移動したら、「アプリケーション」フォルダの「{config.APP_NAME}」をもう一度開いてください。")
             return
         if not codex_link.chatgpt_installed():
             rumps.alert("ChatGPT のアプリが見つかりません",
-                        "ChatGPT の Mac アプリ（https://openai.com/chatgpt/download/）を入れて、ログインしてから、もう一度押してください。")
+                        "ChatGPT の Mac アプリ（https://openai.com/chatgpt/download/）をインストールしてログインしてから、もう一度選んでください。")
             return
         try:
             backup = codex_link.connect(enable=True)   # 押したのは利用者。ChatGPT の設定で切ってあっても入れ直す
         except codex_link.LinkError as e:
-            rumps.alert("ChatGPT につなげませんでした", str(e))
+            rumps.alert("ChatGPT に接続できませんでした", str(e))
             return
         self.ctl.log.info("ChatGPT（Codex）の設定に道具を足し、スキルを置きました（控え: %s）", backup or "元の設定ファイル無し")
-        r = rumps.alert("ChatGPT につなぎました",
-                        "ChatGPT を開き直すと使えるようになります。今すぐ開き直しますか？\n"
-                        "（話している途中の会話は保存されています）\n\n"
-                        f"使うときは、ChatGPT の「Work」で「{START_PHRASE}」と言ってください。",
-                        ok="開き直す", cancel="あとで自分で")
+        r = rumps.alert("ChatGPT に接続しました",
+                        "ChatGPT を再起動すると使えるようになります。今すぐ再起動しますか？"
+                        "（会話はそのまま残ります）\n\n"
+                        f"使うときは、ChatGPT の「Work」で「{START_PHRASE}」と送ってください。",
+                        ok="再起動", cancel="あとで")
         if r == 1:
             threading.Thread(target=self._restart_chatgpt, daemon=True).start()
 
     def _restart_chatgpt(self):
         self._restart_ai("ChatGPT", codex_link.restart_chatgpt, "終了するほう",
-                         f"ChatGPT の Work で「{START_PHRASE}」と言ってみてください")
+                         f"ChatGPT の Work で「{START_PHRASE}」と送ってみてください")
 
     # --- 指示書（段3） ---
     def _open_prompt_cb(self, name):
@@ -1156,13 +1157,13 @@ class CollectorApp(rumps.App):
         subprocess.run(["open", str(config.PROMPTS_DIR)])
 
     def reset_prompts(self, _):
-        r = rumps.alert("すべて初期の指示書に戻しますか？", "編集した指示書は全部、初期の中身に戻ります。",
-                        ok="戻す", cancel="やめる")
+        r = rumps.alert("すべての指示書を初期設定に戻しますか？", "編集した指示書は、すべて初期設定の内容に戻ります。",
+                        ok="初期設定に戻す", cancel="キャンセル")
         if r != 1:
             return
         import prompt_store
         prompt_store.reset()
-        notify.send("指示書を初期に戻しました", "次の仕事から初期の指示書を使います")
+        notify.send("指示書を初期設定に戻しました", "次の作業から初期設定の指示書を使います。")
 
     def check_kb(self, _):
         self.ctl.check_knowledge(quiet=False)
@@ -1173,9 +1174,9 @@ class CollectorApp(rumps.App):
             message=("曲名とアーティスト名を「曲名 / アーティスト名」の形で入れてください。\n"
                      "TikTok の楽曲ページの URL（https://www.tiktok.com/music/…）でもかまいません。"
                      + ("\n\nちょいとり: 動画20本の一覧と、2本のコメント（各30件）だけ取ります。約5分です。" if trial else
-                        "\n\n本番の規模: 終わるまで Mac を開いたまま、電源につないでおいてください。")),
+                        "\n\n本番の規模: 終わるまで Mac を開いたまま、電源に接続しておいてください。")),
             title="ちょいとり（試し・約5分）" if trial else "曲を取得する",
-            default_text="", ok="取得を始める", cancel="やめる", dimensions=(360, 24))
+            default_text="", ok="取得を開始", cancel="キャンセル", dimensions=(360, 24))
         r = w.run()
         text = (r.text or "").strip()
         if r.clicked != 1 or not text:
@@ -1191,7 +1192,7 @@ class CollectorApp(rumps.App):
             song, artist = parts[0], (parts[1] if len(parts) > 1 else "")
         aid = self.ctl.create(song, artist, url, trial)
         notify.send("取得を受け付けました",
-                    f"「{song or url}」（{aid}）。Mac を開いたまま、電源につないでおいてください")
+                    f"「{song or url}」（{aid}）。Mac を開いたまま、電源に接続しておいてください")
 
     def resume_failed(self, _):
         ids = jobs.failed_ids()
@@ -1204,7 +1205,7 @@ class CollectorApp(rumps.App):
                 self.ctl.known[aid] = "queued"
                 self.ctl.pending_retry.pop(aid, None)
             self.ctl.retry_after = 0
-        notify.send("続きから再開します", f"{len(ids)}件の取得を、済んだところの続きから取り直します")
+        notify.send("取得を再開します", f"{len(ids)}件の取得を、続きから再開します。")
 
     def add_full(self, _):
         self._ask_song(trial=False)
@@ -1220,7 +1221,7 @@ class CollectorApp(rumps.App):
     def show_chrome(self, _):
         def go():
             if not self.ctl.chrome.has_tab():   # 窓だけ閉じられている（タブが0）ときも、出せる画面は無い
-                notify.send("取得用の Chrome は閉じています", "コメントを取る段と、ログインのときだけ開きます")
+                notify.send("取得用の Chrome は閉じています", "コメントの取得中と、ログインのときだけ開きます。")
                 return
             self.ctl.chrome.show()
         threading.Thread(target=go, daemon=True).start()
@@ -1262,8 +1263,8 @@ class CollectorApp(rumps.App):
     def quit_app(self, _):
         running = self.ctl.worker.running()
         if running:
-            r = rumps.alert("取得の途中です", "終了すると取得は止まります。次に開いたとき続きから取ります。終了しますか？",
-                            ok="終了する", cancel="やめる")
+            r = rumps.alert("取得中です", "終了すると取得が止まります。次に開いたときに続きから再開します。終了しますか？",
+                            ok="終了", cancel="キャンセル")
             if r != 1:
                 return
         self.ctl.shutdown()
@@ -1374,7 +1375,7 @@ def version_notice(st: dict, log, updated: dict | None = None) -> None:
     msg = (f"{who} を再起動すると、新しいバージョンが使えるようになります。それまでは、{who} の中では前のバージョンのまま動きます。"
            "会話はそのまま残ります。")
     startup_alerts.append({"title": f"{config.APP_NAME} を {VERSION} にアップデートしました",
-                           "message": msg if running else msg + f"\n\n{who} を前に出して ⌘Q で終了し、もう一度開いてください。",
+                           "message": msg if running else msg + f"\n\n{who} を前面に出して ⌘Q で終了し、もう一度開いてください。",
                            "ok": f"{who} を再起動" if running else "OK", "cancel": "あとで" if running else None,
                            "restart": running})
 
@@ -1392,14 +1393,14 @@ def duplicate_notice(log) -> None:
     newest, olds = apps[0], apps[1:]
     log.warning("UGC Analyzer が%s個あります: %s", len(apps),
                 "、".join(f"{a['path']}（{a['version'] or '版不明'}{'・動いているもの' if a['running'] else ''}）" for a in apps))
-    lines = [f"・{Path(a['path']).stem}（{a['version'] or '版が読めません'}{'・いま動いているもの' if a['running'] else ''}）"
-             f"{' ← 新しい版' if a is newest else ''}" for a in apps]
+    lines = [f"・{Path(a['path']).stem}（{a['version'] or 'バージョン不明'}{'・使用中' if a['running'] else ''}）"
+             f"{' ← 新しいバージョン' if a is newest else ''}" for a in apps]
     old_names = "」「".join(Path(a["path"]).stem for a in olds)
-    msg = ("アプリケーションフォルダに UGC Analyzer が2つ以上あります。\n" + "\n".join(lines) + "\n\n"
-           f"新しい版を1つ残して、ほか（「{old_names}」）をゴミ箱に入れてください。残した方は、名前がそのままでも使えます。\n"
-           "2つあると、あとから開いた方が Claude・ChatGPT とのつなぎを自分に書き直すので、古い版に戻ってしまうことがあります。")
+    msg = ("「アプリケーション」フォルダに UGC Analyzer が2つ以上あります。\n" + "\n".join(lines) + "\n\n"
+           f"新しいバージョンを1つ残し、ほか（「{old_names}」）をゴミ箱に入れてください。残した方は、名前がそのままでも使えます。\n"
+           "2つあると、あとから開いた方が Claude・ChatGPT との接続を書き換えるため、古いバージョンに戻ってしまうことがあります。")
     if not newest["running"]:
-        msg += (f"\n\nいま動いているのは古い方です。メニューバーの UGC Analyzer の「終了」で終えてから古い方をゴミ箱に入れ、"
+        msg += (f"\n\nいま動いているのは古い方です。メニューバーの UGC Analyzer の「終了」で終了してから古い方をゴミ箱に入れ、"
                 f"「{Path(newest['path']).stem}」を開いてください。")
     startup_alerts.append({"title": "UGC Analyzer が2つ入っています", "message": msg, "ok": "OK", "cancel": None,
                            "restart": []})
@@ -1417,8 +1418,8 @@ def run():
     st = config.load_state()
     if config.FROZEN and not TEST_NO_CHROME:
         if system.is_translocated() or not system.in_applications():
-            notify.send("アプリを「アプリケーション」に移してください",
-                        "ダウンロードした場所のままだと、Mac を起動したときに自動で立ち上がらず、Claude や ChatGPT からも呼べません")
+            notify.send(f"{config.APP_NAME} を「アプリケーション」フォルダに移動してください",
+                        "ダウンロードした場所のままでは、Mac の起動時に自動で開かず、Claude や ChatGPT からも使えません。")
         else:
             if not st.get("first_run_done"):
                 # 初回は「ログイン時に起動」を入れておく（メニューで外せる）。初回の印はここで立てる

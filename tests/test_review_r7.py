@@ -524,7 +524,7 @@ class TestStaleLoginFlag(unittest.TestCase):
             ctl = app.Controller(Path(self.tmp.name), logging.getLogger("r7-test"))
             for _ in range(3):
                 ctl._tick()   # noqa: SLF001
-        ready = [a for a in sent if a and a[0] == "準備OK"]
+        ready = [a for a in sent if a and a[0] == "準備ができました"]
         self.assertLessEqual(len(ready), 1, f"「準備OK」が {len(ready)} 回出た（見張りのたびに繰り返す）")
 
 

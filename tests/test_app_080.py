@@ -90,8 +90,8 @@ class TestVersionCheck(HomeCase):
         shutil.rmtree(self.app)
         _fake_app(self.tmp / "Applications", "UGC Analyzer", "0.8.1")
         t = h.version_check()
-        self.assertIn("UGC Analyzer が新しくなりました（0.8.0→0.8.1）", t)
-        self.assertIn("Claudeを一度終了（⌘Q）して開き直してください。会話と分析は消えません。", t)
+        self.assertIn("UGC Analyzer がアップデートされました（0.8.0→0.8.1）", t)
+        self.assertIn("Claudeを一度終了（⌘Q）して、もう一度開いてください。会話と分析は消えません。", t)
         self.assertNotIn("ChatGPT", t)
         self.assertEqual(h.version_check(), t)
 
@@ -404,7 +404,7 @@ class TestStartupNotices(HomeCase):
             self.app.duplicate_notice(logging.getLogger("t"))
         a = self.app.startup_alerts[0]
         self.assertEqual(a["title"], "UGC Analyzer が2つ入っています")
-        self.assertIn("・UGC Analyzer 2（0.8.0） ← 新しい版", a["message"])
+        self.assertIn("・UGC Analyzer 2（0.8.0） ← 新しいバージョン", a["message"])
         self.assertIn("ほか（「UGC Analyzer」）をゴミ箱に入れてください", a["message"])
         self.assertTrue((apps / "UGC Analyzer.app").exists())   # 自動では消さない
 

@@ -687,7 +687,7 @@ class TestAppWatch(AppBase):
         self._known()
         for _ in range(4):
             self.ctl._tick()
-        self.assertLessEqual(self.notes.count("準備OK"), 1, f"通知: {self.notes}")
+        self.assertLessEqual(self.notes.count("準備ができました"), 1, f"通知: {self.notes}")
         self.assertTrue(self.starts, "係を起こさなかった（取得が続きから始まらない）")
 
     def test_bug_failed_shows_on_first_line(self):
@@ -698,7 +698,7 @@ class TestAppWatch(AppBase):
                                         "TikTok 側の表示制限）", "steps": {}})
         self._known()
         self.ctl._tick()
-        self.assertIn("止まっています", self.ctl.status_text)
+        self.assertIn("停止中", self.ctl.status_text)
 
     def test_bug_cancel_does_not_kill_other_analysis(self):
         """分析 B が止まり（failed・PID は今の係）、同じ係が次の分析 C を取っている。B を「やめて（やり直して）」と頼むと、

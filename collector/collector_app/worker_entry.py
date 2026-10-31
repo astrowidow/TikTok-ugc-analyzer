@@ -78,7 +78,7 @@ def main() -> int:
                         return
                 except Exception:
                     pass
-            raise pipeline.StepError(f"TikTok にログインされないまま{LOGIN_WAIT_HOURS}時間たったので止めました")
+            raise pipeline.StepError(f"TikTok にログインされないまま{LOGIN_WAIT_HOURS}時間たったため、停止しました")
         finally:
             flag.unlink(missing_ok=True)
 

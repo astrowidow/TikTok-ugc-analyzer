@@ -165,9 +165,9 @@ def _failed_line(d: Path, title: str, m: dict) -> str:
                 "利用者にこのことを伝え、ほかの楽曲ページを探して（start_analysis の返事の探し方のとおり）やり直してください")
     err = full[:80]
     return (f"止まりました: 「{title}」の取得が止まり、UGC Analyzer はもう自動では取り直しません（{err + '。' if err else ''}分析 ID {d.name}）。"
-            "利用者に「メニューバーの UGC Analyzer のメニューで『止まった取得を続きから再開』を押して"
-            "（アプリが開いていなければ、先にアプリケーションフォルダの UGC Analyzer を開く）、そのあとここで『続けて』と言ってください。"
-            "済んだところの続きから取ります」と伝えて止まってください")
+            "利用者に「メニューバーの UGC Analyzer のメニューで『止まった取得を再開』を選んで"
+            "（UGC Analyzer が開いていなければ、先に「アプリケーション」フォルダの UGC Analyzer を開く）、そのあとここで『続けて』と送ってください。"
+            "続きから取得します」と伝えて止まってください")
 
 
 def wait(ref: str | None, limit_h: float = LIMIT_H, poll_s: float = POLL_S, awake: bool = True) -> tuple[int, str]:

@@ -857,8 +857,10 @@ class CollectorApp(rumps.App):
             None,
             other,
         ]
-        if config.OPERATOR_FLAG.exists():   # 運営の Mac だけ（友達には出さない）
+        self.op_item = None
+        if config.OPERATOR_FLAG.exists():   # 運営の Mac だけ（友達には出さない）。⌥ を押しながら開いたときだけ見える（_watch_option）
             op = rumps.MenuItem("運営向け")
+            self.op_item = op
             op.add(rumps.MenuItem("曲を取得する（本番の規模）…", callback=self.add_full))
             op.add(rumps.MenuItem("ちょいとり（試し・約5分）…", callback=self.add_trial))
             self.ai_trial = rumps.MenuItem("AI（Claude・ChatGPT）から頼んだ取得を、ちょいとりの規模にする",
@@ -871,7 +873,26 @@ class CollectorApp(rumps.App):
         items += [None, self.update_item, rumps.MenuItem(f"{config.APP_NAME} {VERSION}"),
                   rumps.MenuItem("終了", callback=self.quit_app)]
         self.menu = items
+        self._watch_option()
         rumps.Timer(self.refresh, 2).start()
+
+    def _watch_option(self):
+        """運営向けのメニューは、⌥（option）を押しながらメニューを開いたときだけ出す（2026-10-31 ユーザー「運営向けのメニューは、
+        ふつうの利用者が絶対触らない、俺らだけ知っている場所に」）。Mac の Wi-Fi・サウンドのメニューと同じ、隠れた項目の出し方。
+        rumps はメニューに delegate を付けないので、メニュー（NSMenu）の開く直前（menuWillOpen:）に、押しているキーを見て出し分ける"""
+        if self.op_item is None:
+            return
+        from AppKit import NSEvent
+        from Foundation import NSObject
+        item = self.op_item._menuitem
+
+        class _Delegate(NSObject):
+            def menuWillOpen_(self, _menu):
+                item.setHidden_(not option_held(NSEvent.modifierFlags()))
+
+        item.setHidden_(True)
+        self._menu_delegate = _Delegate.alloc().init()   # NSMenu の delegate は弱い参照。持っておく
+        self._menu._menu.setDelegate_(self._menu_delegate)
 
     def refresh(self, _):
         self._startup_alert_tick()
@@ -1301,6 +1322,11 @@ def update_ask_text(s: dict, ai: list) -> tuple:
     else:
         body = "アップデートすると、UGC Analyzer を再起動します（30秒ほど）。分析とレポートはそのまま残ります。"
     return f"{config.APP_NAME} {s['version']} が利用できます", note + body
+
+
+def option_held(flags) -> bool:
+    """⌥（option）を押しているか（NSEvent.modifierFlags() の値から。NSEventModifierFlagOption = 1 << 19）"""
+    return bool(int(flags) & (1 << 19))
 
 
 def _sentence(text) -> str:

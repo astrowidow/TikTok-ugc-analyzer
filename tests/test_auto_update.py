@@ -564,6 +564,13 @@ class TestController(AppCase):
         for text in (t, m, self.app.UPDATE_CHECK, self.app.UPDATE_WAIT_TEXT, self.app.UPDATE_FAIL_TEXT):
             self.assertNotIn("新しい版", text)   # 2026-10-31 ユーザー: 「新しい版を確かめる」のような言い方はしない
 
+    def test_option_held(self):
+        # 運営向けのメニューは ⌥ を押しながら開いたときだけ（NSEventModifierFlagOption = 1 << 19）
+        self.assertTrue(self.app.option_held(1 << 19))
+        self.assertTrue(self.app.option_held((1 << 19) | (1 << 17)))   # ⇧ と一緒でも
+        self.assertFalse(self.app.option_held(0))
+        self.assertFalse(self.app.option_held(1 << 20))   # ⌘ だけ
+
     def test_answer_now(self):
         with mock.patch.object(self.ctl, "update_wait_reason", return_value="取得"):
             self.assertEqual(self.ctl.update_answer(True), ("wait", "取得"))   # 窓を出している間に取得が始まった

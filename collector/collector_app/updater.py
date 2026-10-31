@@ -1,4 +1,4 @@
-"""新しい版を自分で見つけて入れ替える（0.9.0。docs/AUTO_UPDATE.md）。
+"""アップデート: 新しいバージョンを自分で見つけて入れ替える（0.9.0。docs/AUTO_UPDATE.md）。
 
 2026-10-31 ユーザー「バージョンアップが不便。ほかのアプリみたいに通知が出て、自然にアップデートがかかるように」。
 友達に届くのは、GitHub のリリースの「最新」（latest）だけ。運営が「友達に出して」と言ったときに collector/release.sh --friends が
@@ -6,7 +6,7 @@
 試し版も受け取り、友達と同じ入れ替えの道を先に通る。
 
 流れ（app.Controller が裏のスレッドで回す。窓は画面のスレッド）:
-  1. 見に行く（latest_release）: アプリを開いた1分後・Mac が起きた1分後・3時間おき・メニューの「新しい版を確かめる…」
+  1. 見に行く（latest_release）: アプリを開いた1分後・Mac が起きた1分後・3時間おき・メニューの「アップデートを確認…」
   2. 落として確かめる（stage）: .dmg を落とし、大きさと sha256（GitHub の digest）を確かめ、開いて中の .app の版と識別子を見て
      updates/staged/<版>/ に写す。写した .app を --selftest で起こして、動くことを確かめる。だめなら入れ替えない
   3. 入れ替える（decide・apply）: 取得中・AI の作業中は待つ。Claude・ChatGPT が閉じていれば黙って、開いていれば窓で聞いてから
@@ -33,7 +33,7 @@ from . import VERSION, config, system
 
 REPO = "astrowidow/TikTok-ugc-analyzer"
 ASSET = "UGC-Analyzer.dmg"   # release.sh が付けるファイルの名前（版なし。友達のリンクと同じ）
-GUIDE_URL = "https://claude.ai/artifact/Tp343YwoMtSrFWKuJcCLmC#update"   # 始め方のページの「新しい版にするとき」
+GUIDE_URL = "https://claude.ai/artifact/Tp343YwoMtSrFWKuJcCLmC#update"   # 始め方のページの「アップデート」
 CHECK_EVERY = 3 * 3600        # 新しい版を見に行く間隔（秒）
 FIRST_CHECK = 60              # 開いた・起きたあと、見に行くまで（秒。ネットがつながるのを待つ）
 AI_QUIET = 15 * 60            # AI が道具を最後に使ってから、作業が終わったとみなすまで（秒）
@@ -321,7 +321,8 @@ def ai_active(now: float | None = None) -> bool:
 
 def decide(staged: dict | None, busy: str | None, ai_open: list, state: dict, manual: bool = False) -> str | None:
     """用意した版をどうするか: None（何もしない）・"wait"（作業が終わるまで待つ）・"silent"（黙って入れ替える）・"ask"（窓で聞く）。
-    state は state.json の update。manual はメニューから頼まれたとき（入れ替えられなかった版も試す・今日聞いたかを見ない）"""
+    state は state.json の update（asked_on: 窓で聞いた日、declined_on: AI を開いていないときに「あとで」を押した日）。
+    manual はメニューから頼まれたとき（入れ替えられなかった版も試す・今日聞いたかを見ない）"""
     if not staged:
         return None
     if busy:
@@ -331,7 +332,7 @@ def decide(staged: dict | None, busy: str | None, ai_open: list, state: dict, ma
     if (state.get("failed") or {}).get("version") == staged.get("version"):
         return None   # 自分からは入れ直さない（メニューからは試せる）
     if not ai_open:
-        return "silent"
+        return None if state.get("declined_on") == today() else "silent"   # 窓の「あとで」で断った日は、黙っても入れない
     if state.get("asked_on") == today():
         return None
     return "ask"

@@ -136,7 +136,7 @@ class Controller:
         self.update_found = None       # 落として確かめている版
         self.update_staged = updater.staged_from_state()   # 入れる準備ができた版（{"version", "app", "note"}）
         self.update_busy = None        # 入れるのを待っている理由（"取得"・"AI の作業"）
-        self.update_manual = False     # メニューの「新しい版を確かめる…」から頼まれた（結果を窓で知らせる）
+        self.update_manual = False     # メニューの「アップデートを確認…」から頼まれた（結果を窓で知らせる）
         self.update_asking = False     # 窓で聞いている最中
         self.update_requests = []      # 画面のスレッドに出してほしい窓（CollectorApp._update_ui_tick が出す）
         self.update_go = None          # 黙って入れ替えてほしい（{"mode", "restart"}。画面のスレッドがアプリを終える）
@@ -256,7 +256,7 @@ class Controller:
     # --- 新しい版（0.9.0。updater.py・docs/AUTO_UPDATE.md） ---
     def check_update(self, manual: bool) -> bool:
         """新しい版を見に行く（裏のスレッドで。見つけたら落として確かめる）。もう見に行っている途中なら False。
-        manual はメニューの「新しい版を確かめる…」（無かった・確かめられなかったも窓で知らせる。用意できたら窓で聞く）"""
+        manual はメニューの「アップデートを確認…」（無かった・確かめられなかったも窓で知らせる。用意できたら窓で聞く）"""
         if not config.FROZEN and not os.environ.get("UGC_UPDATE_API"):
             return False   # ソースから動かしているときは見ない（試験は UGC_UPDATE_API で手元の偽物に向ける）
         if manual:
@@ -349,12 +349,14 @@ class Controller:
             self.update_asking = True
             self.update_requests.append({"kind": "ask", "version": s["version"], "note": s.get("note"), "ai": ai})
 
-    def update_answer(self, now: bool) -> tuple:
-        """窓の答え（画面のスレッドから）。("go", {"mode", "restart"})・("wait", 理由)・("later", None)"""
+    def update_answer(self, now: bool, ai: list | None = None) -> tuple:
+        """窓の答え（画面のスレッドから）。("go", {"mode", "restart"})・("wait", 理由)・("later", None)。ai は窓を出したときに開いていた AI"""
         self.update_asking = False
         if not now:
-            updater.save(asked_on=updater.today())   # 「あとで」: 今日はもう聞かない（Claude を閉じたら黙って入れ替える）
-            self.log.info("新しい版は「あとで」になりました")
+            # 「あとで」: 今日はもう聞かない。AI を開いていたなら、閉じたときに黙ってアップデートする（窓でそう伝えた）。
+            # AI を開いていないとき（メニューから押した）に断ったなら、今日はもう自分からはアップデートしない
+            updater.save(asked_on=updater.today(), **({} if ai else {"declined_on": updater.today()}))
+            self.log.info("アップデートは「あとで」になりました（%s）", "AI を閉じたときに" if ai else "今日はしない")
             return "later", None
         why = self.update_wait_reason()
         if why:
@@ -864,8 +866,8 @@ class CollectorApp(rumps.App):
             self.ai_trial.state = int(bool(config.load_state().get("ai_trial")))
             op.add(self.ai_trial)
             items.append(op)
-        # 新しい版（0.9.0）: いつも出す。新しい版を用意できたら「新しい版 X にする…」、作業中は灰色で「…が終わったら入れます」
-        self.update_item = rumps.MenuItem("新しい版を確かめる…", callback=self.update_clicked)
+        # アップデート（0.9.0）: いつも出す。用意できたら「バージョン X にアップデート…」、作業中は灰色で「…が終わったらアップデートします」
+        self.update_item = rumps.MenuItem(UPDATE_CHECK, callback=self.update_clicked)
         items += [None, self.update_item, rumps.MenuItem(f"{config.APP_NAME} {VERSION}"),
                   rumps.MenuItem("終了", callback=self.quit_app)]
         self.menu = items
@@ -875,7 +877,7 @@ class CollectorApp(rumps.App):
         self._startup_alert_tick()
         self._update_ui_tick()
         self._autolink_tick()
-        while startup_restarts:   # 窓で「今すぐ新しくする」を押して入れ替えたあと: 聞かずに開き直す
+        while startup_restarts:   # 窓で「今すぐアップデート」を押して入れ替えたあと: 聞かずに開き直す
             name = startup_restarts.pop(0)
             threading.Thread(target=self._restart_after_update, args=(name,), daemon=True).start()
         self._update_menu()
@@ -922,19 +924,19 @@ class CollectorApp(rumps.App):
 
     # --- 新しい版（0.9.0。updater.py・docs/AUTO_UPDATE.md） ---
     def _update_menu(self):
-        """メニューの「新しい版を確かめる…」の行を、いまの様子に合わせる（押せないときは灰色）"""
+        """メニューの「アップデートを確認…」の行を、いまの様子に合わせる（押せないときは灰色）"""
         c = self.ctl
         s = c.update_staged
         if s and c.update_busy:
-            title, on = f"新しい版 {s['version']} は、{c.update_busy}が終わったら入れます", False
+            title, on = update_wait_title(c.update_busy), False
         elif s:
-            title, on = f"新しい版 {s['version']} にする…", True
+            title, on = f"バージョン {s['version']} にアップデート…", True
         elif c.update_phase == "downloading" and c.update_found:
-            title, on = f"新しい版 {c.update_found} を用意しています…", False
+            title, on = "アップデートをダウンロード中…", False
         elif c.update_phase == "checking" and c.update_manual:
-            title, on = "新しい版を確かめています…", False
+            title, on = "アップデートを確認中…", False
         else:
-            title, on = "新しい版を確かめる…", True
+            title, on = UPDATE_CHECK, True
         if self.update_item.title != title:
             self.update_item.title = title
         want = self.update_clicked if on else None
@@ -955,7 +957,7 @@ class CollectorApp(rumps.App):
             return   # 窓をもう出している・出すところ・入れ替えるところ
         why = c.update_wait_reason()
         if why:
-            rumps.alert(f"新しい版 {s['version']} は、{why}が終わったら入れます", UPDATE_WAIT_TEXT)
+            rumps.alert(update_wait_title(why), UPDATE_WAIT_TEXT)
             return
         c.update_asking = True
         self._alerting = True
@@ -981,33 +983,27 @@ class CollectorApp(rumps.App):
             if req["kind"] == "ask":
                 self._ask_update(c.update_staged or req, req.get("ai") or [])
             elif req["kind"] == "latest":
-                rumps.alert(f"いまの版（{VERSION}）が最新です")
+                rumps.alert("最新の状態です", f"{config.APP_NAME} {VERSION} は最新のバージョンです。")
             elif req["kind"] == "error":
-                rumps.alert("新しい版を確かめられませんでした", "ネットにつながっているか確かめて、少しあとでもう一度押してください。")
+                rumps.alert("アップデートを確認できませんでした",
+                            "インターネットに接続されているか確かめて、しばらくしてからもう一度お試しください。")
             elif req["kind"] == "wait":
-                rumps.alert(f"新しい版 {req['version']} は、{req['why']}が終わったら入れます", UPDATE_WAIT_TEXT)
+                rumps.alert(update_wait_title(req["why"]), UPDATE_WAIT_TEXT)
         finally:
             self._alerting = False
 
     def _ask_update(self, s: dict, ai: list):
-        """「新しい版があります」の窓（Claude・ChatGPT を開いているとき・メニューから押したとき）。答えまで画面のスレッドで"""
+        """「UGC Analyzer X が利用できます」の窓（Claude・ChatGPT を開いているとき・メニューから押したとき）。答えまで画面のスレッドで"""
         c = self.ctl
-        who = "と".join(ai)
-        note = f"今回の版: {_sentence(s['note'])}\n\n" if s.get("note") else ""
-        if ai:
-            msg = (note + f"今すぐ新しくすると、{who} を一度閉じて開き直します（1分ほど）。話していた会話と、分析・レポートは消えません。\n"
-                   f"「あとで」なら、次に {who} を終了したときに新しくします。")
-        else:
-            msg = (note + "今すぐ新しくすると、UGC Analyzer が一度閉じて、30秒ほどで開き直します。分析とレポートは消えません。\n"
-                   "「あとで」なら、あとで自動で新しくします。")
+        title, msg = update_ask_text(s, ai)
         try:
-            r = rumps.alert(f"{config.APP_NAME} の新しい版（{s['version']}）があります", msg, ok="今すぐ新しくする", cancel="あとで")
+            r = rumps.alert(title, msg, ok="今すぐアップデート", cancel="あとで")
         except Exception:
             c.update_asking = False
             raise
-        kind, val = c.update_answer(r == 1)
+        kind, val = c.update_answer(r == 1, ai)
         if kind == "wait":
-            rumps.alert(f"{val}が始まったので、終わってから入れます", UPDATE_WAIT_TEXT)
+            rumps.alert(f"{val}が始まったため、終わってからアップデートします", UPDATE_WAIT_TEXT)
         elif kind == "go":
             self._do_update(val)
 
@@ -1023,19 +1019,18 @@ class CollectorApp(rumps.App):
             c.log.warning("入れ替えの係を起こせませんでした: %s: %s", type(e).__name__, e)
             if s:
                 updater.save(failed={"version": s["version"], "at": updater.now_iso(), "why": str(e)[:300]})
-            r = rumps.alert("自動で新しくできませんでした", UPDATE_FAIL_TEXT, ok="手順を開く", cancel="閉じる")
+            r = rumps.alert("アップデートできませんでした", UPDATE_FAIL_TEXT, ok="手順を開く", cancel="閉じる")
             if r == 1:
                 subprocess.run(["open", updater.GUIDE_URL])
             return
-        c.status_text = "新しい版にしています…"
+        c.status_text = "アップデートしています…"
         c.shutdown()
         system.release_single_instance()
         rumps.quit_application()
 
     def _restart_after_update(self, name: str):
         restart = claude_link.restart_claude if name == "Claude" else codex_link.restart_chatgpt
-        self._restart_ai(name, restart, "「このまま終了」" if name == "Claude" else "終了するほう",
-                         "話していた会話の続きから、新しい版の UGC Analyzer が使えます")
+        self._restart_ai(name, restart, "「このまま終了」" if name == "Claude" else "終了するほう", None)   # 通知はアップデートの1つだけ
 
     # --- 自動でつなぐ（2026-10-05。友達は「〇〇につなぐ」を押さなくてよい。メニューの項目は手でつなぎ直すときのため） ---
     def _autolink_tick(self):
@@ -1095,7 +1090,7 @@ class CollectorApp(rumps.App):
     def _restart_claude(self):
         self._restart_ai("Claude", claude_link.restart_claude, "「このまま終了」", f"Claude で「{START_PHRASE}」と言ってみてください")
 
-    def _restart_ai(self, name: str, restart, button: str, after: str):
+    def _restart_ai(self, name: str, restart, button: str, after: str | None):
         """AI のアプリを開き直す（裏のスレッドで）。作業中で終了の確認が出たら案内し、答えてもらうまで最長10分待つ（system.relaunch_app）"""
         with self._restart_lock:
             if name in self._restarting:   # 開き直しの最中にもう一度押された
@@ -1103,12 +1098,12 @@ class CollectorApp(rumps.App):
             self._restarting.add(name)
         try:
             ok = restart(on_asking=lambda: notify.send(
-                f"{name} が終了してよいか聞いています",
-                f"{name} の窓に出ている確認で、{button}を押してください（会話は消えません）。閉じたら、UGC Analyzer が自動で開き直します"))
+                f"{name} が終了の確認をしています",
+                f"{name} の画面に出ている確認で、{button}を押してください（会話は消えません）。終了したら、UGC Analyzer が {name} を自動で起動します"))
         finally:
             with self._restart_lock:
                 self._restarting.discard(name)
-        if ok:
+        if ok and after:
             notify.send(f"{name} を開き直しました", after)
         else:   # 通知は見落としやすいので、窓で出す（窓は画面のスレッドで）
             AppHelper.callAfter(rumps.alert, f"{name} を閉じられませんでした",
@@ -1279,16 +1274,36 @@ class CollectorApp(rumps.App):
 # 起動のときに出す窓（run loop が回ってから、画面のタイマー CollectorApp.refresh が1つずつ出す。起動を止めないため）。
 # {"title", "message", "ok", "cancel", "restart": [開き直す AI の名前], "open": 「OK」で開く URL（無くてよい）}
 startup_alerts: list = []
-# 窓で「今すぐ新しくする」を押して入れ替えたあと、聞かずに開き直す AI の名前（update_notice・version_notice が積む）
+# 窓で「今すぐアップデート」を押して入れ替えたあと、聞かずに開き直す AI の名前（update_notice・version_notice が積む）
 startup_restarts: list = []
 
-UPDATE_WAIT_TEXT = "終わったら、自動で入れます（Claude（ChatGPT）を開いているときは、窓で聞きます）。"
-UPDATE_FAIL_TEXT = (f"いまの版（{VERSION}）は、そのまま使えます。新しい版にするには、始め方のページの「新しい版にするとき」のとおりに、"
-                    "手で入れ替えてください（10分ほど）。")
+# アップデートの文言（2026-10-31 ユーザー「新しい版を確かめる、みたいな言い方は普通しない。UI 文言を洗練させて」。
+# ほかの Mac のアプリと同じ言い方にそろえる: 動作は「アップデート」、番号は「バージョン」、AI のアプリを閉じて開くのは「再起動」）
+UPDATE_CHECK = "アップデートを確認…"
+UPDATE_WAIT_TEXT = "終わりしだい自動でアップデートします。Claude（ChatGPT）を開いている場合は、その前に確認します。"
+UPDATE_FAIL_TEXT = (f"いまのバージョン（{VERSION}）はそのまま使えます。始め方のページの「アップデート」の手順で、"
+                    "手動でアップデートしてください（10分ほど）。")
+
+
+def update_wait_title(why) -> str:
+    """作業中でアップデートを待っているときの文（メニューの灰色の行・窓の題）。why は「取得」か「AI の作業」"""
+    return f"{why}が終わったらアップデートします"
+
+
+def update_ask_text(s: dict, ai: list) -> tuple:
+    """「UGC Analyzer X が利用できます」の窓の題と本文。1行目にこのアップデートの内容（release.sh --note。無ければ出さない）"""
+    note = f"{_sentence(s['note'])}\n\n" if s.get("note") else ""
+    if ai:
+        who = "と".join(ai)
+        body = (f"アップデートすると、{who} を再起動します（1分ほど）。会話や分析・レポートはそのまま残ります。\n"
+                f"「あとで」を選んだ場合は、次に {who} を終了したときにアップデートします。")
+    else:
+        body = "アップデートすると、UGC Analyzer を再起動します（30秒ほど）。分析とレポートはそのまま残ります。"
+    return f"{config.APP_NAME} {s['version']} が利用できます", note + body
 
 
 def _sentence(text) -> str:
-    """文の終わりの「。」をそろえる（「今回の版: …」を文の中に入れるとき）"""
+    """文の終わりの「。」をそろえる（アップデートの内容の1行を文の中に入れるとき）"""
     t = str(text or "").strip()
     return t if not t or t.endswith(("。", "！", "？", ")", "）")) else t + "。"
 
@@ -1308,13 +1323,13 @@ def update_notice(st: dict, log) -> dict | None:
             updater.save(staged=None, failed=None, asked_on=None)
         except Exception as e:
             log.info("用意した版を片付けられませんでした: %s", e)
-        notify.send(f"{config.APP_NAME} を {VERSION} にしました",
-                    (f"今回の版: {_sentence(p['note'])}" if p.get("note") else "") + "分析とレポートは、そのまま残っています。")
+        notify.send(f"{config.APP_NAME} を {VERSION} にアップデートしました",
+                    (_sentence(p["note"]) if p.get("note") else "") + "分析とレポートはそのまま残っています。")
         return p
     log.warning("自動の入れ替えができず、前の版（%s）のまま開きました（%s へ）。入れ替えの記録:\n%s",
                 VERSION, p.get("to"), updater.log_tail())
     updater.save(failed={"version": p.get("to"), "at": updater.now_iso(), "why": updater.log_tail(2)[-300:]})
-    startup_alerts.append({"title": "自動で新しくできませんでした", "message": UPDATE_FAIL_TEXT, "ok": "手順を開く",
+    startup_alerts.append({"title": "アップデートできませんでした", "message": UPDATE_FAIL_TEXT, "ok": "手順を開く",
                            "cancel": "閉じる", "restart": [], "open": updater.GUIDE_URL})
     return None
 
@@ -1326,7 +1341,7 @@ def version_notice(st: dict, log, updated: dict | None = None) -> None:
     前の版の道具の処理（--mcp・--wait。install.sh と同じ見分け方、system.old_tool_processes）が動いていれば、通知は見落とされやすいので
     窓でも出し、「開き直す」で 0.6.6 の開き直し（_restart_ai・system.relaunch_app）を使う（2026-10-12。友達は 0.7.5 に入れ替えたあと、
     開き直すまで 0.6.4 の道具で話していた。docs/PLAN_0_8.md 3-4）。動いていなければ今までどおり通知だけ。
-    updated は自動の入れ替えの記録（update_notice）: 通知は update_notice が出したので重ねない。窓で「今すぐ新しくする」を
+    updated は自動の入れ替えの記録（update_notice）: 通知は update_notice が出したので重ねない。窓で「今すぐアップデート」を
     押していたら（mode="now"）、前の版の道具が動いている AI を聞かずに開き直す（0.9.0）"""
     if st.get("app_version") == VERSION:
         return
@@ -1343,8 +1358,8 @@ def version_notice(st: dict, log, updated: dict | None = None) -> None:
     log.info("版が変わりました: %s → %s（開いている AI: %s・前の版の道具の処理: %s）", st.get("app_version") or "前の版", VERSION,
              "、".join(names) or "なし", "、".join(f"{p['kind']}（PID {p['pid']}・{p['version'] or '0.7.5 まで'}）" for p in old) or "なし")
     if names and not updated:
-        notify.send(f"{config.APP_NAME} を {VERSION} にしました",
-                    f"{'と'.join(names)} を開き直してください。開き直すと、新しい版の UGC Analyzer が使えます（話している途中の会話は保存されています）")
+        notify.send(f"{config.APP_NAME} を {VERSION} にアップデートしました",
+                    f"{'と'.join(names)} を再起動すると、新しいバージョンが使えるようになります（会話はそのまま残ります）。")
     # 開き直すのは、開いている AI（つないだかに関わらず。道具を起こしたのは開いている AI のどれか）
     running = [name for _, name, link, _, is_running in AI_LINKS if getattr(link, is_running)()]
     if updated and updated.get("mode") == "now":
@@ -1356,11 +1371,11 @@ def version_notice(st: dict, log, updated: dict | None = None) -> None:
     if not old:
         return
     who = "と".join(running) or "Claude（ChatGPT）"
-    msg = (f"{who} を開き直すと新しい版が使えます（話している途中の会話は消えません）。\n"
-           f"開き直すまでは、{who} の中の UGC Analyzer は前の版のまま動きます。")
-    startup_alerts.append({"title": f"{config.APP_NAME} を {VERSION} にしました",
+    msg = (f"{who} を再起動すると、新しいバージョンが使えるようになります。それまでは、{who} の中では前のバージョンのまま動きます。"
+           "会話はそのまま残ります。")
+    startup_alerts.append({"title": f"{config.APP_NAME} を {VERSION} にアップデートしました",
                            "message": msg if running else msg + f"\n\n{who} を前に出して ⌘Q で終了し、もう一度開いてください。",
-                           "ok": "開き直す" if running else "OK", "cancel": "あとで" if running else None,
+                           "ok": f"{who} を再起動" if running else "OK", "cancel": "あとで" if running else None,
                            "restart": running})
 
 

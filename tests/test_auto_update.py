@@ -189,6 +189,9 @@ class TestDecide(unittest.TestCase):
         self.assertIsNone(d(self.s, None, ["Claude"], {"asked_on": today}))   # 自分から聞くのは1日1回
         self.assertEqual(d(self.s, None, ["Claude"], {"asked_on": "2000-01-01"}), "ask")
         self.assertEqual(d(self.s, None, ["Claude"], {"asked_on": today}, manual=True), "ask")   # メニューからはいつでも
+        self.assertIsNone(d(self.s, None, [], {"declined_on": today}))   # AI を閉じているときに「あとで」: 今日は黙っても入れない
+        self.assertEqual(d(self.s, None, [], {"declined_on": "2000-01-01"}), "silent")
+        self.assertEqual(d(self.s, None, ["Claude"], {"declined_on": today}), "ask")
         failed = {"failed": {"version": "9.0.1"}}
         self.assertIsNone(d(self.s, None, [], failed))   # 入れられなかった版は、自分からは入れない
         self.assertEqual(d(self.s, None, [], failed, manual=True), "ask")
@@ -442,8 +445,8 @@ class TestNotice(AppCase):
                                  "note": "コメントを直しました"}, "app_version": "0.0.1", "first_run_done": True}
         p = self.app.update_notice(st, LOG)
         self.assertEqual(p["mode"], "now")
-        self.assertEqual(self.sent, [(f"UGC Analyzer を {self.app.VERSION} にしました",
-                                      "今回の版: コメントを直しました。分析とレポートは、そのまま残っています。")])
+        self.assertEqual(self.sent, [(f"UGC Analyzer を {self.app.VERSION} にアップデートしました",
+                                      "コメントを直しました。分析とレポートはそのまま残っています。")])
         s = self.config.load_state()
         self.assertIsNone(s["update_pending"])
         self.assertIsNone(s["update"]["staged"])
@@ -475,12 +478,12 @@ class TestNotice(AppCase):
         st = {"update_pending": {"from": "0.0.1", "to": self.app.VERSION, "mode": "silent", "restart": []},
               "app_version": "0.0.1", "first_run_done": True}
         p = self.app.update_notice(st, LOG)
-        self.assertEqual(self.sent[0][1], "分析とレポートは、そのまま残っています。")
+        self.assertEqual(self.sent[0][1], "分析とレポートはそのまま残っています。")
         with mock.patch.object(self.app, "AI_LINKS", self.links()), \
                 mock.patch.object(self.app.system, "old_tool_processes", return_value=[{"pid": 1, "kind": "mcp", "version": "0.0.1"}]):
             self.app.version_notice(st, LOG, p)
         self.assertEqual(self.app.startup_restarts, [])
-        self.assertEqual(self.app.startup_alerts[0]["ok"], "開き直す")   # 入れ替えの間に開いた Claude: 今までどおり窓で
+        self.assertEqual(self.app.startup_alerts[0]["ok"], "Claude を再起動")   # 入れ替えの間に開いた Claude: 今までどおり窓で
 
     def test_failed(self):
         self.config.LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -489,8 +492,8 @@ class TestNotice(AppCase):
         self.assertIsNone(self.app.update_notice(st, LOG))
         a = self.app.startup_alerts[0]
         self.assertEqual((a["title"], a["ok"], a["cancel"], a["open"]),
-                         ("自動で新しくできませんでした", "手順を開く", "閉じる", self.u.GUIDE_URL))
-        self.assertIn("手で入れ替えてください", a["message"])
+                         ("アップデートできませんでした", "手順を開く", "閉じる", self.u.GUIDE_URL))
+        self.assertIn("手動でアップデートしてください", a["message"])
         f = self.config.load_state()["update"]["failed"]
         self.assertEqual(f["version"], "99.0.0")
         self.assertIn("動かせない", f["why"])
@@ -532,12 +535,34 @@ class TestController(AppCase):
         self.assertEqual(self.config.load_state()["update"]["asked_on"], self.u.today())
         self.tick(ai=["Claude"])
         self.assertEqual(len(self.ctl.update_requests), 1)   # 窓に答えるまで重ねない
-        self.assertEqual(self.ctl.update_answer(False), ("later", None))
+        self.assertEqual(self.ctl.update_answer(False, ["Claude"]), ("later", None))
         self.ctl.update_requests.clear()
         self.tick(ai=["Claude"])
         self.assertEqual(self.ctl.update_requests, [])        # 今日はもう聞かない
         self.tick()                                           # Claude を閉じた
         self.assertEqual(self.ctl.update_go["mode"], "silent")
+
+    def test_later_without_ai(self):
+        self.ctl.update_manual = True   # メニューから押した（AI は閉じている）→ 窓 →「あとで」
+        self.tick()
+        self.assertEqual(self.ctl.update_requests[0]["kind"], "ask")
+        self.ctl.update_requests.clear()
+        self.assertEqual(self.ctl.update_answer(False, []), ("later", None))
+        self.assertEqual(self.config.load_state()["update"]["declined_on"], self.u.today())
+        self.tick()
+        self.assertIsNone(self.ctl.update_go)   # 断った直後に黙ってアップデートしない
+
+    def test_texts(self):
+        t, m = self.app.update_ask_text({"version": "9.0.1", "note": "コメントの取り足しを直しました"}, ["Claude"])
+        self.assertEqual(t, "UGC Analyzer 9.0.1 が利用できます")
+        self.assertTrue(m.startswith("コメントの取り足しを直しました。\n\nアップデートすると、Claude を再起動します（1分ほど）。"))
+        self.assertIn("「あとで」を選んだ場合は、次に Claude を終了したときにアップデートします。", m)
+        t, m = self.app.update_ask_text({"version": "9.0.1"}, [])
+        self.assertTrue(m.startswith("アップデートすると、UGC Analyzer を再起動します（30秒ほど）。"))
+        self.assertNotIn("あとで", m)
+        self.assertEqual(self.app.update_wait_title("取得"), "取得が終わったらアップデートします")
+        for text in (t, m, self.app.UPDATE_CHECK, self.app.UPDATE_WAIT_TEXT, self.app.UPDATE_FAIL_TEXT):
+            self.assertNotIn("新しい版", text)   # 2026-10-31 ユーザー: 「新しい版を確かめる」のような言い方はしない
 
     def test_answer_now(self):
         with mock.patch.object(self.ctl, "update_wait_reason", return_value="取得"):

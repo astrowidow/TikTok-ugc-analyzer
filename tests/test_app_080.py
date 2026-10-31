@@ -370,9 +370,10 @@ class TestStartupNotices(HomeCase):
         self.notice({"app_version": "0.0.1", "first_run_done": True}, [{"pid": 1, "kind": "mcp", "version": None}])
         self.assertEqual(len(self.sent), 1)
         a = self.app.startup_alerts[0]
-        self.assertEqual(a["title"], f"UGC Analyzer を {self.app.VERSION} にしました")
-        self.assertIn("Claude を開き直すと新しい版が使えます（話している途中の会話は消えません）", a["message"])
-        self.assertEqual((a["ok"], a["cancel"], a["restart"]), ("開き直す", "あとで", ["Claude"]))
+        self.assertEqual(a["title"], f"UGC Analyzer を {self.app.VERSION} にアップデートしました")
+        self.assertIn("Claude を再起動すると、新しいバージョンが使えるようになります。", a["message"])
+        self.assertIn("会話はそのまま残ります", a["message"])
+        self.assertEqual((a["ok"], a["cancel"], a["restart"]), ("Claude を再起動", "あとで", ["Claude"]))
         self.assertEqual(self.config.load_state()["app_version"], self.app.VERSION)
 
     def test_no_old_tools(self):

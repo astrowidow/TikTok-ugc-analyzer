@@ -32,11 +32,11 @@ size_of() { curl -sIL "$1" | awk 'tolower($1)=="content-length:"{n=$2} END{print
 if [ "$FRIENDS" = 1 ]; then
   # --- 友達向けに切り替える ---
   gh release view "v$VERSION" --repo "$REPO" >/dev/null 2>&1 || { echo "v$VERSION のリリースがありません（先に collector/release.sh ${VERSION}）"; exit 1; }
-  # 友達が見る始め方のページと紙の「いまの版は UGC Analyzer <版>」が、出す版と合っているか（2026-10-12: 0.8.1 を出したのに、
+  # 友達が見る始め方のページと紙の「いまのバージョンは UGC Analyzer <版>」が、出す版と合っているか（2026-10-12: 0.8.1 を出したのに、
   # ページの入れ替えの手順に「例: UGC Analyzer 0.8.0」が残っていた。ユーザー「そういうところが信用を損ねる」）
   for DOC in ../docs/pages/guide.html ../docs/FRIEND_GUIDE.md; do
-    grep -q "いまの版は.*UGC Analyzer $VERSION" "$DOC" \
-      || { echo "$DOC の「いまの版は UGC Analyzer …」が $VERSION になっていません（直して、始め方のページを公開し直してから）"; exit 1; }
+    grep -q "いまのバージョンは.*UGC Analyzer $VERSION" "$DOC" \
+      || { echo "$DOC の「いまのバージョンは UGC Analyzer …」が $VERSION になっていません（直して、始め方のページを公開し直してから）"; exit 1; }
   done
   # 説明: 試し版の断りを外し、「今回の版: …」を付け直す（--note が無ければ、前に書いたものを残す）
   BODY=$(gh release view "v$VERSION" --repo "$REPO" --json body --jq .body)

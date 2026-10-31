@@ -59,8 +59,8 @@ if [ "$FRIENDS" = 1 ]; then
     sleep 10
   done
   [ "$SIZE" = "$WANT" ] || { echo "友達のリンクの先の大きさ（${SIZE}）が v${VERSION}（${WANT}）と違います（反映待ちなら少し後でもう一度）"; exit 1; }
-  echo "友達向けにしました: UGC Analyzer ${VERSION}（今回の版: ${NOTE:-なし}）→ $URL"
-  echo "友達の UGC Analyzer（0.9.0 以降）は、3時間以内に自分で新しくなります。始め方のページを公開し直したかも確かめてください（docs/pages/README.md）"
+  echo "友達向けにしました: UGC Analyzer ${VERSION}（アップデートの内容: ${NOTE:-なし}）→ $URL"
+  echo "友達の UGC Analyzer（0.9.0 以降）は、3時間以内に自動でアップデートされます。始め方のページを公開し直したかも確かめてください（docs/pages/README.md）"
   exit 0
 fi
 

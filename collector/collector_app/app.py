@@ -14,7 +14,7 @@ from pathlib import Path
 import rumps
 from PyObjCTools import AppHelper
 
-from . import VERSION, chrome, claude_link, code_link, codex_link, config, jobs, notify, system, worker_entry
+from . import VERSION, chrome, claude_link, code_link, codex_link, config, jobs, notify, system, updater, worker_entry
 
 MUSIC_URL_RE = re.compile(r"^https://(www\.)?tiktok\.com/music/[^\s/]+-\d+")
 
@@ -129,6 +129,17 @@ class Controller:
         self.next_power = 0.0
         self.power_warned = None       # 電池で動いていると知らせた段階（None / "battery" / "low"）
         self.on_battery = False
+        # 新しい版（0.9.0。updater.py・docs/AUTO_UPDATE.md）
+        self.next_update = time.time() + updater.FIRST_CHECK
+        self.update_thread = None
+        self.update_phase = None       # 見に行っている（"checking"）・落として確かめている（"downloading"）
+        self.update_found = None       # 落として確かめている版
+        self.update_staged = updater.staged_from_state()   # 入れる準備ができた版（{"version", "app", "note"}）
+        self.update_busy = None        # 入れるのを待っている理由（"取得"・"AI の作業"）
+        self.update_manual = False     # メニューの「新しい版を確かめる…」から頼まれた（結果を窓で知らせる）
+        self.update_asking = False     # 窓で聞いている最中
+        self.update_requests = []      # 画面のスレッドに出してほしい窓（CollectorApp._update_ui_tick が出す）
+        self.update_go = None          # 黙って入れ替えてほしい（{"mode", "restart"}。画面のスレッドがアプリを終える）
         self.lock = threading.RLock()
         self.stopped = False
 
@@ -157,6 +168,7 @@ class Controller:
 
     def on_wake(self):
         self.retry_after = time.time() + 30   # ネットがつながるのを少し待つ
+        self.next_update = min(self.next_update, time.time() + updater.FIRST_CHECK)
         self.sleeping = False
 
     # --- 見張り ---
@@ -236,6 +248,118 @@ class Controller:
                     self.check_knowledge(quiet=True)
             except Exception as e:
                 self.log.info("知識ベースの確かめができませんでした: %s", e)
+        if time.time() >= self.next_update:
+            self.next_update = time.time() + updater.CHECK_EVERY
+            self.check_update(manual=False)
+        self._update_tick()
+
+    # --- 新しい版（0.9.0。updater.py・docs/AUTO_UPDATE.md） ---
+    def check_update(self, manual: bool) -> bool:
+        """新しい版を見に行く（裏のスレッドで。見つけたら落として確かめる）。もう見に行っている途中なら False。
+        manual はメニューの「新しい版を確かめる…」（無かった・確かめられなかったも窓で知らせる。用意できたら窓で聞く）"""
+        if not config.FROZEN and not os.environ.get("UGC_UPDATE_API"):
+            return False   # ソースから動かしているときは見ない（試験は UGC_UPDATE_API で手元の偽物に向ける）
+        if manual:
+            self.update_manual = True
+        if self.update_thread is not None and self.update_thread.is_alive():
+            return False
+        self.update_phase = "checking"
+        self.update_thread = threading.Thread(target=self._check_update, name="update", daemon=True)
+        self.update_thread.start()
+        return True
+
+    def _check_update(self):
+        try:
+            rel = updater.latest_release()
+            updater.save(checked_at=updater.now_iso(), check_error=None)
+            if not rel or not updater.is_newer(rel["version"]):
+                self.log.info("新しい版はありません（いまの版 %s・最新 %s）", VERSION, rel["version"] if rel else "なし")
+                if self.update_manual and not self.update_staged:
+                    self.update_manual = False
+                    self.update_requests.append({"kind": "latest"})
+                return
+            if self.update_staged and self.update_staged["version"] == rel["version"]:
+                return   # もう用意してある（入れるかは _update_tick）
+            self.update_found = rel["version"]
+            self.update_phase = "downloading"
+            self.log.info("新しい版 %s を見つけました（%s）。落として確かめます", rel["version"],
+                          "試し版" if rel["prerelease"] else "友達向け")
+            staged = updater.stage(rel, self.log)
+            updater.save(staged=staged)
+            self.update_staged = staged
+            self.log.info("新しい版 %s を入れる準備ができました", staged["version"])
+        except Exception as e:
+            self.log.warning("新しい版を用意できませんでした: %s: %s", type(e).__name__, e)
+            try:
+                updater.save(check_error=f"{type(e).__name__}: {e}"[:300])
+            except Exception:
+                pass
+            if self.update_manual and not self.update_staged:
+                self.update_manual = False
+                self.update_requests.append({"kind": "error"})
+        finally:
+            self.update_found = None
+            self.update_phase = None
+
+    def ai_open(self) -> list:
+        """開いていて、UGC Analyzer につないである AI のアプリの名前（入れ替えるときに開き直すもの）"""
+        out = []
+        for _, name, link, _, is_running in AI_LINKS:
+            try:
+                if link.status() == "connected" and getattr(link, is_running)():
+                    out.append(name)
+            except Exception:
+                pass
+        return out
+
+    def update_wait_reason(self) -> str | None:
+        """いま入れ替えられない理由（取得・取り足し・順番待ち・取り直しの予定・TikTok のロック → "取得"、AI の作業 → "AI の作業"）"""
+        if self._work_pending() or (config.LOCK_DIR / "tiktok.lock").exists():
+            return "取得"
+        if updater.ai_active():
+            return "AI の作業"
+        return None
+
+    def _update_tick(self):
+        """用意した版を入れ替えるか（見張りの5秒おき。決めるのは updater.decide）"""
+        s = self.update_staged
+        if not s:
+            self.update_busy = None
+            return
+        if self.update_phase == "downloading" or self.update_go or self.update_asking:
+            return
+        if not updater.is_newer(s["version"]):   # 手で同じ版以上を入れた
+            self.update_staged = None
+            updater.save(staged=None)
+            return
+        self.update_busy = self.update_wait_reason()
+        manual = self.update_manual
+        ai = [] if self.update_busy else self.ai_open()
+        act = updater.decide(s, self.update_busy, ai, config.load_state().get("update") or {}, manual=manual)
+        if act == "wait" and manual:
+            self.update_manual = False
+            self.update_requests.append({"kind": "wait", "version": s["version"], "why": self.update_busy})
+        elif act == "silent":
+            self.log.info("Claude・ChatGPT が閉じていて作業中でもないので、黙って %s に入れ替えます", s["version"])
+            self.update_go = {"mode": "silent", "restart": []}
+        elif act == "ask":
+            self.update_manual = False
+            if not manual:
+                updater.save(asked_on=updater.today())   # 自分から聞くのは1日1回まで
+            self.update_asking = True
+            self.update_requests.append({"kind": "ask", "version": s["version"], "note": s.get("note"), "ai": ai})
+
+    def update_answer(self, now: bool) -> tuple:
+        """窓の答え（画面のスレッドから）。("go", {"mode", "restart"})・("wait", 理由)・("later", None)"""
+        self.update_asking = False
+        if not now:
+            updater.save(asked_on=updater.today())   # 「あとで」: 今日はもう聞かない（Claude を閉じたら黙って入れ替える）
+            self.log.info("新しい版は「あとで」になりました")
+            return "later", None
+        why = self.update_wait_reason()
+        if why:
+            return "wait", why
+        return "go", {"mode": "now", "restart": self.ai_open()}
 
     def _handle_cancels(self):
         """Claude の道具が「この取得をやめる」の印を置いたら、その分析を取っている係を止める（2026-10-04、取得のやり直し）。
@@ -740,13 +864,21 @@ class CollectorApp(rumps.App):
             self.ai_trial.state = int(bool(config.load_state().get("ai_trial")))
             op.add(self.ai_trial)
             items.append(op)
-        items += [None, rumps.MenuItem(f"{config.APP_NAME} {VERSION}"), rumps.MenuItem("終了", callback=self.quit_app)]
+        # 新しい版（0.9.0）: いつも出す。新しい版を用意できたら「新しい版 X にする…」、作業中は灰色で「…が終わったら入れます」
+        self.update_item = rumps.MenuItem("新しい版を確かめる…", callback=self.update_clicked)
+        items += [None, self.update_item, rumps.MenuItem(f"{config.APP_NAME} {VERSION}"),
+                  rumps.MenuItem("終了", callback=self.quit_app)]
         self.menu = items
         rumps.Timer(self.refresh, 2).start()
 
     def refresh(self, _):
         self._startup_alert_tick()
+        self._update_ui_tick()
         self._autolink_tick()
+        while startup_restarts:   # 窓で「今すぐ新しくする」を押して入れ替えたあと: 聞かずに開き直す
+            name = startup_restarts.pop(0)
+            threading.Thread(target=self._restart_after_update, args=(name,), daemon=True).start()
+        self._update_menu()
         t = self.ctl.status_text + ("（電池で動作中・電源につないでください）" if self.ctl.on_battery else "")
         if self.status_item.title != t:
             self.status_item.title = t
@@ -779,12 +911,131 @@ class CollectorApp(rumps.App):
         try:
             a = startup_alerts.pop(0)
             r = rumps.alert(a["title"], a["message"], ok=a["ok"], cancel=a["cancel"])
+            if r == 1 and a.get("open"):
+                subprocess.run(["open", a["open"]])
             if r == 1:
                 for n in a.get("restart") or []:
                     threading.Thread(target=self._restart_claude if n == "Claude" else self._restart_chatgpt,
                                      daemon=True).start()
         finally:
             self._alerting = False
+
+    # --- 新しい版（0.9.0。updater.py・docs/AUTO_UPDATE.md） ---
+    def _update_menu(self):
+        """メニューの「新しい版を確かめる…」の行を、いまの様子に合わせる（押せないときは灰色）"""
+        c = self.ctl
+        s = c.update_staged
+        if s and c.update_busy:
+            title, on = f"新しい版 {s['version']} は、{c.update_busy}が終わったら入れます", False
+        elif s:
+            title, on = f"新しい版 {s['version']} にする…", True
+        elif c.update_phase == "downloading" and c.update_found:
+            title, on = f"新しい版 {c.update_found} を用意しています…", False
+        elif c.update_phase == "checking" and c.update_manual:
+            title, on = "新しい版を確かめています…", False
+        else:
+            title, on = "新しい版を確かめる…", True
+        if self.update_item.title != title:
+            self.update_item.title = title
+        want = self.update_clicked if on else None
+        if self.update_item.callback != want:
+            self.update_item.set_callback(want)
+
+    def update_clicked(self, _):
+        c = self.ctl
+        if not config.FROZEN and not os.environ.get("UGC_UPDATE_API"):
+            rumps.alert("ソースから動かしているときは使えません（アプリにしたときだけ）")
+            return
+        s = c.update_staged
+        if not s:   # 見に行く（結果は窓で。_update_ui_tick）
+            c.check_update(manual=True)
+            self._update_menu()
+            return
+        if c.update_asking or c.update_go or self._alerting:
+            return   # 窓をもう出している・出すところ・入れ替えるところ
+        why = c.update_wait_reason()
+        if why:
+            rumps.alert(f"新しい版 {s['version']} は、{why}が終わったら入れます", UPDATE_WAIT_TEXT)
+            return
+        c.update_asking = True
+        self._alerting = True
+        try:
+            self._ask_update(s, c.ai_open())
+        finally:
+            self._alerting = False
+
+    def _update_ui_tick(self):
+        """見張りが決めたこと（黙って入れ替える・窓で聞く・メニューから頼まれた結果）を、画面のスレッドでする"""
+        if self._alerting:
+            return
+        c = self.ctl
+        if c.update_go:
+            go, c.update_go = c.update_go, None
+            self._do_update(go)
+            return
+        if not c.update_requests:
+            return
+        req = c.update_requests.pop(0)
+        self._alerting = True
+        try:
+            if req["kind"] == "ask":
+                self._ask_update(c.update_staged or req, req.get("ai") or [])
+            elif req["kind"] == "latest":
+                rumps.alert(f"いまの版（{VERSION}）が最新です")
+            elif req["kind"] == "error":
+                rumps.alert("新しい版を確かめられませんでした", "ネットにつながっているか確かめて、少しあとでもう一度押してください。")
+            elif req["kind"] == "wait":
+                rumps.alert(f"新しい版 {req['version']} は、{req['why']}が終わったら入れます", UPDATE_WAIT_TEXT)
+        finally:
+            self._alerting = False
+
+    def _ask_update(self, s: dict, ai: list):
+        """「新しい版があります」の窓（Claude・ChatGPT を開いているとき・メニューから押したとき）。答えまで画面のスレッドで"""
+        c = self.ctl
+        who = "と".join(ai)
+        note = f"今回の版: {_sentence(s['note'])}\n\n" if s.get("note") else ""
+        if ai:
+            msg = (note + f"今すぐ新しくすると、{who} を一度閉じて開き直します（1分ほど）。話していた会話と、分析・レポートは消えません。\n"
+                   f"「あとで」なら、次に {who} を終了したときに新しくします。")
+        else:
+            msg = (note + "今すぐ新しくすると、UGC Analyzer が一度閉じて、30秒ほどで開き直します。分析とレポートは消えません。\n"
+                   "「あとで」なら、あとで自動で新しくします。")
+        try:
+            r = rumps.alert(f"{config.APP_NAME} の新しい版（{s['version']}）があります", msg, ok="今すぐ新しくする", cancel="あとで")
+        except Exception:
+            c.update_asking = False
+            raise
+        kind, val = c.update_answer(r == 1)
+        if kind == "wait":
+            rumps.alert(f"{val}が始まったので、終わってから入れます", UPDATE_WAIT_TEXT)
+        elif kind == "go":
+            self._do_update(val)
+
+    def _do_update(self, go: dict):
+        """入れ替えの係を起こして、アプリを終える（係がアプリの終わりを待って入れ替え、新しい版を開く）"""
+        c = self.ctl
+        s = c.update_staged
+        try:
+            if not s:
+                raise updater.UpdateError("入れる準備ができた版がありません")
+            updater.apply(s, go["mode"], go.get("restart") or [], c.log)
+        except Exception as e:
+            c.log.warning("入れ替えの係を起こせませんでした: %s: %s", type(e).__name__, e)
+            if s:
+                updater.save(failed={"version": s["version"], "at": updater.now_iso(), "why": str(e)[:300]})
+            r = rumps.alert("自動で新しくできませんでした", UPDATE_FAIL_TEXT, ok="手順を開く", cancel="閉じる")
+            if r == 1:
+                subprocess.run(["open", updater.GUIDE_URL])
+            return
+        c.status_text = "新しい版にしています…"
+        c.shutdown()
+        system.release_single_instance()
+        rumps.quit_application()
+
+    def _restart_after_update(self, name: str):
+        restart = claude_link.restart_claude if name == "Claude" else codex_link.restart_chatgpt
+        self._restart_ai(name, restart, "「このまま終了」" if name == "Claude" else "終了するほう",
+                         "話していた会話の続きから、新しい版の UGC Analyzer が使えます")
 
     # --- 自動でつなぐ（2026-10-05。友達は「〇〇につなぐ」を押さなくてよい。メニューの項目は手でつなぎ直すときのため） ---
     def _autolink_tick(self):
@@ -1026,17 +1277,57 @@ class CollectorApp(rumps.App):
 
 
 # 起動のときに出す窓（run loop が回ってから、画面のタイマー CollectorApp.refresh が1つずつ出す。起動を止めないため）。
-# {"title", "message", "ok", "cancel", "restart": [開き直す AI の名前]}
+# {"title", "message", "ok", "cancel", "restart": [開き直す AI の名前], "open": 「OK」で開く URL（無くてよい）}
 startup_alerts: list = []
+# 窓で「今すぐ新しくする」を押して入れ替えたあと、聞かずに開き直す AI の名前（update_notice・version_notice が積む）
+startup_restarts: list = []
+
+UPDATE_WAIT_TEXT = "終わったら、自動で入れます（Claude（ChatGPT）を開いているときは、窓で聞きます）。"
+UPDATE_FAIL_TEXT = (f"いまの版（{VERSION}）は、そのまま使えます。新しい版にするには、始め方のページの「新しい版にするとき」のとおりに、"
+                    "手で入れ替えてください（10分ほど）。")
 
 
-def version_notice(st: dict, log) -> None:
+def _sentence(text) -> str:
+    """文の終わりの「。」をそろえる（「今回の版: …」を文の中に入れるとき）"""
+    t = str(text or "").strip()
+    return t if not t or t.endswith(("。", "！", "？", ")", "）")) else t + "。"
+
+
+def update_notice(st: dict, log) -> dict | None:
+    """自動の入れ替え（updater.apply）のあと初めて開いたとき。st は起動したときの state.json。
+    入れ替えられた → 通知を出し、その記録（{"from", "to", "mode", "restart", "note"}）を返す（version_notice に渡す）。
+    前の版のまま開いた（係が入れ替えられず、前の版を開いた）→ 窓で手の入れ替えを頼む。その版は、もう自分からは入れない"""
+    p = st.get("update_pending")
+    if not isinstance(p, dict):
+        return None
+    config.save_state(update_pending=None)
+    if p.get("to") == VERSION:
+        log.info("自動の入れ替えで %s → %s にしました（%s）", p.get("from"), VERSION, p.get("mode"))
+        try:
+            updater.tidy()
+            updater.save(staged=None, failed=None, asked_on=None)
+        except Exception as e:
+            log.info("用意した版を片付けられませんでした: %s", e)
+        notify.send(f"{config.APP_NAME} を {VERSION} にしました",
+                    (f"今回の版: {_sentence(p['note'])}" if p.get("note") else "") + "分析とレポートは、そのまま残っています。")
+        return p
+    log.warning("自動の入れ替えができず、前の版（%s）のまま開きました（%s へ）。入れ替えの記録:\n%s",
+                VERSION, p.get("to"), updater.log_tail())
+    updater.save(failed={"version": p.get("to"), "at": updater.now_iso(), "why": updater.log_tail(2)[-300:]})
+    startup_alerts.append({"title": "自動で新しくできませんでした", "message": UPDATE_FAIL_TEXT, "ok": "手順を開く",
+                           "cancel": "閉じる", "restart": [], "open": updater.GUIDE_URL})
+    return None
+
+
+def version_notice(st: dict, log, updated: dict | None = None) -> None:
     """アプリを新しくしたあと初めて開いたとき（版が変わった）、開いている Claude（ChatGPT）を開き直すよう1回だけ知らせる。
     AI の道具（--mcp）は Claude（ChatGPT）が起こしたまま動き続けるので、開き直すまで前の版の中身のまま
     （.app を置き換えたあとは、前の版の道具が部品を読めずに止まることもある）。st は起動したときの state.json。
     前の版の道具の処理（--mcp・--wait。install.sh と同じ見分け方、system.old_tool_processes）が動いていれば、通知は見落とされやすいので
     窓でも出し、「開き直す」で 0.6.6 の開き直し（_restart_ai・system.relaunch_app）を使う（2026-10-12。友達は 0.7.5 に入れ替えたあと、
-    開き直すまで 0.6.4 の道具で話していた。docs/PLAN_0_8.md 3-4）。動いていなければ今までどおり通知だけ"""
+    開き直すまで 0.6.4 の道具で話していた。docs/PLAN_0_8.md 3-4）。動いていなければ今までどおり通知だけ。
+    updated は自動の入れ替えの記録（update_notice）: 通知は update_notice が出したので重ねない。窓で「今すぐ新しくする」を
+    押していたら（mode="now"）、前の版の道具が動いている AI を聞かずに開き直す（0.9.0）"""
     if st.get("app_version") == VERSION:
         return
     config.save_state(app_version=VERSION)
@@ -1051,13 +1342,16 @@ def version_notice(st: dict, log) -> None:
         old = []
     log.info("版が変わりました: %s → %s（開いている AI: %s・前の版の道具の処理: %s）", st.get("app_version") or "前の版", VERSION,
              "、".join(names) or "なし", "、".join(f"{p['kind']}（PID {p['pid']}・{p['version'] or '0.7.5 まで'}）" for p in old) or "なし")
-    if names:
+    if names and not updated:
         notify.send(f"{config.APP_NAME} を {VERSION} にしました",
                     f"{'と'.join(names)} を開き直してください。開き直すと、新しい版の UGC Analyzer が使えます（話している途中の会話は保存されています）")
     if not old:
         return
     # 開き直すのは、開いている AI（つないだかに関わらず。道具を起こしたのは開いている AI のどれか）
     running = [name for _, name, link, _, is_running in AI_LINKS if getattr(link, is_running)()]
+    if updated and updated.get("mode") == "now" and running:
+        startup_restarts.extend(running)
+        return
     who = "と".join(running) or "Claude（ChatGPT）"
     msg = (f"{who} を開き直すと新しい版が使えます（話している途中の会話は消えません）。\n"
            f"開き直すまでは、{who} の中の UGC Analyzer は前の版のまま動きます。")
@@ -1133,7 +1427,7 @@ def run():
                         log.info("Code タブ用の作業フォルダ（%s）を、今のアプリに合わせて整えました: %s", code_link.FOLDER, "、".join(ch))
                 except Exception as e:   # 作業フォルダの中身が想定と違っても、アプリの起動は止めない（記録だけ）
                     log.warning("Code タブ用の作業フォルダを整えられませんでした: %s", e)
-            version_notice(st, log)
+            version_notice(st, log, update_notice(st, log))
             duplicate_notice(log)
     ctl = Controller(code, log)
     system.watch_sleep(ctl.on_sleep, ctl.on_wake)

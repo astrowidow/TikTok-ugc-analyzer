@@ -144,7 +144,7 @@ for _ in $(seq 1 30); do
   sleep 0.5
 done
 if ! pgrep -fx "$EXE" >/dev/null; then
-  echo "入れ替えたが、起動を確かめられませんでした（控え: $BK）"
+  echo "入れ替えたが、起動を確かめられませんでした（控え: ${BK}）"
   exit 1
 fi
 echo "入れ替えました: $(ver "$APP")（前の版の控え: ${BK}）"

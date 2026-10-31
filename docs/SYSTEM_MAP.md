@@ -46,6 +46,7 @@ UGC Analyzer（メニューバー）── 5秒おきに見る ─────�
 |---|---|---|
 | メニューバー | `collector/collector_app/app.py` | 取得の見張り・ログイン・通知・メニュー（指示書の編集・知識ベース・Claude につなぐ） |
 | Claude の道具 | `collector/collector_app/mcp_local.py` | `--mcp` の入口。中身は本線の `mcp_proto.py`（道具19）・`proto_runner.py`・`flow_w1.py`・`analysis_info.py`（info の中身）。アプリを入れ替えると、道具の処理が自分で気づいて「開き直して」と返す（0.8.0〜） |
+| 新しい版 | `collector/collector_app/updater.py` | 新しい版を3時間おきに見に行き、落として確かめ、空いていれば黙って・Claude を開いていれば窓で聞いて入れ替える（0.9.0〜。`docs/AUTO_UPDATE.md`）。友達に届くのは `release.sh --friends` で友達向けにした版だけ |
 | Claude につなぐ | `collector/collector_app/claude_link.py` | Claude の設定ファイルに道具を1行足す（控えを取る） |
 | ChatGPT につなぐ | `collector/collector_app/codex_link.py` | Codex の設定ファイル（`~/.codex/config.toml`）に道具の節と道具ごとの許可を足し（控えを取る）、スキル（`~/.agents/skills/ugc-analyzer/`）を置く。ChatGPT は道具の案内を会話に入れないので、スキルで気づかせる |
 | 取得 | 本線の `acquire/`・`analysis/` | 一覧（台帳）→ 属性 → プール → コメント（Windows 機と同じ部品）。一覧の段でグリッドの裏の一覧データを全部拾い、詳しく読む（属性を取る）動画を選ぶ（0.7.0〜。`docs/LIST_CUT.md` 第6章）。どの動画のコメントを何件取るかは `docs/COMMENT_TARGETS.md` |

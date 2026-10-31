@@ -5,4 +5,4 @@
 このパッケージが持つのは「メニュー・Chrome とログイン・係の起動と再開・スリープ・通知」（app.py ほか）と、
 「AI に出す道具の入口」（mcp_local.py）、「Claude に接続」（claude_link.py）・「ChatGPT に接続」（codex_link.py）。
 """
-VERSION = "0.9.5"
+VERSION = "0.9.6"

@@ -365,14 +365,14 @@ def watch_sleep(on_sleep, on_wake) -> None:
     from AppKit import NSWorkspace, NSWorkspaceDidWakeNotification, NSWorkspaceWillSleepNotification
     from Foundation import NSObject
 
-    class _Obs(NSObject):
+    class UGCAnalyzerSleepObserver(NSObject):   # Objective-C のクラスの名前はアプリ全体で1つ（app.option_menu_delegate）
         def willSleep_(self, _n):
             on_sleep()
 
         def didWake_(self, _n):
             on_wake()
 
-    _observer = _Obs.alloc().init()
+    _observer = UGCAnalyzerSleepObserver.alloc().init()
     nc = NSWorkspace.sharedWorkspace().notificationCenter()
     nc.addObserver_selector_name_object_(_observer, "willSleep:", NSWorkspaceWillSleepNotification, None)
     nc.addObserver_selector_name_object_(_observer, "didWake:", NSWorkspaceDidWakeNotification, None)

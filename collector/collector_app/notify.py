@@ -34,7 +34,7 @@ def setup(log) -> None:
                                        UNNotificationPresentationOptionBanner, UNNotificationPresentationOptionList,
                                        UNNotificationPresentationOptionSound, UNUserNotificationCenter)
 
-        class _Delegate(NSObject):
+        class UGCAnalyzerNotificationDelegate(NSObject):   # Objective-C のクラスの名前はアプリ全体で1つ（app.option_menu_delegate）
             # アプリが前面にいても通知を出す（メニューバーのアプリは前面扱いになることがある）
             def userNotificationCenter_willPresentNotification_withCompletionHandler_(self, center, n, handler):
                 handler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList
@@ -44,7 +44,7 @@ def setup(log) -> None:
                 signature=b"v@:@@@?")
 
         _center = UNUserNotificationCenter.currentNotificationCenter()
-        _delegate = _Delegate.alloc().init()
+        _delegate = UGCAnalyzerNotificationDelegate.alloc().init()
         _center.setDelegate_(_delegate)
         def _answer(granted, err):
             global _allowed

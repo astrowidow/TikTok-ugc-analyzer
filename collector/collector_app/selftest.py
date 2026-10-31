@@ -44,6 +44,18 @@ def run(code: Path) -> int:
             res["missing"].append("知識ベースか指示書を置けませんでした")
     except Exception as e:
         res["missing"].append(f"seed: {type(e).__name__}: {e}")
+    try:   # メニューを組み立てる（運営向けの隠れた項目まで）。0.9.5 は運営の Mac で組み立ての途中に落ちたのに、この点検は通っていた
+        import logging
+
+        import rumps.rumps
+        rumps.rumps.application_support = lambda name: str(config.DATA_DIR)   # rumps が本物の置き場にフォルダを作らないように
+        from . import app
+        ui = app.CollectorApp(app.Controller(code, logging.getLogger("collector")), operator=True)
+        res["menu_items"] = len(ui.menu)
+        if not ui.op_item._menuitem.isHidden() or ui._menu._menu.delegate() is None:   # noqa: SLF001
+            res["missing"].append("menu: 運営向けのメニューを隠せていない")
+    except Exception as e:
+        res["missing"].append(f"menu: {type(e).__name__}: {e}")
     from acquire import pipeline
     res["analyses_dir"] = str(pipeline.ANALYSES_DIR)
     res["ok"] = not res["missing"] and res["analyses_dir"] == str(config.ANALYSES_DIR)

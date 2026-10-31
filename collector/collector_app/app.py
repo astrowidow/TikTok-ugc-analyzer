@@ -793,7 +793,8 @@ class Controller:
 
 
 class CollectorApp(rumps.App):
-    def __init__(self, ctl: Controller):
+    def __init__(self, ctl: Controller, operator: bool | None = None):
+        """operator: 運営向けのメニューを付けるか（ふだんは運営の Mac の印で決める。自己点検は付けて組み立てる）"""
         icon = _asset("menubar.png")
         super().__init__(config.APP_NAME, icon=icon if Path(icon).exists() else None, template=True,
                          quit_button=None)
@@ -858,7 +859,7 @@ class CollectorApp(rumps.App):
             other,
         ]
         self.op_item = None
-        if config.OPERATOR_FLAG.exists():   # 運営の Mac だけ（友達には出さない）。⌥ を押しながら開いたときだけ見える（_watch_option）
+        if config.OPERATOR_FLAG.exists() if operator is None else operator:   # 運営の Mac だけ（友達には出さない）。⌥ を押しながら開いたときだけ見える（_watch_option）
             op = rumps.MenuItem("運営向け")
             self.op_item = op
             op.add(rumps.MenuItem("曲を取得する（本番の規模）…", callback=self.add_full))
@@ -873,7 +874,11 @@ class CollectorApp(rumps.App):
         items += [None, self.update_item, rumps.MenuItem(f"{config.APP_NAME} {VERSION}"),
                   rumps.MenuItem("終了", callback=self.quit_app)]
         self.menu = items
-        self._watch_option()
+        try:
+            self._watch_option()
+        except Exception as e:   # 隠せなくてもアプリは止めない（運営向けのメニューがいつも見えるだけ。運営の Mac にしか無い）
+            ctl.log.warning("運営向けのメニューを ⌥ のときだけ出す仕組みを付けられませんでした（いつも出します）: %s", e)
+            self.op_item._menuitem.setHidden_(False)
         rumps.Timer(self.refresh, 2).start()
 
     def _watch_option(self):
@@ -882,16 +887,9 @@ class CollectorApp(rumps.App):
         rumps はメニューに delegate を付けないので、メニュー（NSMenu）の開く直前（menuWillOpen:）に、押しているキーを見て出し分ける"""
         if self.op_item is None:
             return
-        from AppKit import NSEvent
-        from Foundation import NSObject
         item = self.op_item._menuitem
-
-        class _Delegate(NSObject):
-            def menuWillOpen_(self, _menu):
-                item.setHidden_(not option_held(NSEvent.modifierFlags()))
-
         item.setHidden_(True)
-        self._menu_delegate = _Delegate.alloc().init()   # NSMenu の delegate は弱い参照。持っておく
+        self._menu_delegate = option_menu_delegate([item])   # NSMenu の delegate は弱い参照。持っておく
         self._menu._menu.setDelegate_(self._menu_delegate)
 
     def refresh(self, _):
@@ -1327,6 +1325,30 @@ def update_ask_text(s: dict, ai: list) -> tuple:
 def option_held(flags) -> bool:
     """⌥（option）を押しているか（NSEvent.modifierFlags() の値から。NSEventModifierFlagOption = 1 << 19）"""
     return bool(int(flags) & (1 << 19))
+
+
+_OptionMenuDelegate = None
+
+
+def option_menu_delegate(items: list):
+    """メニュー（NSMenu）の delegate。開く直前に、⌥ を押していなければ items（NSMenuItem）を隠す。
+    Objective-C のクラスの名前はアプリ全体で1つしか持てないので、このアプリだけの名前で1回だけ作る
+    （0.9.5 は notify.py の _Delegate と同じ名前にして、運営の Mac で起動の途中に落ちた）"""
+    global _OptionMenuDelegate
+    if _OptionMenuDelegate is None:
+        from AppKit import NSEvent
+        from Foundation import NSObject
+
+        class UGCAnalyzerOptionMenuDelegate(NSObject):
+            def menuWillOpen_(self, _menu):
+                hide = not option_held(NSEvent.modifierFlags())
+                for it in self.hidden_items:
+                    it.setHidden_(hide)
+
+        _OptionMenuDelegate = UGCAnalyzerOptionMenuDelegate
+    d = _OptionMenuDelegate.alloc().init()
+    d.hidden_items = list(items)
+    return d
 
 
 def _sentence(text) -> str:

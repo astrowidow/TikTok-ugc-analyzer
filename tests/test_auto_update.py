@@ -571,6 +571,35 @@ class TestController(AppCase):
         self.assertFalse(self.app.option_held(0))
         self.assertFalse(self.app.option_held(1 << 20))   # ⌘ だけ
 
+    def test_operator_menu_builds(self):
+        # 0.9.5 は運営の Mac で、メニューを組み立てる途中に落ちた（⌥ の仕組みのクラスの名前が notify.py の _Delegate と重なり、
+        # objc.error「overriding existing Objective-C class」）。運営向けのメニューまで、2回組み立てる（クラスは1回だけ作る）
+        import rumps.rumps
+        with mock.patch.object(rumps.rumps, "application_support", lambda name: str(self.tmp)):
+            for _ in range(2):
+                ui = self.app.CollectorApp(self.ctl, operator=True)
+                item, menu = ui.op_item._menuitem, ui._menu._menu
+                self.assertTrue(item.isHidden())
+                with mock.patch.object(self.app, "option_held", return_value=True):
+                    menu.delegate().menuWillOpen_(menu)
+                self.assertFalse(item.isHidden())   # ⌥ を押しながら開いた
+                with mock.patch.object(self.app, "option_held", return_value=False):
+                    menu.delegate().menuWillOpen_(menu)
+                self.assertTrue(item.isHidden())
+            ui = self.app.CollectorApp(self.ctl, operator=False)   # 友達の Mac: 運営向けのメニューは無い
+            self.assertIsNone(ui.op_item)
+            self.assertNotIn("運営向け", ui.menu)
+
+    def test_objc_class_names_unique(self):
+        # Objective-C のクラスの名前はアプリ全体で1つ。重なると、2つ目を作るところでアプリが落ちる（0.9.5）
+        import re as _re
+        names = []
+        for f in sorted((ROOT / "collector" / "collector_app").glob("*.py")):
+            names += _re.findall(r"^\s*class (\w+)\(NSObject\)", f.read_text(encoding="utf-8"), _re.M)
+        self.assertEqual(len(names), len(set(names)), names)
+        for n in names:
+            self.assertTrue(n.startswith("UGCAnalyzer"), n)   # ほかの部品（rumps など）と重ならない名前に
+
     def test_answer_now(self):
         with mock.patch.object(self.ctl, "update_wait_reason", return_value="取得"):
             self.assertEqual(self.ctl.update_answer(True), ("wait", "取得"))   # 窓を出している間に取得が始まった

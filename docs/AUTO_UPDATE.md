@@ -55,7 +55,7 @@ UGC Analyzer が新しいバージョンを自分で見つけて入れ替える�
 ## 4. 仕組み（collector/collector_app/updater.py・app.py）
 
 1. **見に行く** `updater.latest_release`: アプリを開いた1分後・Mac が起きた1分後・3時間おき・メニュー。友達は `GET /repos/…/releases/latest`（prerelease を含まない）、運営の Mac は `/releases?per_page=20` から試し版も。`.dmg`（`UGC-Analyzer.dmg`）の付いた、いちばん新しい版
-2. **落として確かめる** `updater.stage`（裏のスレッド）: `DATA_DIR/updates/UGC-Analyzer-<版>.dmg` に落とす → 大きさと sha256（GitHub の asset の digest）→ `hdiutil attach` で開き、中の `UGC Analyzer.app` の識別子（`jp.ugc-analyzer.collector`）と版 → `updates/staged/<版>/` に ditto → 写した .app を `--selftest`（一時の置き場で。build.sh の自己点検1と同じ）。だめならそこまでのものを消して、次の確かめ（3時間後）でやり直す。用意した版は `state.json` の `update.staged`
+2. **落として確かめる** `updater.stage`（裏のスレッド）: `DATA_DIR/updates/UGC-Analyzer-<版>.dmg` に落とす → 大きさと sha256（GitHub の asset の digest）→ `hdiutil attach` で開き、中の `UGC Analyzer.app` の識別子（`jp.ugc-analyzer.collector`）と版 → `updates/staged/<版>/` に ditto → 写した .app を `--selftest`（一時の置き場で。build.sh の自己点検1と同じ。0.9.6 からは、メニューを運営向けの隠れた項目まで組み立てるところも見る）。だめならそこまでのものを消して、次の確かめ（3時間後）でやり直す。用意した版は `state.json` の `update.staged`
 3. **決める** `updater.decide`（見張りの5秒おき）: 作業中 → 待つ。メニューから → 窓。入れられなかった版（`update.failed`）→ 自分からは入れない。AI が閉じている → 黙って。開いている → 今日まだ聞いていなければ窓（`update.asked_on`）
 4. **入れ替える** `updater.apply` → `updates/swap.sh`: `state.json` に `update_pending`（from・to・mode・開き直す AI・今回の版）を書き、係を別のセッションで起こしてからアプリを終える。係はアプリの PID が消えるのを待ち（2分まで）、今の .app を `updates/backup/UGC Analyzer.app` へ（控えは1つだけ）、用意した .app を元の場所へ移して開く。どこかで失敗したら前の版を元に戻して開く。記録は `logs/update.log`
 5. **新しい版で開いたとき** `app.update_notice`: `update_pending.to` が自分の版なら通知を出し、用意したものを片付ける。`mode="now"`（窓で「今すぐ」）なら、前の版の道具が動いている AI を聞かずに開き直す（`version_notice` の `startup_restarts`）。自分の版が `from` のまま（入れ替えられなかった）なら、`update.failed` に書き、窓で手の入れ替えを頼む
@@ -77,3 +77,4 @@ UGC Analyzer が新しいバージョンを自分で見つけて入れ替える�
 - 運営の Mac で試し版を受け取りたくない: `DATA_DIR/operator` を消す（運営向けのメニューも消える）。ふつうは消さない
 - 運営向けのメニュー（ちょいとり・本番の規模・AI から頼んだ取得をちょいとりに）は、運営の Mac（`DATA_DIR/operator` がある）でも、**⌥（option）を押しながら割れた音符をクリックしたときだけ**出る（0.9.5〜。2026-10-31 ユーザー「ふつうの利用者が絶対触らない、俺らだけ知っている場所に」）
 - まずい版を友達に出してしまった: 古い版には戻さない作り（版の番号が上がるときだけ入れ替える）。直した版を出す
+- **起動の途中で落ちる版を入れてしまった**（2026-10-31 の 0.9.5。運営の Mac だけ）: メニューバーのアイコンが消え、アプリが動いていないので自分ではアップデートできない。直した版を `collector/build.sh` → `collector/install.sh` で入れる。落ちた理由は、⌥ の仕組みの Objective-C のクラスの名前（`_Delegate`）が通知のもの（`notify.py`）と重なったこと（名前はアプリ全体で1つ。2つ目を作るところで `objc.error`）。友達の Mac（印なし）は通らない道で、落ちない。0.9.6 で、クラスの名前を `UGCAnalyzer…` にそろえ、名前の重なりを見る試験と、自己点検でのメニューの組み立てを足した。落ちた理由は、アプリをターミナルから直に起こすと出る（`"/Applications/UGC Analyzer.app/Contents/MacOS/UGC Analyzer"`）
